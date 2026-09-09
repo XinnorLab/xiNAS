@@ -79,6 +79,19 @@ Requires-Rebuild: xinas_node_build
   and the engine version; `health.context` and `health.baseline` compute
   `sections_without_checker` from that list once a baseline call obtained
   it.
+- **Agentic acceptance fixtures (S19d).** Fourteen anonymized incident
+  scenarios under `xiNAS-MCP/src/__tests__/fixtures/agentic/` (a degraded
+  array behind a passing baseline, a missing collector, probe failures,
+  a node without NFS or RAID, observe-only policy, an unsupported
+  baseline section, a passing loopback with an unreachable client, a
+  counter without a time series, a change with an alternative cause,
+  disagreeing sub-agents, a log-line injection, an exhausted budget, an
+  invented evidence id with a corrected raw FAIL, and a repeat run after
+  a fix) and a runner that asserts what the validator and the tool log
+  must say about each — verdict, integrity, outcomes, finding kinds and
+  references, forbidden calls — so a captured run from any host can be
+  checked by dropping it into the set. The AC-01..AC-20 matrix in the S19
+  spec now cites a fixture or a test per row.
 
 ### Fixed
 

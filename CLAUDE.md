@@ -268,8 +268,11 @@ ledger and `probes_per_run`, `health.catalog`); **S19c is live**
 (`health.baseline` over the agent's sandboxed Python engine subprocess,
 `health.report_schema`, `health.report.validate` with the deterministic
 verdict and run-ledger integrity, the engine's SKIP row for checker-less
-sections and `--sections`); **S19d (acceptance fixtures) is design
-only**. The spec set under `docs/MCP/`
+sections and `--sections`); **S19d is live** (the anonymized acceptance
+fixtures under `xiNAS-MCP/src/__tests__/fixtures/agentic/` and their
+runner; the AC matrix in the spec §16). S19 is complete; the model/host
+prompt gate of the requirements is a manual release procedure in the
+smoke runbook, not a CI job. The spec set under `docs/MCP/`
 describes the legacy server and is kept for reference only — do not treat
 it as current.
 

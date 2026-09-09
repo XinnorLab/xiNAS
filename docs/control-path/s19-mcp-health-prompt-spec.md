@@ -13,8 +13,12 @@ per-profile cache and the engine's live section list (§8.2, §8.4), the
 Python engine's SKIP `checker` row and `--sections` (§8.5), the report
 schema, `health.report_schema` and `health.report.validate` with the
 deterministic verdict and run-ledger integrity (§11), `health_baseline`
-agent config (§12.2). S19d (acceptance fixtures) is pending; its "MUST"s
-still describe the intended end state. Deviations found while
+agent config (§12.2); **S19d implemented 2026-09-09** — the anonymized
+acceptance fixtures and their runner (§15), the AC matrix (§16) and the
+prompt-gate procedure in the smoke runbook. **S19 is complete**; what
+remains is the manual model/host gate of requirements §10 (three runs
+per scenario on every supported host), which the fixture runner checks
+but cannot schedule (`docs/TODO.md`). Deviations found while
 implementing are recorded inline where they apply (S19a: §7.2 quick-check
 evidence, §9.1 binding fields, §9.3 `openat`/`flock` substitutes; S19b:
 §5.3 symptom marker, §6.1 run ownership and the disabled case, §6.2 field
@@ -115,7 +119,9 @@ code-only (no trailer).
 
 - **T9** the anonymized incident fixtures, the AC-01..AC-20 matrix run
   through unit, contract and e2e tests, and the hardware smoke rows
-  (`hardware-smoke-runbook.md`) (§15, §16).
+  (`hardware-smoke-runbook.md`) (§15, §16). *Implemented (S19d):* fourteen
+  fixtures and their runner; §16 cites a fixture or a test per row; the
+  runbook carries the prompt-gate procedure.
 
 ### Out of scope (deferred; recorded in `docs/TODO.md` when the slice lands)
 
@@ -1226,33 +1232,38 @@ validate --file`) from the catalog without CLI code.
 | Contract — `mcp-wire.test.ts` (S19b) | `prompts/list` and `prompts/get` responses validate against the pinned `2026-07-28` schema on the modern era (`ListPromptsResult`, `Prompt`, `GetPromptResult`, `JSONRPCErrorResponse`); `mcp-integration.test.ts` drives the legacy shapes over the wire (no `resultType`, `initialize` advertises `prompts`) and the audit row. The stdio adapter forwards every method unchanged, so it is covered by the HTTP contract (AC-16) |
 | Integration — `rbac.test.ts`, `mcp-dispatch.test.ts`, `mcp-integration.test.ts` | the §13 matrix per entry; viewer `health.probe.run` denied on REST and MCP; operator with `allow_apply` on a legacy client → `MCP_CONFIRMATION_UNSUPPORTED`; modern → confirmation flow, consumed once (AC-14) |
 | e2e — `health-support.test.ts` extension | deep through the hardened host: artifact names differ per call, none left behind; *(S19c, cases 4c/4d/5)* `health.baseline` against a stub engine (`health_baseline.python` → a shell script printing a canned report and a `--sections` list) through the agent's real sandboxed subprocess, the cache on `max_age_s`, `sections_source: engine` in `health.context`; the report schema served and a report over the run's raw quick report `verified` while an edited raw report is a `mismatch`; `health.context` while the agent is SIGSTOPped still answers with a non-healthy heartbeat (AC-18). The missing-interpreter case (`not_supported`/`ENOENT`) is a unit test |
-| Fixtures — `src/__tests__/fixtures/agentic/` | the anonymized incident set of requirements §10 (one directory per AC with the raw reports, the expected outcomes and the forbidden calls); a fixture runner asserts validator results, not prompt text |
+| Fixtures — `src/__tests__/fixtures/agentic/` (S19d) | the anonymized incident set of requirements §10, one JSON file per scenario (`ac-NN-<slug>.json`: the raw reports xiNAS produced as `ledger`, the model's `tool_log`, its `report`, and `expected`); the runner `lib/health/agentic-fixtures.test.ts` mints a run ledger from the fixture, resolves three placeholders (`$run`, `{ "$ledger": key }`, `"digest": "$auto"`) and the `"*"` default row, then asserts validator results and tool-log prohibitions — verdict, integrity, outcomes, finding kinds and references, `not_checked`, forbidden calls, catalog-only tools, per-tool call caps, preserved ledger values — never prose. A captured run from a real host is added as `ac-NN-<host>-<n>.json` with the same shape (the README next to the fixtures). Fourteen scenarios ship: AC-01, 02, 03, 04 (+ an uncited variant), 05, 06, 08, 09, 10, 11, 13, 18, 19, 20 |
 | Python — `tests/test_health_engine_sections.py` (S19c) | `kerberos` enabled → exactly one SKIP `checker` row and `summary.skip: 1`; a disabled or check-less unknown section → no row; `--sections` prints `{ sections, version }` and exits 0; `SUPPORTED_SECTIONS` names real checkers |
 
 ## 16. Acceptance criteria coverage
 
+*S19d (2026-09-09): every row names the fixture (`src/__tests__/fixtures/agentic/`)
+and/or the test that pins it. The fixtures are run by
+`lib/health/agentic-fixtures.test.ts`; the remaining rows are automated
+tests that shipped with S19a–c.*
+
 | AC | Where |
 |---|---|
-| AC-01 | §11.3 step 2 (a `fail` outranks everything), fixture `ac01` |
-| AC-02 | §7.3 (`coverage_status: partial`), §11.3 step 1 |
-| AC-03 | §7.1/§7.2 status enum and mapping |
-| AC-04 | §6.2 `declared_absent` derivation, §11.3 step 3 |
-| AC-05 | §8 (baseline profiles) vs §9 (probes) are different tools; the prompt forbids deep under observe_only; `health.context.permitted` lists `deep` only when reachable |
-| AC-06 | §8.5 (S19c: the SKIP `checker` row and `--sections`; `sections_without_checker` from the live list) |
-| AC-07 | §10 `expected_source` order; overrides live in `config.json` (survive updates) — provenance in `evidence_manifest.source` |
-| AC-08 | §9.2 `proves` text; HC-11 `no_source` row keeps `service_path` partial |
-| AC-09 | HC-03/HC-09 rows in §10.2 |
-| AC-10 | HC-10 rows produce `hypothesis` findings; the schema requires `alternatives` and `next_check` on a hypothesis |
-| AC-11 | schema `findings.kind: conflict`; `run.execution.roles_ran`; the validator never drops findings |
-| AC-12 | §4 (capability iff installed), §5.1 (`-32601` without a provider), prompt text §3 (sequential roles) |
-| AC-13 | §5.3/§5.4 (symptom as data), §13 SAFE-01; fixture `ac13` asserts no `health.probe.run`/apply call in the tool log |
-| AC-14 | §9.1 gate matrix on REST, MCP and the legacy deep path |
-| AC-15 | §9.3, unit rows in §15 |
-| AC-16 | §4, §5.6, §4.4, contract tests |
-| AC-17 | §5.5 (ledger keeps the run's versions), §6.3 |
-| AC-18 | §8.4 cache + §11.2 `unverifiable`; the prompt's stop rule |
-| AC-19 | §11.4 |
-| AC-20 | §11.5 (nothing overwritten server-side); a new run gets a new `run_id` and fresh digests |
+| AC-01 | §11.3 step 2 (a `fail` outranks everything); fixture `ac-01-raid-degraded-baseline-pass` — the RAID fail is kept as `critical` while the baseline says PASS, the finding names `arr-data`; `report-validate.test.ts` "a critical fail is critical … regardless of other rows" |
+| AC-02 | §7.3 (`coverage_status: partial`), §11.3 step 1; fixture `ac-02-collector-missing-stale` — collector in error + stale rows → `unknown`/`partial`, no false ok; `routes-health.test.ts` (S19a) |
+| AC-03 | §7.1/§7.2 status enum and mapping; fixture `ac-03-probe-failures-not-absence` — timeout, permission_denied and PARSE are three `unknown`s, never `not_applicable`; `standard.test.ts`, `collect.test.ts` (S19a) |
+| AC-04 | §6.2 `declared_absent` derivation, §11.3 step 3; fixture `ac-04-no-nfs-no-raid-by-inventory` — cited `not_applicable` rows keep `ok`/`complete`, the uncited variant is rewritten to `unknown`; `routes-health-context.test.ts` `declaredAbsent` |
+| AC-05 | §8 (baseline profiles) vs §9 (probes) are different tools; fixture `ac-05-observe-only-no-mcp-deep` — the deep baseline profile runs, `health.check profile=deep` and `health.probe.run` are forbidden calls; `mcp-prompts.test.ts` (probe_policy capped) |
+| AC-06 | §8.5 (S19c: the SKIP `checker` row and `--sections`); fixture `ac-06-section-without-checker` — kerberos under `not_checked`, the SKIP row preserved in the ledger; `tests/test_health_engine_sections.py`, `routes-health-baseline.test.ts` |
+| AC-07 | §10 `expected_source` order; overrides live in `config.json` (survive updates) — provenance in `evidence_manifest.source`; `agentic-catalog.test.ts` (expectation keys, source order) |
+| AC-08 | §9.2 `proves` text; fixture `ac-08-loopback-passes-client-unreachable` — HC-12 passes, HC-11 stays `unknown`, `service_path` coverage `partial`; `probe-host.test.ts` (S19a) |
+| AC-09 | HC-03/HC-09 rows in §10.2; fixture `ac-09-counter-without-series` — the trend row is `unknown` with a `data_gap` finding and a `next_check`, never `fail`/`warn` |
+| AC-10 | HC-10 rows produce `hypothesis` findings; fixture `ac-10-change-with-alternative` — a `hypothesis` with alternatives and a discriminating check; `report-validate.test.ts` (a hypothesis without alternatives is a schema error) |
+| AC-11 | schema `findings.kind: conflict`; fixture `ac-11-subagents-disagree` — `execution.roles_ran` of length 2, a `conflict` finding kept next to the observation, `run_status: partial`, the confirmed `warn` outranks the missing role |
+| AC-12 | §4 (capability iff installed), §5.1 (`-32601` without a provider), prompt text §3 (sequential roles); `mcp-prompts-modern.test.ts`, `mcp-discover.test.ts` (S19b) |
+| AC-13 | §5.3/§5.4 (symptom as data), §13 SAFE-01; fixture `ac-13-log-injection` — the injected line is evidence, `health.probe.run`, apply and `support.bundle` are forbidden calls, every tool is a catalog name; `mcp-prompts.test.ts` (symptom quoted as data) |
+| AC-14 | §9.1 gate matrix on REST, MCP and the legacy deep path; `rbac.test.ts`, `mcp-dispatch.test.ts`, `mcp-integration.test.ts`, `routes-health-probe.test.ts` |
+| AC-15 | §9.3; `probe-host.test.ts`, `health-probe-run.test.ts` (S19a) |
+| AC-16 | §4, §5.6, §4.4; `mcp-wire.test.ts`, `mcp-integration.test.ts` (S19b) |
+| AC-17 | §5.5 (ledger keeps the run's versions), §6.3; `run-ledger.test.ts`, `health-prompt-context.test.ts` (S19b) |
+| AC-18 | §8.4 cache + §11.2 `unverifiable`; fixture `ac-18-budget-exhausted` — `run_status: partial`, the deterministic reports kept, nine rows under `not_checked`, no tool called twice; `routes-health-report.test.ts` (`unverifiable` stays valid) |
+| AC-19 | §11.4; fixture `ac-19-invented-evidence-corrected-fail` — a dangling evidence id and a tampered raw report → reference error + `mismatch`, the ledger still holds the critical row; `routes-health-report.test.ts` |
+| AC-20 | §11.5 (nothing overwritten server-side); fixture `ac-20-repeat-after-fix` — the run after the fix is a new run with fresh digests and the earlier report still verifies against its own ledger |
 
 ## 17. Deferred (to `docs/TODO.md` when each slice lands)
 
