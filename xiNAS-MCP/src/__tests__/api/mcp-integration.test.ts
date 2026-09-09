@@ -211,6 +211,66 @@ describe('MCP integration: default posture (S8 T8)', () => {
     expect(diskRows.at(-1)?.client_type).toBe('mcp');
   });
 
+  it('S19b: initialize advertises prompts; prompts/list and prompts/get answer on the legacy era', async () => {
+    const init = await rpc(port, INITIALIZE, { token: 'tok-viewer' });
+    const caps = (init.body.result as { capabilities: Record<string, unknown> }).capabilities;
+    expect(caps.prompts).toEqual({ listChanged: false });
+    const session = init.session as string;
+
+    const list = await rpc(
+      port,
+      { jsonrpc: '2.0', id: 'pl', method: 'prompts/list', params: {} },
+      { session },
+    );
+    const listResult = list.body.result as {
+      prompts: Array<{ name: string }>;
+      resultType?: unknown;
+    };
+    expect(listResult.prompts.map((p) => p.name)).toEqual(['xinas_health_check']);
+    expect(listResult.resultType).toBeUndefined();
+
+    await handle.state.drainer.drainNow();
+    const before = auditRows(dir).filter((r) => r.kind === 'mcp.prompts.get').length;
+    const get = await rpc(
+      port,
+      {
+        jsonrpc: '2.0',
+        id: 'pg',
+        method: 'prompts/get',
+        params: { name: 'xinas_health_check', arguments: { symptom: 'writes stall' } },
+      },
+      { session },
+    );
+    const getResult = get.body.result as {
+      messages: Array<{ role: string; content: { text: string } }>;
+      resultType?: unknown;
+    };
+    expect(getResult.resultType).toBeUndefined();
+    expect(getResult.messages).toHaveLength(1);
+    expect(getResult.messages[0]?.role).toBe('user');
+    expect(getResult.messages[0]?.content.text).toContain(
+      '<user_symptom>\nwrites stall\n</user_symptom>',
+    );
+
+    await handle.state.drainer.drainNow();
+    const rows = auditRows(dir).filter((r) => r.kind === 'mcp.prompts.get');
+    expect(rows.length - before).toBe(1);
+    expect(rows.at(-1)).toMatchObject({ principal: 'viewer:test', client_type: 'mcp' });
+    expect(JSON.stringify(rows.at(-1))).not.toContain('writes stall');
+
+    const bad = await rpc(
+      port,
+      {
+        jsonrpc: '2.0',
+        id: 'pb',
+        method: 'prompts/get',
+        params: { name: 'xinas_health_check', arguments: { scope: 'fleet' } },
+      },
+      { session },
+    );
+    expect(bad.body.error).toMatchObject({ code: -32602, data: { argument: 'scope' } });
+  });
+
   it('S15: the legacy era result carries NO resultType (legacy wire shape retained)', async () => {
     const res = await rpc(
       port,

@@ -20,9 +20,12 @@
  */
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { randomUUID } from 'node:crypto';
 import {
   CallToolRequestSchema,
   ErrorCode,
+  GetPromptRequestSchema,
+  ListPromptsRequestSchema,
   ListResourcesRequestSchema,
   ListToolsRequestSchema,
   McpError,
@@ -38,7 +41,9 @@ import {
 } from './apps.js';
 import type { McpClientInfo, ConfirmationService } from './confirmation/service.js';
 import { isConfirmable, type MrtrParams } from './confirmation/policy.js';
+import { McpProtocolError } from './confirmation/errors.js';
 import { SERVER_INFO } from './discover.js';
+import { type PromptsOptions, getPrompt, listPrompts } from './prompts.js';
 import type { ResourcesOptions } from './resources.js';
 import type { McpTasksService } from './tasks/service.js';
 import {
@@ -90,6 +95,12 @@ export interface DispatcherOptions {
   resources?: ResourcesOptions;
   /** S16: the task-method service; absent in read-only contexts (no ctx.tasks). */
   tasks?: McpTasksService;
+  /**
+   * S19b §5.1: the prompt providers (the `xinas_health_check` prompt).
+   * Absent when `mcp.health_prompt.enabled` is false — both eras then
+   * answer -32601 and neither advertises `prompts`.
+   */
+  prompts?: PromptsOptions;
 }
 
 /** Legacy tool name → replacement pointer (ADR-0010: actionable errors). */
@@ -405,6 +416,19 @@ export async function callTool(
   });
 }
 
+/**
+ * S19b §5.6: a prompt-path protocol error re-thrown as the SDK's McpError so
+ * the legacy wire carries `-32602` with the same `data: { argument, reason }`.
+ */
+function legacyPrompt<T>(fn: () => T): T {
+  try {
+    return fn();
+  } catch (err) {
+    if (err instanceof McpProtocolError) throw new McpError(err.code, err.message, err.data);
+    throw err;
+  }
+}
+
 /** The legacy-era SDK server: a thin wiring of listTools/callTool. */
 export function buildMcpServer(opts: DispatcherOptions): Server {
   const server = new Server(
@@ -413,10 +437,29 @@ export function buildMcpServer(opts: DispatcherOptions): Server {
       capabilities: {
         tools: {},
         resources: {},
+        // S19b §4.2: present iff the provider is installed, like the modern era.
+        ...(opts.prompts !== undefined ? { prompts: { listChanged: false } } : {}),
         extensions: { [MCP_UI_EXTENSION]: mcpUiExtensionCapability() },
       },
     },
   );
+
+  // S19b §5.6: the legacy shapes (no resultType / ttlMs / cacheScope) built
+  // from the same provider output the modern era serves. The legacy path has
+  // no server-owned per-request correlation id (transport.ts mints one only
+  // on the modern path), so the audit row's request_id is minted here.
+  if (opts.prompts !== undefined) {
+    const prompts = opts.prompts;
+    const promptCtx = () => ({ identity: opts.identity(), correlationId: randomUUID() });
+    server.setRequestHandler(ListPromptsRequestSchema, async (request) => {
+      const r = legacyPrompt(() => listPrompts(prompts, request.params, promptCtx()));
+      return { prompts: r.prompts };
+    });
+    server.setRequestHandler(GetPromptRequestSchema, async (request) => {
+      const r = legacyPrompt(() => getPrompt(prompts, request.params, promptCtx()));
+      return { description: r.description, messages: r.messages };
+    });
+  }
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: listTools() }));
   server.setRequestHandler(ListResourcesRequestSchema, async () => ({

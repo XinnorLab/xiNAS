@@ -11,7 +11,7 @@
  * Every result on this path carries `resultType` (`2026-07-28` `Result.resultType` is mandatory — S14 §5.1). The legacy SDK path is untouched.
  *
  * Methods served: `server/discover`, `resources/list`, `resources/templates/list`,
- * `resources/read` (S17 §4), `tools/list`, `tools/call`, and the
+ * `resources/read` (S17 §4), `prompts/list`, `prompts/get` (S19 §5), `tools/list`, `tools/call`, and the
  * `io.modelcontextprotocol/tasks` extension's `tasks/get`, `tasks/update` and
  * `tasks/cancel` (S16 §5.2–§5.4). Everything else, including the
  * deliberately-unimplemented `tasks/list` and `tasks/result` (SEP-2663),
@@ -28,6 +28,7 @@ import { type DispatcherOptions, callTool, listTools } from './dispatch.js';
 import { McpProtocolError } from './confirmation/errors.js';
 import { parseMrtrParams } from './confirmation/policy.js';
 import { buildDiscoverResult, isModernProtocolVersion } from './discover.js';
+import { getPrompt, listPrompts } from './prompts.js';
 import { listResources, listTemplates, readResource } from './resources.js';
 import { type ToolResult, isCreateTaskResult, isInputRequired } from './results.js';
 import { missingTasksCapability } from './tasks/index.js';
@@ -127,12 +128,25 @@ export async function handleModernRequest(
         return {
           jsonrpc: '2.0',
           id: rpcId,
-          result: buildDiscoverResult(
-            opts.resources !== undefined
+          result: buildDiscoverResult({
+            ...(opts.resources !== undefined
               ? { resources: { subscribe: opts.resources.subscribe } }
-              : {},
-          ),
+              : {}),
+            prompts: opts.prompts !== undefined,
+          }),
         };
+
+      // S19 §5 — Prompts (both eras; the legacy SDK handlers live in dispatch.ts).
+      case 'prompts/list':
+      case 'prompts/get': {
+        if (opts.prompts === undefined) break; // → -32601 below
+        const promptCtx = { identity: opts.identity(), correlationId };
+        const result =
+          msg.method === 'prompts/list'
+            ? listPrompts(opts.prompts, msg.params, promptCtx)
+            : getPrompt(opts.prompts, msg.params, promptCtx);
+        return { jsonrpc: '2.0', id: rpcId, result };
+      }
 
       // S17 §4 — Resources (modern era only; the legacy SDK path is untouched).
       case 'resources/list':

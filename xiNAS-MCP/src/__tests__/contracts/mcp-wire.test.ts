@@ -274,6 +274,34 @@ describe('S17 wire messages validate against the released 2026-07-28 schema', ()
     expect(validateAs('ListResourceTemplatesResult', r.body.result)).toEqual([]);
   });
 
+  it('S19b: server/discover advertises prompts; prompts/list → ListPromptsResult', async () => {
+    const d = await call('server/discover');
+    expect(
+      (d.body.result as { capabilities: Record<string, unknown> }).capabilities.prompts,
+    ).toEqual({ listChanged: false });
+    const r = await call('prompts/list');
+    expect(validateAs('ListPromptsResult', r.body.result)).toEqual([]);
+    const prompts = (r.body.result as { prompts: Array<{ name: string }> }).prompts;
+    expect(prompts.map((p) => p.name)).toEqual(['xinas_health_check']);
+    for (const p of prompts) expect(validateAs('Prompt', p)).toEqual([]);
+  });
+
+  it('S19b: prompts/get → GetPromptResult with one user text message', async () => {
+    const r = await call('prompts/get', {
+      name: 'xinas_health_check',
+      arguments: { scope: 'node', symptom: 'slow reads' },
+    });
+    expect(validateAs('GetPromptResult', r.body.result)).toEqual([]);
+    const messages = (r.body.result as { messages: Array<{ role: string }> }).messages;
+    expect(messages.map((m) => m.role)).toEqual(['user']);
+    const bad = await call('prompts/get', {
+      name: 'xinas_health_check',
+      arguments: { scope: 'x' },
+    });
+    expect(validateAs('JSONRPCErrorResponse', bad.body)).toEqual([]);
+    expect((bad.body.error as { code: number }).code).toBe(-32602);
+  });
+
   it('resources/read → ReadResourceResult (text contents)', async () => {
     const r = await call('resources/read', { uri: 'xinas://events/storage' });
     expect(validateAs('ReadResourceResult', r.body.result)).toEqual([]);

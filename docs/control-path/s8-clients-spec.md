@@ -303,12 +303,19 @@ capabilities/inventory), `audit.query` (**degraded**), `users.list`,
 `requires_mcp_apply`, the first entry carrying `confirmation:
 'required'` — the confirmation service binds it by tool + arguments,
 `confirmation/direct.ts`, and the route consumes the record before the
-probe runs). **Design, not yet implemented (S19b/c):** `health.context`,
-`health.catalog`, `health.report_schema`, `health.baseline` (viewer
+probe runs). **Live since S19b (2026-09-09):** `health.context`
+(`GET /health/context`; mints or re-reads a run in the api's in-memory
+ledger, KV-only) and `health.catalog` (`GET /health/catalog`; the check
+catalog, static data), both viewer reads; `health.check` and
+`health.probe.run` accept the run's `run_id`. **Design, not yet
+implemented (S19c):** `health.report_schema`, `health.baseline` (viewer
 reads) and `health.report.validate` (a viewer `direct` POST with no side
 effects). Their ranks and gates are the §13 table of
 `s19-mcp-health-prompt-spec.md`; the generation invariant below applies
-to them unchanged.
+to them unchanged. The `/mcp` transport also serves the
+`xinas_health_check` prompt (`prompts/list`, `prompts/get`) on both eras
+since S19b — the prompt is not a catalog entry; it is the one provider
+of `api/mcp/prompts.ts`, installed iff `mcp.health_prompt.enabled`.
 
 Generation invariant: the MCP tools/list, the call dispatcher, AND the
 xinasctl command tree derive from this one table — a new route reaches

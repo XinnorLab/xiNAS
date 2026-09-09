@@ -159,6 +159,37 @@ On a scratch node (or after `./uninstall.sh`):
   `decision: APPLY` → the same result plus `confirmation_id`; the record
   reads `consumed` with `consumed_task_id: probe:<uuid>`. Run two probes
   concurrently: the second answers `409 CONFLICT` (`PROBE_IN_PROGRESS`).
+- [ ] S19b prompt, from a real MCP client (Claude Desktop / Inspector) on
+  both eras: `server/discover` (modern) and `initialize` (legacy)
+  advertise `prompts: { listChanged: false }`; `prompts/list` shows
+  `xinas_health_check` with eight optional arguments; `prompts/get` with
+  `{ probe_policy: bounded_active, symptom: "writes stall" }` returns one
+  `user` message whose parameters block reports `effective:
+  observe_only` with the reason and quotes the symptom only inside
+  `<user_symptom>`; a bad `time_window` is `-32602` with
+  `data.argument`. Set `mcp.health_prompt.enabled: false`, restart: the
+  capability is gone and both methods answer `-32601`. The audit trail
+  shows one `mcp.prompts.get` row without the symptom text.
+- [ ] `GET /health/context` with a viewer token on the live node:
+  `collectors.heartbeat: healthy`, `topology` links every managed
+  filesystem to its array and every share to its filesystem,
+  `freshness` names every observed kind with recent timestamps,
+  `baselines.dir_present: true` with the three shipped profiles and
+  `deep.sections_without_checker: ["kerberos"]`, `permitted.probe_run:
+  denied`. Stop `xinas-agent`: the call still answers, with
+  `heartbeat: offline` and `declared_absent: []`. With an operator token
+  `permitted.deterministic` includes `deep` and `probe_run: allowed`.
+  Re-read with `?run_id=` from the first call: same `run_id`; with a
+  made-up id: a new run plus `RUN_UNKNOWN`.
+- [ ] Run budget: `GET /health/context` (operator) → `run_id`; five
+  `POST /health/probe {probe: fs_io, target: <fs>, run_id}` calls: four
+  succeed and the fifth answers `412 PRECONDITION_FAILED`
+  (`probe_budget_exhausted`) without the agent logging a probe.
+  `GET /health?profile=quick&run_id=<run_id>` echoes the run id with no
+  warning; restart `xinas-api` and repeat: `RUN_UNKNOWN`, still `200`.
+- [ ] `GET /health/catalog`: `version: "1"`, twenty rows, `HC-11.client-path`
+  and the other `no_source: true` rows list no inputs; `xinasctl health
+  catalog` and `xinasctl health context` render the same bodies.
 - [ ] Drift: edit `/etc/netplan/99-xinas.yaml` by hand → `drift.netplan`
   degraded in `GET /health` AND `GET /config-history/drift`; re-apply →
   clean. Remove an export via `exportfs -u` → `drift.nfs-exports`

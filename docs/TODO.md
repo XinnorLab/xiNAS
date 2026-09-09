@@ -938,27 +938,62 @@ additive UI and would have doubled the review surface of a security change.
 §9.3), refusing to approve without the phrase, and a pytest against the
 stub server for approve / decline / policy refusal rendering.
 
-## Health — `probes_per_run` is not enforced until the S19b run ledger
+## Health — `sections_without_checker` uses a static section list until S19c
 
-*Deferred 2026-09-09, from S19a (`feat/s19a-typed-collection-hardened-probes`);
-spec `s19-mcp-health-prompt-spec.md` §9.5.*
+*Deferred 2026-09-09, from S19b (`feat/s19b-prompt-context-catalog`);
+spec `s19-mcp-health-prompt-spec.md` §8.2, §8.5.*
 
-**What is missing.** The per-run probe budget (`limits.probes_per_run`,
-default 4): `health.probe.run` should refuse with `PRECONDITION_FAILED`
-(`probe_budget_exhausted`) once a `run_id` has used its allowance.
+**What is missing.** `health.context.baselines[].sections_without_checker`
+should come from the Python engine itself (`python3 -m xinas_menu.health
+--sections`, S19c), so a section the engine gains or loses is reported
+without a TypeScript change.
 
-**What the code does instead.** `run_id` is validated for shape,
-echoed, carried into the artifact name (`probe-<run_id>-<random>`, the
-per-run loopback directory) and the audit row, and otherwise ignored.
-The only probe limit in force is `active_probes_per_node = 1` (the
-agent's in-flight guard and the loopback lock), which is enforced.
+**What the code does instead.** `api/health/profiles.ts` compares each
+profile's enabled sections against `KNOWN_ENGINE_SECTIONS`, a copy of the
+engine's `section_map` keys taken on 2026-09-09 (`kerberos` is the one
+enabled section without a checker today).
 
-**Why it was cut.** The budget is counted in the run ledger that
-`health.context` mints (§6.3), which is S19b work; enforcing it without
-the ledger would mean a second, throw-away counter keyed by an unverified
-string.
+**Why it was cut.** The `--sections` flag is S19c work (AC-06, G-03); the
+static list makes the G-03 gap visible now instead of hiding it until
+then.
 
-**What done looks like.** S19b's `health.context` ledger records
-`probes_started` per `run_id`; the route increments it under the
-ledger's lock and refuses beyond `mcp.health_prompt.limits.probes_per_run`;
-a test drives five probes on one run and sees the fifth refused.
+**What done looks like.** The agent's `health.baseline` handler runs
+`--sections` once at startup and the api reads the live list through it;
+`KNOWN_ENGINE_SECTIONS` is deleted and `tests/test_health_engine_sections.py`
+pins the flag's output.
+
+## Health — `health.context` fields without an observed source
+
+*Deferred 2026-09-09, from S19b; spec §6.2.*
+
+**What is missing.** `node.xiraid_version` (always `null`) and the
+`topology.interfaces[].rdma_capable` / `rdma_link_state` fields the spec
+sketched.
+
+**What the code does instead.** `xiraid_version` is `null`; interfaces
+carry `operstate` and `mtu` from the `NetworkInterface` collector. RDMA
+link state is only observed by the standard profile's `network.rdma-live`
+check, which the prompt reads through `health.check`.
+
+**Why it was cut.** No collector observes the xiRAID version or RDMA link
+state as KV rows; `health.context` never calls the agent (§6.1), so it
+cannot ask for them live.
+
+**What done looks like.** An inventory or network collector row carries
+them; `buildHealthContext` reads them; the spec's §6.2 sketch and the
+`HealthContext` schema in `api-v1.yaml` gain the fields.
+
+## MCP — `mcp.health_prompt` follow-ups deferred by the S19 spec (§12.3, §17)
+
+*Deferred 2026-09-09, from S19b.*
+
+- TUI toggles for `mcp.health_prompt.enabled` and `probe_policy_max` on
+  the MCP Server screen (S8 §6c); today they are `config.json` edits.
+- `prompts` `listChanged` notifications and template hot reload; the
+  template override is read once at startup.
+- MRTR elicitation of missing prompt arguments and `completion/complete`
+  for the `baseline_profile` / `targets` arguments.
+- Server-side two-sample trend rows for HC-03 / HC-09 (v1 relies on the
+  client taking the second sample) and a server-side report history.
+
+Each lands as its own spec amendment; none changes the §13 gate matrix.

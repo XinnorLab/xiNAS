@@ -4,6 +4,7 @@ import type { ApiContext } from './context.js';
 import { confirmationKeyPathFor, resolveConfirmationConfig } from './config.js';
 import { ApiException } from './errors.js';
 import { executorUnavailable } from './handlers/unsupported.js';
+import { buildHealthPromptContext } from './health/prompt-context.js';
 import { rbacMiddleware } from './middleware/rbac.js';
 import { promotedReadsRouter } from './routes/promoted-reads.js';
 import { poolsRouter } from './routes/pools.js';
@@ -83,6 +84,16 @@ export function createApp(ctx: ApiContext): Express {
   // (e.g. a read-only test context with no ctx.tasks) — /metrics still
   // mounts there, just with nothing registered on it yet.
   ctx.metrics ??= new MetricsRegistry();
+
+  // S19b: the xinas_health_check prompt provider — the profile catalog is
+  // listed once here (MCP-03: the argument catalog is fixed for the process
+  // lifetime) and the template override, if any, is read once. Undefined
+  // when mcp.health_prompt.enabled is false: /mcp then answers -32601 to
+  // prompts/* on both eras and advertises no `prompts` capability.
+  if (ctx.healthPrompt === undefined) {
+    const healthPrompt = buildHealthPromptContext(ctx.config, { audit: ctx.state.audit });
+    if (healthPrompt !== undefined) ctx.healthPrompt = healthPrompt;
+  }
 
   // S15: the MRTR confirmation service, built over the same store the task
   // engine consumes from. Absent in read-only contexts (no ctx.tasks), where
