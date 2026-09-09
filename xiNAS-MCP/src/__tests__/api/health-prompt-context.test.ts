@@ -112,12 +112,14 @@ describe('buildHealthPromptContext', () => {
       text.slice(text.indexOf('---\n{') + 4, text.indexOf('\n<user_symptom>')),
     ) as { available: Record<string, boolean> };
     // S19a shipped health.probe.run, S19b health.context / health.catalog,
-    // S19c health.baseline; report_schema / validate land with S19c T6.
-    expect(block.available.probe_run).toBe(true);
-    expect(block.available.context).toBe(true);
-    expect(block.available.catalog).toBe(true);
-    expect(block.available.baseline).toBe(true);
-    expect(block.available.report_schema).toBe(false);
-    expect(block.available.validate).toBe(false);
+    // S19c health.baseline, health.report_schema and health.report.validate.
+    expect(block.available).toEqual({
+      context: true,
+      baseline: true,
+      probe_run: true,
+      catalog: true,
+      report_schema: true,
+      validate: true,
+    });
   });
 });

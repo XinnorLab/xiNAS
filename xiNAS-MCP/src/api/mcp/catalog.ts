@@ -427,6 +427,36 @@ export const CATALOG: CatalogEntry[] = [
     'The versioned agentic check catalog (HC-01..HC-12): per check its producers, outcome ' +
       'and severity maps, side effects, cost and which rows have no producer today. Static data.',
   ),
+  // S19c (spec §11): the report contract and its validator.
+  read(
+    'health.report_schema',
+    'GET',
+    '/health/report-schema',
+    'The JSON Schema (2020-12) an agentic health report must conform to ' +
+      '(report_schema_version 1). health.report.validate checks a report against it and ' +
+      'computes the verdict. Static data.',
+  ),
+  {
+    name: 'health.report.validate',
+    description:
+      'Validate an agentic health report: schema, references (evidence and check ids), the ' +
+      'deterministic verdict (health_status and coverage_status are computed from the ' +
+      "catalog's mandatory rows and must equal the report's own values) and raw-report " +
+      'integrity against the run ledger (verified, mismatch, or unverifiable when the run is ' +
+      'unknown). A pure computation: no side effects, nothing stored. The arguments are the ' +
+      'report itself.',
+    method: 'POST',
+    path: '/health/report/validate',
+    input_schema: {
+      type: 'object',
+      description: 'the report (health.report_schema, report_schema_version 1)',
+      additionalProperties: true,
+    },
+    mutability: 'direct',
+    requires_mcp_apply: false,
+    min_role: 'viewer',
+    status: 'live',
+  },
   // S19c (spec §8, ADR-0018 §5): the Python baseline engine, read-only.
   {
     ...read(

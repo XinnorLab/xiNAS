@@ -61,8 +61,15 @@ import type { Warning } from '../envelope.js';
 import { ApiException } from '../errors.js';
 import { gatherHealthFacts } from '../handlers/health-facts.js';
 import { getOrNull, sendOk } from '../handlers/reads.js';
+import {
+  type AgenticReport,
+  REPORT_SCHEMA,
+  validateReportShape,
+} from '../../lib/health/report-validate.js';
 import { parseMaxAgeS, runBaseline } from '../health/baseline.js';
 import { buildHealthContext, runUnknownWarning } from '../health/context.js';
+import { type Integrity, UNVERIFIABLE, checkIntegrity } from '../health/report-integrity.js';
+import { digestOf } from '../health/run-ledger.js';
 import { SERVER_INFO } from '../mcp/discover.js';
 import { queueConfirmationEvent } from '../mcp/confirmation/audit.js';
 import { argumentsHash } from '../mcp/confirmation/policy.js';
@@ -393,6 +400,66 @@ export function healthRouter(ctx: ApiContext): Router {
         warnings.push(runUnknownWarning(runId));
       }
       sendOk(req, res, result, [], warnings);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /** GET /health/report-schema (S19c, spec §11.1) — the report contract, verbatim. */
+  r.get('/health/report-schema', (req, res, next) => {
+    try {
+      sendOk(req, res, REPORT_SCHEMA);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /**
+   * POST /health/report/validate (S19c, spec §11.2–§11.4) — a pure
+   * computation over the report in the body: schema, references, the
+   * deterministic verdict, and raw-report integrity against the run ledger.
+   * Nothing is stored (DATA-06); the http audit row's result hash binds
+   * `valid`, the computed statuses and `report_digest`.
+   */
+  r.post('/health/report/validate', (req, res, next) => {
+    try {
+      const body: unknown = req.body;
+      if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+        throw new ApiException('INVALID_ARGUMENT', 'the body must be the report object');
+      }
+      const shape = validateReportShape(body, AGENTIC_CATALOG);
+      const warnings: Warning[] = [];
+      let runId: string | null = null;
+      let integrity: Integrity = UNVERIFIABLE;
+      if (shape.computed !== null) {
+        const report = body as AgenticReport;
+        runId = report.run.run_id;
+        const entry = ctx.healthPrompt?.ledger.get(runId) ?? null;
+        if (entry === null) warnings.push(runUnknownWarning(runId));
+        else integrity = checkIntegrity(entry, report.raw_reports);
+      }
+      const valid =
+        shape.schema_errors.length === 0 &&
+        shape.reference_errors.length === 0 &&
+        shape.status_errors.length === 0 &&
+        integrity.status !== 'mismatch';
+      sendOk(
+        req,
+        res,
+        {
+          valid,
+          run_id: runId,
+          schema_errors: shape.schema_errors,
+          reference_errors: shape.reference_errors,
+          integrity,
+          computed: shape.computed,
+          status_errors: shape.status_errors,
+          rewritten_to_unknown: shape.rewritten_to_unknown,
+          report_digest: digestOf(body),
+        },
+        [],
+        warnings,
+      );
     } catch (err) {
       next(err);
     }
