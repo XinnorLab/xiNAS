@@ -1,94 +1,401 @@
 /**
- * ProbeHost (S7 T5, ADR-0009 §deep): the privileged verbs behind the
- * deep health probes.
+ * ProbeHost (S7 T5, ADR-0009 §deep; rewritten in S19a T2 — spec §9.3,
+ * D-08, ADR-0018 §4): the privileged verbs behind the active health
+ * probes. Every artifact is per run and every outcome says what happened
+ * to it.
  *
- *  - touchProbe: write/read/delete `.xinas-health-probe` in a
- *    mountpoint — proves the filesystem accepts I/O end to end.
- *  - loopbackMount: PID1-DELEGATED `systemd-mount localhost:<export>`
- *    at /run/xinas/health-probe/mnt (the S5 pattern — PID1 performs the
- *    mount so the probe inherits `.mount` unit semantics, not because the
- *    agent lacks the privilege to mount), list the root, then
- *    `systemd-umount`. The unmount runs in `finally` so a listing
- *    failure never leaks a mount.
+ *  - fsIo: under `<mountpoint>/.xinas-health` (a root-owned directory
+ *    that must sit on the mountpoint's own device and must not be a
+ *    symlink) create `probe-<run>-<random>` with O_CREAT|O_EXCL|O_NOFOLLOW,
+ *    write 4 KiB, fsync, read it back through a fresh open, unlink it.
+ *    Node has no `openat`, so the post-open fstat (same device, one link,
+ *    plain file) stands in for it. Only the file this run created is ever
+ *    unlinked; a failed unlink is reported as `cleanup.status: 'failed'`.
+ *  - nfsLoopback: PID1-DELEGATED `systemd-mount localhost:<export>` at a
+ *    per-run `<root>/<run>-<random>/mnt` (the S5 pattern — PID1 performs
+ *    the mount so the probe inherits `.mount` unit semantics), list it,
+ *    `systemd-umount`, remove the directory. Loopback probes are
+ *    serialized by an in-process flag plus an O_EXCL lock file whose pid
+ *    is checked for staleness; a held lock is `PROBE_IN_PROGRESS`.
  *
- * Both verbs return rich errors instead of throwing — a failed probe
- * is a RESULT (the check goes critical), not an RPC failure.
+ * Every step is bounded by the run's `timeoutMs` ON THE AGENT: a step
+ * that overruns ends the probe with `TIMEOUT` and cleanup is still
+ * attempted. Both verbs return outcomes instead of throwing — a failed
+ * probe is a RESULT, not an RPC failure.
  */
 
 import { execFile } from 'node:child_process';
-import { mkdir, readdir, readFile, unlink, writeFile } from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
+import {
+  type FileHandle,
+  constants,
+  mkdir,
+  open,
+  readFile,
+  readdir,
+  rm,
+  rmdir,
+  unlink,
+} from 'node:fs/promises';
 import { join } from 'node:path';
+import {
+  PROBE_DIR_NAME,
+  PROBE_PAYLOAD_BYTES,
+  type ProbeCleanup,
+  type ProbeOutcome,
+  type ProbeRunOptions,
+  type ProbeStage,
+} from '../../lib/health/probe-types.js';
 
-export const LOOPBACK_MOUNTPOINT = '/run/xinas/health-probe/mnt';
-const PROBE_FILENAME = '.xinas-health-probe';
-const PROBE_PAYLOAD = 'xinas-health-probe\n';
+const DEFAULT_ROOT = '/run/xinas/health-probe';
+const LOCK_NAME = '.lock';
+const PAYLOAD = Buffer.alloc(PROBE_PAYLOAD_BYTES, 'xinas-health-probe\n');
+const CREATE_ATTEMPTS = 3;
+const UMOUNT_TIMEOUT_MS = 20_000;
+
+/** Test-only seams: let a test slow or sabotage a single step. */
+export interface FsIoHooks {
+  beforeFsync?(): Promise<void> | void;
+  beforeUnlink?(): Promise<void> | void;
+}
 
 export interface ProbeHost {
-  /** Write/read-back/delete the probe file in `mountpoint`. */
-  touchProbe(mountpoint: string): Promise<{ ok: boolean; error?: string }>;
-  /** Loopback-mount `exportPath`, list it, unmount. */
-  loopbackMount(exportPath: string): Promise<{ ok: boolean; error?: string }>;
+  fsIo(mountpoint: string, opts: ProbeRunOptions, hooks?: FsIoHooks): Promise<ProbeOutcome>;
+  nfsLoopback(exportPath: string, opts: ProbeRunOptions): Promise<ProbeOutcome>;
 }
 
-function run(file: string, args: string[], timeoutMs: number): Promise<void> {
-  return new Promise((resolve, reject) => {
-    execFile(file, args, { timeout: timeoutMs }, (err, _stdout, stderr) => {
-      if (err !== null) {
+export interface RealProbeHostDeps {
+  /** Loopback root; default /run/xinas/health-probe. */
+  root?: string;
+  /** Owner the probe directory must have; default the agent's own uid (root in production). */
+  uid?: number;
+  /** 16 hex chars per call; default randomBytes(8). */
+  random?: () => string;
+  /** systemd-mount / systemd-umount runner; default execFile with a SIGKILL timeout. */
+  exec?: (file: string, args: string[], timeoutMs: number) => Promise<void>;
+  clock?: () => number;
+}
+
+class StageError extends Error {
+  constructor(
+    readonly stage: ProbeStage,
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'StageError';
+  }
+}
+
+const errCode = (err: unknown): string => {
+  const c = (err as { code?: unknown } | null)?.code;
+  return typeof c === 'string' ? c : 'ERROR';
+};
+const errMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
+const toError = (err: unknown, fallbackStage: ProbeStage): NonNullable<ProbeOutcome['error']> =>
+  err instanceof StageError
+    ? { code: err.code, message: err.message, stage: err.stage }
+    : { code: errCode(err), message: errMessage(err), stage: fallbackStage };
+
+/** A step runner bounded by the run deadline; an overrun rejects with TIMEOUT. */
+function makeStepper(deadline: number, clock: () => number) {
+  return async function step<T>(stage: ProbeStage, fn: () => Promise<T>): Promise<T> {
+    const left = deadline - clock();
+    if (left <= 0) throw new StageError(stage, 'TIMEOUT', `probe timed out before ${stage}`);
+    let timer: NodeJS.Timeout | undefined;
+    const work = fn();
+    // An abandoned step (we stop waiting on timeout) must never surface as
+    // an unhandled rejection later.
+    work.catch(() => undefined);
+    try {
+      return await Promise.race([
+        work,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new StageError(stage, 'TIMEOUT', `probe timed out during ${stage}`)),
+            left,
+          );
+        }),
+      ]);
+    } catch (err) {
+      if (err instanceof StageError) throw err;
+      throw new StageError(stage, errCode(err), errMessage(err));
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  };
+}
+
+const defaultExec = (file: string, args: string[], timeoutMs: number): Promise<void> =>
+  new Promise((resolve, reject) => {
+    execFile(file, args, { timeout: timeoutMs, killSignal: 'SIGKILL' }, (err, _stdout, stderr) => {
+      if (err !== null)
         reject(new Error(`${file} ${args.join(' ')} failed: ${stderr || err.message}`));
-        return;
-      }
-      resolve();
+      else resolve();
     });
   });
-}
 
-export function createRealProbeHost(): ProbeHost {
-  return {
-    async touchProbe(mountpoint: string): Promise<{ ok: boolean; error?: string }> {
-      const path = join(mountpoint, PROBE_FILENAME);
+const isAlive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return errCode(err) === 'EPERM'; // exists, owned by someone else
+  }
+};
+
+export function createRealProbeHost(deps: RealProbeHostDeps = {}): ProbeHost {
+  const root = deps.root ?? DEFAULT_ROOT;
+  const uid = deps.uid ?? process.getuid?.() ?? 0;
+  const random = deps.random ?? (() => randomBytes(8).toString('hex'));
+  const exec = deps.exec ?? defaultExec;
+  const clock = deps.clock ?? Date.now;
+  const { O_RDONLY, O_WRONLY, O_CREAT, O_EXCL, O_NOFOLLOW, O_DIRECTORY } = constants;
+  let loopbackBusy = false;
+
+  async function acquireLock(lockPath: string): Promise<void> {
+    for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        await writeFile(path, PROBE_PAYLOAD, 'utf8');
-        const back = await readFile(path, 'utf8');
-        if (back !== PROBE_PAYLOAD) {
-          return { ok: false, error: 'read-back mismatch' };
-        }
-        return { ok: true };
-      } catch (err) {
-        return { ok: false, error: err instanceof Error ? err.message : String(err) };
-      } finally {
+        const fh = await open(lockPath, O_WRONLY | O_CREAT | O_EXCL, 0o600);
         try {
-          await unlink(path);
-        } catch {
-          /* nothing to clean (write failed) or already gone */
+          await fh.write(`${process.pid}\n`);
+        } finally {
+          await fh.close();
         }
+        return;
+      } catch (err) {
+        if (errCode(err) !== 'EEXIST') throw err;
+        const raw = await readFile(lockPath, 'utf8').catch(() => '');
+        const pid = Number.parseInt(raw.trim(), 10);
+        const held = Number.isInteger(pid) && pid > 0 && isAlive(pid);
+        if (held || attempt === 1) {
+          throw new Error(`another loopback probe holds ${lockPath} (pid ${raw.trim() || '?'})`);
+        }
+        await unlink(lockPath).catch(() => undefined); // stale lock: reclaim once
       }
+    }
+  }
+
+  return {
+    async fsIo(mountpoint, opts, hooks): Promise<ProbeOutcome> {
+      const startedAt = new Date(clock()).toISOString();
+      const step = makeStepper(clock() + opts.timeoutMs, clock);
+      let artifact: ProbeOutcome['artifact'] = null;
+      let cleanup: ProbeCleanup = { status: 'not_needed' };
+      let error: ProbeOutcome['error'];
+      let mntFh: FileHandle | undefined;
+      let dirFh: FileHandle | undefined;
+      let fh: FileHandle | undefined;
+      let filePath: string | undefined;
+      try {
+        // 1. The mountpoint itself, never through a symlink.
+        mntFh = await step('open', () => open(mountpoint, O_RDONLY | O_DIRECTORY | O_NOFOLLOW));
+        const mntHandle = mntFh;
+        const mntStat = await step('open', () => mntHandle.stat());
+
+        // 2. The probe directory: created 0700 if absent, then opened with
+        //    O_NOFOLLOW and checked to be a plain directory on the same
+        //    device, owned by us.
+        const dirPath = join(mountpoint, PROBE_DIR_NAME);
+        await step('dir', async () => {
+          try {
+            await mkdir(dirPath, { mode: 0o700 });
+          } catch (err) {
+            if (errCode(err) !== 'EEXIST') throw err;
+          }
+        });
+        dirFh = await step('dir', async () => {
+          try {
+            return await open(dirPath, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+          } catch (err) {
+            const code = errCode(err);
+            if (code === 'ELOOP' || code === 'ENOTDIR') {
+              throw new StageError(
+                'dir',
+                'probe_dir_untrusted',
+                `${PROBE_DIR_NAME} is not a plain directory (${code})`,
+              );
+            }
+            throw err;
+          }
+        });
+        const dirHandle = dirFh;
+        const dirStat = await step('dir', () => dirHandle.stat());
+        if (!dirStat.isDirectory() || dirStat.dev !== mntStat.dev || dirStat.uid !== uid) {
+          throw new StageError(
+            'dir',
+            'probe_dir_untrusted',
+            `${PROBE_DIR_NAME} must be a directory on the mountpoint's device owned by uid ${uid}`,
+          );
+        }
+
+        // 3. Create the per-run file exclusively; a colliding name retries.
+        const created = await step('create', async () => {
+          for (let attempt = 0; attempt < CREATE_ATTEMPTS; attempt++) {
+            const candidate = join(dirPath, `probe-${opts.runId ?? 'none'}-${random()}`);
+            try {
+              const handle = await open(candidate, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600);
+              return { handle, path: candidate };
+            } catch (err) {
+              if (errCode(err) !== 'EEXIST' || attempt === CREATE_ATTEMPTS - 1) throw err;
+            }
+          }
+          throw new StageError('create', 'EEXIST', 'could not find a free probe file name');
+        });
+        fh = created.handle;
+        filePath = created.path;
+        artifact = { kind: 'file', path: created.path };
+        const fileStat = await step('create', () => created.handle.stat());
+        if (!fileStat.isFile() || fileStat.nlink !== 1 || fileStat.dev !== mntStat.dev) {
+          throw new StageError(
+            'create',
+            'probe_dir_untrusted',
+            'the created probe file is not a plain file on the mountpoint device',
+          );
+        }
+
+        // 4. Write, fsync, close.
+        await step('write', () => created.handle.write(PAYLOAD, 0, PAYLOAD.length, 0));
+        await step('fsync', async () => {
+          await hooks?.beforeFsync?.();
+          await created.handle.sync();
+        });
+        await step('fsync', () => created.handle.close());
+        fh = undefined;
+
+        // 5. Read it back through a fresh open of the same inode.
+        await step('read', async () => {
+          const rfh = await open(created.path, O_RDONLY | O_NOFOLLOW);
+          try {
+            const st = await rfh.stat();
+            if (st.ino !== fileStat.ino) {
+              throw new StageError(
+                'read',
+                'READ_BACK_MISMATCH',
+                'the probe file was replaced between write and read',
+              );
+            }
+            const buf = Buffer.alloc(PAYLOAD.length);
+            const { bytesRead } = await rfh.read(buf, 0, buf.length, 0);
+            if (bytesRead !== PAYLOAD.length || !buf.equals(PAYLOAD)) {
+              throw new StageError(
+                'read',
+                'READ_BACK_MISMATCH',
+                'read-back differs from the written payload',
+              );
+            }
+          } finally {
+            await rfh.close();
+          }
+        });
+      } catch (err) {
+        error = toError(err, 'open');
+      } finally {
+        if (fh !== undefined) await fh.close().catch(() => undefined);
+        // 6. Only the file this run created is ever unlinked; a failure is a finding.
+        if (filePath !== undefined) {
+          const path = filePath;
+          try {
+            await hooks?.beforeUnlink?.();
+            await unlink(path);
+            cleanup = { status: 'clean' };
+          } catch (err) {
+            cleanup = { status: 'failed', detail: `${errCode(err)}: ${errMessage(err)}` };
+          }
+        }
+        if (dirFh !== undefined) await dirFh.close().catch(() => undefined);
+        if (mntFh !== undefined) await mntFh.close().catch(() => undefined);
+      }
+      return {
+        ok: error === undefined,
+        started_at: startedAt,
+        completed_at: new Date(clock()).toISOString(),
+        artifact,
+        ...(error !== undefined ? { error } : {}),
+        cleanup,
+      };
     },
 
-    async loopbackMount(exportPath: string): Promise<{ ok: boolean; error?: string }> {
+    async nfsLoopback(exportPath, opts): Promise<ProbeOutcome> {
+      const startedAt = new Date(clock()).toISOString();
+      const deadline = clock() + opts.timeoutMs;
+      const step = makeStepper(deadline, clock);
+      const refused = (message: string): ProbeOutcome => ({
+        ok: false,
+        started_at: startedAt,
+        completed_at: new Date(clock()).toISOString(),
+        artifact: null,
+        error: { code: 'PROBE_IN_PROGRESS', message, stage: 'lock' },
+        cleanup: { status: 'not_needed' },
+      });
+      if (loopbackBusy) return refused('another loopback probe is in flight on this node');
+      loopbackBusy = true;
+      const lockPath = join(root, LOCK_NAME);
+      let lockHeld = false;
+      let artifact: ProbeOutcome['artifact'] = null;
+      let cleanup: ProbeCleanup = { status: 'not_needed' };
+      let error: ProbeOutcome['error'];
       try {
-        await mkdir(LOOPBACK_MOUNTPOINT, { recursive: true });
-        // PID1 performs the mount; --collect makes the transient unit
-        // garbage-collect on failure instead of lingering.
-        await run(
-          'systemd-mount',
-          ['--collect', `localhost:${exportPath}`, LOOPBACK_MOUNTPOINT],
-          20_000,
-        );
-      } catch (err) {
-        return { ok: false, error: err instanceof Error ? err.message : String(err) };
-      }
-      try {
-        await readdir(LOOPBACK_MOUNTPOINT);
-        return { ok: true };
-      } catch (err) {
-        return { ok: false, error: err instanceof Error ? err.message : String(err) };
-      } finally {
+        await mkdir(root, { recursive: true, mode: 0o700 });
         try {
-          await run('systemd-umount', [LOOPBACK_MOUNTPOINT], 20_000);
-        } catch {
-          /* surfaced via journals; the transient unit is --collect'ed */
+          await acquireLock(lockPath);
+          lockHeld = true;
+        } catch (err) {
+          return refused(errMessage(err));
         }
+        const dir = join(root, `${opts.runId ?? 'none'}-${random()}`);
+        const mnt = join(dir, 'mnt');
+        await mkdir(mnt, { recursive: true, mode: 0o700 });
+        artifact = { kind: 'mountpoint', path: mnt };
+        let mounted = false;
+        try {
+          await step('mount', () =>
+            exec(
+              'systemd-mount',
+              ['--collect', `localhost:${exportPath}`, mnt],
+              Math.max(1, deadline - clock()),
+            ),
+          );
+          mounted = true;
+          await step('readdir', () => readdir(mnt));
+        } catch (err) {
+          error = toError(err, 'mount');
+        } finally {
+          if (mounted) {
+            try {
+              await exec('systemd-umount', [mnt], UMOUNT_TIMEOUT_MS);
+              cleanup = { status: 'clean' };
+            } catch (err) {
+              cleanup = { status: 'failed', detail: `systemd-umount: ${errMessage(err)}` };
+            }
+            if (cleanup.status === 'clean') {
+              try {
+                await rmdir(mnt);
+                await rmdir(dir);
+              } catch (err) {
+                cleanup = { status: 'failed', detail: `rmdir: ${errMessage(err)}` };
+              }
+            }
+          } else {
+            await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+            cleanup = { status: 'clean' };
+          }
+        }
+      } catch (err) {
+        error = toError(err, 'lock');
+      } finally {
+        if (lockHeld) await unlink(lockPath).catch(() => undefined);
+        loopbackBusy = false;
       }
+      return {
+        ok: error === undefined,
+        started_at: startedAt,
+        completed_at: new Date(clock()).toISOString(),
+        artifact,
+        ...(error !== undefined ? { error } : {}),
+        cleanup,
+      };
     },
   };
 }

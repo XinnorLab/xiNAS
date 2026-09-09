@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { CATALOG, mcpVisible } from '../../api/mcp/catalog.js';
 import { McpProtocolError } from '../../api/mcp/confirmation/errors.js';
+import { isConfirmable } from '../../api/mcp/confirmation/policy.js';
 import {
   type DispatcherOptions,
   LEGACY_TOOL_MAP,
@@ -42,6 +43,19 @@ describe('gateVerdict (S8 T6 — the WS12 exit criterion)', () => {
     expect(tool?.description).toContain('profile=deep');
     expect(tool?.description).toContain('operator');
     expect(tool?.description).toContain('mcp.allow_apply');
+  });
+
+  it('S19a: health.probe.run is gated by mcp.allow_apply like an apply, and is confirmable', () => {
+    const e = entry('health.probe.run');
+    const args = { probe: 'fs_io', target: 'fs-a' };
+    const denied = gateVerdict(e, args, false);
+    expect(denied.allowed).toBe(false);
+    expect(denied.reason).toContain('mcp.allow_apply');
+    expect(gateVerdict(e, args, true).allowed).toBe(true);
+    expect(isConfirmable(e, args)).toBe(true);
+    const tool = listTools().find((t) => t.name === 'health.probe.run');
+    expect(tool?.description).toContain('fs_io');
+    expect(tool?.description).toContain('nfs_loopback');
   });
 
   it('plan passes; apply is gated by mcp.allow_apply', () => {

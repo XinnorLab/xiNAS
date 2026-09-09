@@ -137,14 +137,28 @@ On a scratch node (or after `./uninstall.sh`):
   `inotifywait -m /etc/nfs` stays silent during the GET).
 - [ ] `profile=deep` (operator token or higher — a viewer token is refused
   with `PERMISSION_DENIED`; over MCP the call also needs
-  `mcp.allow_apply: true`): `filesystem.io` touches every mounted managed fs
-  (probe file appears/disappears); `nfs.loopback` performs a REAL
-  PID1-delegated `systemd-mount localhost:<export>` at
-  `/run/xinas/health-probe/mnt` and unmounts (check `systemd-mount
-  --list` empty afterwards) — PID1 performs the mount, so this validates
-  the delegation end to end. (The agent does now hold `CAP_SYS_ADMIN`,
+  `mcp.allow_apply: true`): `filesystem.io` writes a per-run
+  `probe-none-<random>` under `<mountpoint>/.xinas-health` on every
+  mounted managed fs (the file appears/disappears; the directory stays,
+  root-owned 0700); `nfs.loopback` performs a REAL PID1-delegated
+  `systemd-mount localhost:<export>` at a per-run
+  `/run/xinas/health-probe/none-<random>/mnt` and unmounts (check
+  `systemd-mount --list` empty and the per-run directory gone
+  afterwards) — PID1 performs the mount, so this validates the
+  delegation end to end. (The agent does now hold `CAP_SYS_ADMIN`,
   for `mkfs.xfs`/`xfs_growfs`; the delegation is kept for `.mount` unit
-  semantics, not for want of the capability.)
+  semantics, not for want of the capability.) S19a: the report carries
+  `coverage_status: complete` and `collection.sources.probes: success`;
+  every check's `evidence.collection.status` is `success` on a healthy
+  node — a `not_supported` license section means `xicli` is absent.
+- [ ] `POST /health/probe {probe: fs_io, target: <Filesystem id>, run_id:
+  smoke-1}` with an operator token: `ok: true`, `artifact.path` names
+  `probe-smoke-1-<random>`, `cleanup.status: clean`, and the file is gone.
+  Repeat with `nfs_loopback` on a Share id. Then over MCP with
+  `mcp.allow_apply: true` from a modern client: `input_required` form →
+  `decision: APPLY` → the same result plus `confirmation_id`; the record
+  reads `consumed` with `consumed_task_id: probe:<uuid>`. Run two probes
+  concurrently: the second answers `409 CONFLICT` (`PROBE_IN_PROGRESS`).
 - [ ] Drift: edit `/etc/netplan/99-xinas.yaml` by hand → `drift.netplan`
   degraded in `GET /health` AND `GET /config-history/drift`; re-apply →
   clean. Remove an export via `exportfs -u` → `drift.nfs-exports`

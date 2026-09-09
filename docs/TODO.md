@@ -938,33 +938,27 @@ additive UI and would have doubled the review surface of a security change.
 §9.3), refusing to approve without the phrase, and a pytest against the
 stub server for approve / decline / policy refusal rendering.
 
-## Health — the deep-profile probe artifacts are not hardened
+## Health — `probes_per_run` is not enforced until the S19b run ledger
 
-*Deferred 2026-09-09, from the G-04 gating fix
-(`fix/health-deep-profile-gating`); scoped out of the agentic
-health-check requirements' PROBE-03.*
+*Deferred 2026-09-09, from S19a (`feat/s19a-typed-collection-hardened-probes`);
+spec `s19-mcp-health-prompt-spec.md` §9.5.*
 
-**What is missing.** The `deep` filesystem probe writes a fixed name
-(`.xinas-health-probe`) at the root of every mounted managed filesystem
-with a plain `writeFile` — no exclusive create, no symlink or path
-check — and deletes that name in a `finally`; the loopback probe mounts a
-fixed mountpoint (`/run/xinas/health-probe/mnt`) with no serialization
-between concurrent runs. A cleanup failure is swallowed rather than
-reported.
+**What is missing.** The per-run probe budget (`limits.probes_per_run`,
+default 4): `health.probe.run` should refuse with `PRECONDITION_FAILED`
+(`probe_budget_exhausted`) once a `run_id` has used its allowance.
 
-**What the code does instead.** The write overwrites whatever carries
-that name, the unlink removes it, and two concurrent deep runs race on
-the same mountpoint. The G-04 fix limits who can start a run (`operator`
-role; `mcp.allow_apply` over MCP) but does not change the probe itself.
+**What the code does instead.** `run_id` is validated for shape,
+echoed, carried into the artifact name (`probe-<run_id>-<random>`, the
+per-run loopback directory) and the audit row, and otherwise ignored.
+The only probe limit in force is `active_probes_per_node = 1` (the
+agent's in-flight guard and the loopback lock), which is enforced.
 
-**Why it was cut.** The gating was the live privilege hole and ships on
-its own; the hardening belongs with the `health.probe.run` tool the
-agentic health-check requirements introduce, where the per-run probe
-directory, unique filename and mountpoint isolation are specified
-together.
+**Why it was cut.** The budget is counted in the run ledger that
+`health.context` mints (§6.3), which is S19b work; enforcing it without
+the ledger would mean a second, throw-away counter keyed by an unverified
+string.
 
-**What done looks like.** A unique per-run filename created with
-`O_EXCL` under a dedicated probe directory whose path is checked for
-symlinks; a per-run (or serialized) loopback mountpoint; cleanup that
-removes only its own objects and reports failure as a finding; a
-timeout that stops the probe on the agent, not just the API wait.
+**What done looks like.** S19b's `health.context` ledger records
+`probes_started` per `run_id`; the route increments it under the
+ledger's lock and refuses beyond `mcp.health_prompt.limits.probes_per_run`;
+a test drives five probes on one run and sees the fifth refused.

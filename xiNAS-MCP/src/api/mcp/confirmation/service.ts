@@ -11,6 +11,12 @@ import type { McpIdentity } from '../dispatch.js';
 import { type InputRequiredToolResult, type ToolResult, errorResult } from '../results.js';
 import { queueConfirmationEvent, queueConfirmationEventRaw } from './audit.js';
 import {
+  directBindings,
+  directDocument,
+  isDirectConfirmable,
+  isDirectRecordPlanId,
+} from './direct.js';
+import {
   MISSING_REQUIRED_CLIENT_CAPABILITY,
   McpProtocolError,
   invalidRequestState,
@@ -115,6 +121,13 @@ export class ConfirmationService {
   private readonly recordlessAuditBuckets = new Map<string, { tokens: number; updated: number }>();
   private readonly waiters = new Map<string, number>();
   private totalWaiters = 0;
+  /**
+   * S19a: the synthesized documents of direct confirmable records, by
+   * confirmation id — what `view()` renders for a `direct:` record. In
+   * memory on purpose: a restart sweeps pending records, so a document
+   * that outlived its process would describe nothing approvable.
+   */
+  private readonly directDocs = new Map<string, PlanDocument>();
 
   constructor(deps: ConfirmationServiceDeps) {
     this.store = deps.store;
@@ -130,6 +143,9 @@ export class ConfirmationService {
   }
 
   async handle(input: HandleInput): Promise<HandleOutcome> {
+    // S19a: a direct confirmable entry binds tool + arguments, not a plan.
+    if (isDirectConfirmable(input.entry)) return this.handleDirect(input);
+
     const { entry, args, identity } = input;
 
     // Gate 4 — apply request shape.
@@ -273,6 +289,46 @@ export class ConfirmationService {
       mode,
       bindings,
     );
+  }
+
+  // ── direct confirmable entries (S19a, spec §9.1) ─────────────────────────
+  //
+  // No plan gates apply: the RBAC pre-check, then the same initial /
+  // retry machinery over bindings derived from the identity and the
+  // arguments and a synthesized non-disruptive document (form mode). The
+  // route that finally runs the operation verifies and consumes the
+  // record itself (the way the apply transaction does for plans).
+
+  private async handleDirect(input: HandleInput): Promise<HandleOutcome> {
+    const { entry, args, identity } = input;
+    if (ROLE_RANK[identity.role] < ROLE_RANK[entry.min_role]) {
+      return err(
+        'PERMISSION_DENIED',
+        `role '${identity.role}' may not call ${entry.name} (requires ${entry.min_role})`,
+        { required_role: entry.min_role, operation: entry.name },
+      );
+    }
+    const bindings = directBindings(entry, args, identity);
+    const doc = directDocument(entry, args, identity, this.now());
+    const mode: ConfirmationMode = 'form';
+    if (input.mrtr?.requestState !== undefined) {
+      const { payload, record } = this.verifyRetryState(input, bindings);
+      this.directDocs.set(record.confirmation_id, doc);
+      return this.retry(input, doc, bindings.arguments_hash, mode, bindings, payload, record);
+    }
+    const outcome = this.initial(
+      input,
+      doc,
+      bindings.arguments_hash,
+      planDocumentHash(doc),
+      mode,
+      bindings,
+    );
+    if (outcome.kind === 'input_required') {
+      const open = this.store.findOpenByBindings(bindings);
+      if (open !== null) this.directDocs.set(open.confirmation_id, doc);
+    }
+    return outcome;
   }
 
   // ── initial call (S15 §4.2, §4.5, §6.4) ───────────────────────────────────
@@ -720,8 +776,10 @@ export class ConfirmationService {
   } | null {
     const record = this.store.get(id);
     if (record === null) return null;
-    const planTask = this.tasks.get(record.plan_id);
-    const doc = planTask?.plan_document;
+    // S19a: a direct record has no plan task — its document lives in memory.
+    const doc = isDirectRecordPlanId(record.plan_id)
+      ? this.directDocs.get(id)
+      : this.tasks.get(record.plan_id)?.plan_document;
     if (doc === undefined) {
       throw new ApiException(
         'NOT_FOUND',

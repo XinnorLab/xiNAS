@@ -8,8 +8,34 @@ supported source for installing and updating xiNAS.
 
 ## [Unreleased]
 
+Requires-Rebuild: xinas_node_build
+
+### Added
+
+- **Typed collection status on health checks (S19a).** The agent's
+  `health.probe` reports each source as `success`, `error`, `timeout`,
+  `permission_denied` or `not_supported` with its own `observed_at`; every
+  check carries that under `evidence.collection`, and the health report
+  gains `coverage_status` (`complete` / `partial`) and `collection`
+  (`agent`, per-source statuses). Only a missing tool becomes `skipped`; a
+  failed, timed-out or forbidden collection is a `degraded` check that
+  reaches `overall`. A schema-1 agent is reported as `LEGACY_AGENT`.
+- **`health.probe.run` — one confirmed active probe.** `POST /health/probe`
+  (`xinasctl health probe run`, MCP `health.probe.run`) runs `fs_io` on a
+  Filesystem or `nfs_loopback` on a Share and answers with the exact
+  artifact it created, a cleanup verdict and a fixed `proves` sentence.
+  Operator rank; over MCP also `mcp.allow_apply` and a form confirmation
+  bound to the tool and its arguments (the first direct entry on the S15
+  confirmation flow), consumed before the probe runs.
+
 ### Fixed
 
+- **Deep-profile probe artifacts are hardened.** Probe files are per run
+  (`probe-<run>-<random>`) under a checked `.xinas-health` directory
+  (`O_EXCL`, `O_NOFOLLOW`, same-device fstat), the loopback mount uses a
+  per-run mountpoint behind a lock, a failed cleanup is reported as a
+  finding instead of being swallowed, the timeout is enforced on the agent,
+  and only one probe runs per node at a time.
 - **`health.check profile=deep` is no longer a viewer read.** The deep
   profile writes a probe file on every mounted managed filesystem and
   performs a PID1 loopback NFS mount, yet the catalog classified the whole

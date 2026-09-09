@@ -107,15 +107,32 @@ describe('drift checks', () => {
   });
 
   it('nfs-conf: skipped(no profile) / skipped(quick) / degraded(helper down) / per-path diff', () => {
+    const at = '2023-11-14T22:13:20.000Z';
     expect(driftNfsConfCheck(null, undefined, {}).status).toBe('skipped');
     const quick = driftNfsConfCheck({ versions: {} }, undefined, {});
     expect(quick.status).toBe('skipped');
     expect(quick.recommended_action).toContain('standard');
-    expect(driftNfsConfCheck({ versions: {} }, null, {}).status).toBe('degraded');
+    // S19a: the helper section did not collect → degraded with the collection status
+    const down = driftNfsConfCheck(
+      { versions: {} },
+      { status: 'error', observed_at: at, error: { code: 'HELPER_UNREACHABLE', message: 'x' } },
+      {},
+    );
+    expect(down.status).toBe('degraded');
+    expect(down.evidence.collection).toMatchObject({ status: 'error', code: 'HELPER_UNREACHABLE' });
+    // collected, but the helper rendered nothing → still degraded, collection success
+    const empty = driftNfsConfCheck(
+      { versions: {} },
+      { status: 'success', observed_at: at, value: null },
+      {},
+    );
+    expect(empty.status).toBe('degraded');
+    expect(empty.evidence.collection).toMatchObject({ status: 'success' });
 
     const render = { '/etc/nfs/nfsd.conf': 'sha256:aaa', '/etc/default/nfs-common': 'sha256:bbb' };
-    expect(driftNfsConfCheck({ versions: {} }, render, { ...render }).status).toBe('ok');
-    const drifted = driftNfsConfCheck({ versions: {} }, render, {
+    const section = { status: 'success' as const, observed_at: at, value: render };
+    expect(driftNfsConfCheck({ versions: {} }, section, { ...render }).status).toBe('ok');
+    const drifted = driftNfsConfCheck({ versions: {} }, section, {
       '/etc/nfs/nfsd.conf': 'sha256:zzz',
     });
     expect(drifted.status).toBe('degraded');

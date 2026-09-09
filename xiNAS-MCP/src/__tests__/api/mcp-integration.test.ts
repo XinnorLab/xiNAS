@@ -177,6 +177,15 @@ describe('MCP integration: default posture (S8 T8)', () => {
     expect(standard.isError).toBe(false);
   });
 
+  it('S19a: health.probe.run is blocked by the default gate even for an admin', async () => {
+    const out = await callTool(port, adminSession, 'health.probe.run', {
+      probe: 'fs_io',
+      target: 'fs-any',
+    });
+    expect(out.isError).toBe(true);
+    expect(JSON.stringify(out.payload)).toContain('MCP_APPLY_DISABLED');
+  });
+
   it('config_history.snapshots is live (S9): result without the stub warning', async () => {
     const out = await callTool(port, adminSession, 'config_history.snapshots', {});
     expect(out.isError).toBe(false);
@@ -262,6 +271,18 @@ describe('MCP integration: allow_apply=true flips the gate only', () => {
     const viewerDeep = await callTool(port, viewerSession, 'health.check', { profile: 'deep' });
     expect(viewerDeep.isError).toBe(true);
     expect(JSON.stringify(viewerDeep.payload)).toContain('PERMISSION_DENIED');
+  });
+
+  it('S19a: a legacy client passes the gate for health.probe.run but cannot confirm (S15 §3)', async () => {
+    const admin = await rpc(port, INITIALIZE, { token: 'tok-admin' });
+    const out = await callTool(port, admin.session as string, 'health.probe.run', {
+      probe: 'fs_io',
+      target: 'fs-any',
+    });
+    expect(out.isError).toBe(true);
+    const text = JSON.stringify(out.payload);
+    expect(text).not.toContain('MCP_APPLY_DISABLED');
+    expect(text).toContain('MCP_CONFIRMATION_UNSUPPORTED');
   });
 });
 

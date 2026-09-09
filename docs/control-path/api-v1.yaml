@@ -1502,6 +1502,28 @@ components:
         overall:
           type: string
           enum: [ok, warning, degraded, critical]
+        coverage_status:
+          type: string
+          enum: [complete, partial]
+          description: |
+            S19 §7.3 — `partial` when the agent was unavailable on standard/deep
+            or any probe section failed to collect (`error`, `timeout`,
+            `permission_denied`); `complete` otherwise. Additive; does not
+            change the meaning of `overall`.
+        collection:
+          type: object
+          description: S19 §7.3 — how the probe-backed sections were collected.
+          properties:
+            agent:
+              type: string
+              enum: [answered, unavailable, not_needed]
+              description: '`not_needed` on quick; `unavailable` when the health.probe RPC failed.'
+            sources:
+              type: object
+              description: One entry per probe section the level expects (license, rdma_links, collectors, nfs_profile_render, probes).
+              additionalProperties:
+                type: string
+                enum: [success, error, timeout, permission_denied, not_supported]
         checks:
           type: array
           items: { $ref: '#/components/schemas/HealthCheck' }
@@ -1521,11 +1543,82 @@ components:
         impact: { type: string }
         evidence:
           type: object
+          description: |
+            Free-form per check. Since S19 every check carries
+            `collection: { status, observed_at, code?, message?, source? }`
+            (spec §7.2): `status` is the source's collection status, `source:
+            kv` marks facts read from the state store, and only
+            `not_supported` ever accompanies a `skipped` check.
           additionalProperties: true
         recommended_action: { type: string }
         related_resources:
           type: array
           items: { $ref: '#/components/schemas/ResourceRef' }
+
+    HealthProbeRunRequest:
+      type: object
+      required: [probe, target]
+      additionalProperties: false
+      properties:
+        probe:
+          type: string
+          enum: [fs_io, nfs_loopback]
+        target:
+          type: string
+          description: Filesystem id for `fs_io`, Share id for `nfs_loopback`.
+        run_id:
+          type: string
+          description: Optional S19 run id; carried into the artifact name and the audit row.
+        timeout_s:
+          type: integer
+          minimum: 1
+          maximum: 60
+          default: 20
+          description: Bound for the whole probe, enforced on the agent step by step.
+
+    HealthProbeRunResult:
+      type: object
+      required: [probe, target, path, run_id, ok, started_at, completed_at, artifact, cleanup, proves]
+      properties:
+        probe:
+          type: string
+          enum: [fs_io, nfs_loopback]
+        target: { type: string }
+        path:
+          type: string
+          description: The mountpoint (`fs_io`) or export path (`nfs_loopback`) the probe used.
+        run_id: { type: string, nullable: true }
+        ok: { type: boolean }
+        started_at: { type: string, format: date-time }
+        completed_at: { type: string, format: date-time }
+        artifact:
+          type: object
+          nullable: true
+          description: The exact file or mountpoint this run created.
+          properties:
+            kind: { type: string, enum: [file, mountpoint] }
+            path: { type: string }
+        error:
+          type: object
+          description: Present when `ok` is false.
+          properties:
+            code: { type: string }
+            message: { type: string }
+            stage:
+              type: string
+              enum: [open, dir, create, write, fsync, read, unlink, lock, mount, readdir, umount]
+        cleanup:
+          type: object
+          description: '`failed` is a finding, never swallowed (S19 PROBE-03).'
+          properties:
+            status: { type: string, enum: [clean, failed, not_needed] }
+            detail: { type: string }
+        proves:
+          type: string
+          description: What a passing probe proves, and what it does not (S19 PROBE-04); fixed text per probe kind.
+        confirmation_id:
+          type: string
+          description: The S15 confirmation this MCP call consumed; absent on REST calls.
 
     McpConfirmation:
       description: |
@@ -2854,7 +2947,10 @@ paths:
         the first desired export — and therefore requires the `operator`
         role (`PERMISSION_DENIED` otherwise); `quick` and `standard` are
         viewer reads. Over MCP, `profile=deep` additionally requires
-        `mcp.allow_apply: true`.
+        `mcp.allow_apply: true`. For a single confirmed active probe
+        prefer `POST /health/probe` (S19). Since S19 the report carries
+        `coverage_status` and `collection` (how each probe section was
+        collected), and every check's `evidence.collection`.
       parameters:
         - in: query
           name: profile
@@ -2871,6 +2967,51 @@ paths:
                     properties:
                       result: { $ref: '#/components/schemas/HealthReport' }
         '403': { $ref: '#/components/responses/PermissionDenied' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /health/probe:
+    post:
+      tags: [health]
+      operationId: runHealthProbe
+      summary: Run ONE confirmed active health probe (S19 §9).
+      description: |
+        `fs_io` writes, fsyncs, reads back and unlinks a 4 KiB file under
+        `<mountpoint>/.xinas-health` of the given Filesystem; `nfs_loopback`
+        NFS-mounts the given Share from the node itself, lists it and
+        unmounts. Every artifact is per run (unique name, exclusive create,
+        per-run mountpoint); `cleanup` reports whether it was removed. The
+        result proves only the operation performed — not client
+        connectivity, not RDMA transport, not durability beyond fsync
+        (`proves` says so verbatim).
+
+        REST: `operator` role, no confirmation. MCP (`client_type=mcp`):
+        additionally `mcp.allow_apply: true` and a pending form
+        confirmation bound to this principal, tool and arguments, which
+        the route consumes before the probe runs (`PRECONDITION_FAILED`
+        with `reason: confirmation_required | confirmation_binding |
+        confirmation_not_approved` otherwise). One probe at a time per
+        node (`CONFLICT`, `reason: PROBE_IN_PROGRESS`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HealthProbeRunRequest' }
+      responses:
+        '200':
+          description: The probe ran (its own `ok` says whether it passed).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      result: { $ref: '#/components/schemas/HealthProbeRunResult' }
+        '400': { $ref: '#/components/responses/InvalidArgument' }
+        '403': { $ref: '#/components/responses/PermissionDenied' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
         '500': { $ref: '#/components/responses/Internal' }
 
   # =========================================================================
