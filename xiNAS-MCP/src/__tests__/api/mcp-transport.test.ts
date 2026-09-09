@@ -224,4 +224,71 @@ describe('mcp transport (S8 T7)', () => {
     });
     expect(rest).toBe(200);
   });
+
+  /**
+   * S14: the modern era classifies on method/_meta and answers statelessly,
+   * but the JSON-RPC envelope still has to be a valid one. MCP tightens base
+   * JSON-RPC here: a request id MUST be a string or a number, and MUST NOT be
+   * null. The legacy SDK path already refuses anything else; the modern path
+   * must not be looser, or the call executes and answers with an `id: null`
+   * the client cannot correlate to the request it sent.
+   */
+  describe('modern era: JSON-RPC envelope id validation', () => {
+    for (const [label, id] of [
+      ['null', null],
+      ['a boolean', true],
+      ['an object', {}],
+      ['an array', []],
+    ] as Array<[string, unknown]>) {
+      it(`refuses a modern request whose id is ${label} with -32600`, async () => {
+        const res = await rpc(
+          port,
+          {
+            jsonrpc: '2.0',
+            id,
+            method: 'tools/list',
+            params: { _meta: { 'io.modelcontextprotocol/protocolVersion': '2026-07-28' } },
+          },
+          { token: 'tok-admin' },
+        );
+        expect(res.status).toBe(400);
+        expect(res.body.error).toEqual({
+          code: -32600,
+          message: 'invalid request: id must be a string or a number',
+        });
+        // the call must NOT have run
+        expect(res.body.result).toBeUndefined();
+      });
+    }
+
+    it('still answers a real modern notification (no id) with an empty 202', async () => {
+      const res = await rpc(
+        port,
+        {
+          jsonrpc: '2.0',
+          method: 'notifications/initialized',
+          params: { _meta: { 'io.modelcontextprotocol/protocolVersion': '2026-07-28' } },
+        },
+        { token: 'tok-admin' },
+      );
+      expect(res.status).toBe(202);
+      expect(res.body).toEqual({});
+    });
+
+    it('still serves a modern request whose id is a valid string', async () => {
+      const res = await rpc(
+        port,
+        {
+          jsonrpc: '2.0',
+          id: 'req-1',
+          method: 'tools/list',
+          params: { _meta: { 'io.modelcontextprotocol/protocolVersion': '2026-07-28' } },
+        },
+        { token: 'tok-admin' },
+      );
+      expect(res.status).toBe(200);
+      expect(res.body.id).toBe('req-1');
+      expect((res.body.result as { resultType?: string }).resultType).toBe('complete');
+    });
+  });
 });

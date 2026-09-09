@@ -197,6 +197,25 @@ export function mountMcpTransport(app: Express, ctx: ApiContext): void {
           return;
         }
 
+        // MCP tightens base JSON-RPC: a request id MUST be a string or a
+        // number, and MUST NOT be null. The legacy SDK path already refuses
+        // anything else, and the modern path must not be looser — a
+        // malformed id would otherwise execute the call and answer with an
+        // `id: null` the client cannot correlate to the request it sent
+        // (two in-flight calls come back indistinguishable). Placed after
+        // the notification check above, since an absent id is the one
+        // legitimate case, and before every method branch below so no
+        // handler ever runs for a malformed envelope.
+        const envelopeId = (req.body as { id?: unknown }).id;
+        if (typeof envelopeId !== 'string' && typeof envelopeId !== 'number') {
+          res.status(400).json({
+            jsonrpc: '2.0',
+            id: null,
+            error: { code: -32600, message: 'invalid request: id must be a string or a number' },
+          });
+          return;
+        }
+
         // ── S17 §5: subscriptions/listen is the one modern method answered
         // with an SSE stream. Every pre-acknowledgment failure is JSON.
         if ((req.body as { method?: unknown }).method === 'subscriptions/listen') {
