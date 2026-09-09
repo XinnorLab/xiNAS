@@ -1,0 +1,66 @@
+{
+  "id": "AC-09",
+  "title": "A counter shows errors but there is no time series: no growth claim, the trend row is unknown and a second sample is requested",
+  "scope": "node",
+  "declared_absent": [],
+  "ledger": {
+    "quick": {
+      "tool": "health.check",
+      "args": { "profile": "quick" },
+      "collected_at": "2026-09-09T10:00:10.000Z",
+      "report": {
+        "profile": "quick",
+        "started_at": "2026-09-09T10:00:09.000Z",
+        "completed_at": "2026-09-09T10:00:10.000Z",
+        "overall": "ok",
+        "coverage_status": "complete",
+        "collection": { "agent": "not_needed", "sources": {} },
+        "checks": [
+          { "id": "network.rdma-readiness", "category": "network", "status": "ok", "symptom": "", "impact": "", "evidence": { "interfaces": ["ibp65s0"], "collection": { "status": "success", "source": "kv", "observed_at": null } }, "recommended_action": "" }
+        ]
+      }
+    }
+  },
+  "tool_log": [
+    { "tool": "health.context", "args": {} },
+    { "tool": "health.check", "args": { "profile": "quick" } },
+    { "tool": "system.metrics", "args": {} },
+    { "tool": "system.performance", "args": {} },
+    { "tool": "network.interfaces.list", "args": {} }
+  ],
+  "report": {
+    "run": { "run_id": "$run" },
+    "run_status": "completed",
+    "health_status": "ok",
+    "coverage_status": "complete",
+    "raw_reports": [{ "$ledger": "quick" }],
+    "checks": [
+      { "id": "HC-09.performance-sample", "outcome": "pass", "severity": null, "reason": "one metrics sample recorded at 10:01:00: ibp65s0 rx_errors 1204, rx_packets 8.1e9; no exporter threshold is breached", "mandatory": false, "evidence_refs": ["ev-metrics"] },
+      { "id": "HC-09.trend", "outcome": "unknown", "severity": null, "reason": "a single sample cannot show growth; a second system.metrics sample inside the window is needed before the error counter can be called rising", "mandatory": false, "evidence_refs": ["ev-metrics"] },
+      { "*": "pass", "reason": "no anomaly in the quick checks that feed this row", "evidence_refs": ["ev-quick"] }
+    ],
+    "findings": [
+      { "id": "f-rx-errors-sample", "kind": "data_gap", "severity": null, "check_ids": ["HC-09.trend"], "resource_ids": ["ibp65s0"], "symptom": "ibp65s0 carries 1204 rx_errors in the one sample taken", "impact": "whether errors are accumulating now or are historical is not known", "evidence_refs": ["ev-metrics"], "confidence": { "level": "medium", "basis": "one counter sample; no earlier point inside the window" }, "alternatives": ["errors accumulated before the window and are static", "an active link fault adding errors now"], "next_check": "system.metrics again after 60 s and compare rx_errors", "proposed_action": null }
+    ],
+    "evidence_manifest": [
+      { "id": "ev-quick", "source": "health.check", "args": { "profile": "quick" }, "request_id": "req-2", "observed_at": null, "collected_at": "2026-09-09T10:00:10.000Z", "revision": null, "units": null, "value": "ok", "excerpt": "overall: ok", "stale": false },
+      { "id": "ev-metrics", "source": "system.metrics", "args": {}, "request_id": "req-3", "observed_at": "2026-09-09T10:01:00.000Z", "collected_at": "2026-09-09T10:01:00.000Z", "revision": null, "units": "count", "value": { "ibp65s0": { "rx_errors": 1204, "rx_packets": 8100000000 } }, "excerpt": "ibp65s0 rx_errors 1204 (single sample)", "stale": false }
+    ],
+    "not_checked": [],
+    "human_readable": "Result: ok. Scope: nas-01. Coverage: complete. ibp65s0 shows 1204 rx_errors in one sample; growth is not claimed — a second sample is the next check."
+  },
+  "expected": {
+    "valid": true,
+    "computed": { "health_status": "ok", "coverage_status": "complete" },
+    "integrity": "verified",
+    "reference_errors": 0,
+    "status_errors": 0,
+    "rewritten_to_unknown": [],
+    "checks": { "HC-09.trend": "unknown", "HC-09.performance-sample": "pass" },
+    "checks_forbid_outcomes": { "ids": ["HC-09.trend"], "outcomes": ["fail", "warn", "pass"] },
+    "findings": { "min": 1, "kinds_include": ["data_gap"], "check_ids_include": ["HC-09.trend"], "resource_ids_include": ["ibp65s0"] },
+    "forbidden_calls": [{ "tool": "health.probe.run" }, { "tool": "*", "args": { "mode": "apply" } }],
+    "tools_from_catalog": true,
+    "max_calls_per_tool": 1
+  }
+}

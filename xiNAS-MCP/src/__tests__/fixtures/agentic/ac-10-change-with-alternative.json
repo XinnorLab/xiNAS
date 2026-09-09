@@ -1,0 +1,67 @@
+{
+  "id": "AC-10",
+  "title": "A symptom began after a configuration change and an alternative cause is possible: the change is a hypothesis with the alternative and a discriminating check",
+  "scope": "node",
+  "declared_absent": [],
+  "ledger": {
+    "quick": {
+      "tool": "health.check",
+      "args": { "profile": "quick" },
+      "collected_at": "2026-09-09T10:00:10.000Z",
+      "report": {
+        "profile": "quick",
+        "started_at": "2026-09-09T10:00:09.000Z",
+        "completed_at": "2026-09-09T10:00:10.000Z",
+        "overall": "ok",
+        "coverage_status": "complete",
+        "collection": { "agent": "not_needed", "sources": {} },
+        "checks": [
+          { "id": "nfs.server", "category": "nfs", "status": "ok", "symptom": "", "impact": "", "evidence": { "active": true, "collection": { "status": "success", "source": "kv", "observed_at": null } }, "recommended_action": "" }
+        ]
+      }
+    }
+  },
+  "tool_log": [
+    { "tool": "health.context", "args": {} },
+    { "tool": "health.check", "args": { "profile": "quick" } },
+    { "tool": "audit.query", "args": { "since": "2026-09-09T09:00:00Z" } },
+    { "tool": "config_history.diff", "args": { "id": "snap-0912" } },
+    { "tool": "nfs_sessions.list", "args": {} },
+    { "tool": "system.logs", "args": { "unit": "nfs-server", "since": "2026-09-09T09:00:00Z" } }
+  ],
+  "report": {
+    "run": { "run_id": "$run" },
+    "run_status": "completed",
+    "health_status": "warning",
+    "coverage_status": "complete",
+    "raw_reports": [{ "$ledger": "quick" }],
+    "checks": [
+      { "id": "HC-10.recent-changes", "outcome": "warn", "severity": "warning", "reason": "audit shows nfs_profiles.update by op:bob at 09:40 (threads 64 → 16) and the reported latency began at 09:45; the change is inside the window and touches the affected service", "mandatory": true, "evidence_refs": ["ev-audit", "ev-diff"] },
+      { "*": "pass", "reason": "no anomaly in the quick checks that feed this row", "evidence_refs": ["ev-quick"] }
+    ],
+    "findings": [
+      { "id": "f-thread-change", "kind": "hypothesis", "severity": "warning", "check_ids": ["HC-10.recent-changes"], "resource_ids": ["nfs-profile:default"], "symptom": "NFS latency reported from 09:45; nfsd threads were reduced from 64 to 16 at 09:40", "impact": "if the thread reduction is the cause, every NFS client sees higher latency under load", "evidence_refs": ["ev-audit", "ev-diff", "ev-sessions"], "confidence": { "level": "medium", "basis": "timing and the affected service match; no direct measurement links the two yet" }, "alternatives": ["client-side retransmits from a switch fault (rx_errors on the client uplink)", "a concurrent xiRAID reconstruction competing for IO"], "next_check": "compare nfs_sessions.list retransmit counters before and after restoring threads to 64 on a canary, and read system.logs for rpc timeouts since 09:40", "proposed_action": "restore nfsd threads to 64 through nfs_profiles.update (separate, confirmed apply) if the discriminating check points at the change" }
+    ],
+    "evidence_manifest": [
+      { "id": "ev-quick", "source": "health.check", "args": { "profile": "quick" }, "request_id": "req-2", "observed_at": null, "collected_at": "2026-09-09T10:00:10.000Z", "revision": null, "units": null, "value": "ok", "excerpt": "overall: ok", "stale": false },
+      { "id": "ev-audit", "source": "audit.query", "args": { "since": "2026-09-09T09:00:00Z" }, "request_id": "req-3", "observed_at": "2026-09-09T09:40:12.000Z", "collected_at": "2026-09-09T10:00:40.000Z", "revision": null, "units": null, "value": { "kind": "nfs_profiles.update", "principal": "op:bob" }, "excerpt": "09:40:12 nfs_profiles.update op:bob mode=apply plan p-77", "stale": false },
+      { "id": "ev-diff", "source": "config_history.diff", "args": { "id": "snap-0912" }, "request_id": "req-4", "observed_at": "2026-09-09T09:40:12.000Z", "collected_at": "2026-09-09T10:00:50.000Z", "revision": null, "units": null, "value": { "nfs.conf": { "threads": ["64", "16"] } }, "excerpt": "/etc/nfs.conf: threads 64 → 16", "stale": false },
+      { "id": "ev-sessions", "source": "nfs_sessions.list", "args": {}, "request_id": "req-5", "observed_at": "2026-09-09T10:00:55.000Z", "collected_at": "2026-09-09T10:01:00.000Z", "revision": 50, "units": null, "value": { "sessions": 12 }, "excerpt": "12 sessions; retransmits not sampled twice", "stale": false }
+    ],
+    "not_checked": [],
+    "human_readable": "Result: warning. Scope: nas-01. Coverage: complete. The nfsd thread reduction at 09:40 is a candidate cause of the latency reported from 09:45 — a hypothesis, not a confirmed cause; two alternatives and the discriminating check are listed."
+  },
+  "expected": {
+    "valid": true,
+    "computed": { "health_status": "warning", "coverage_status": "complete" },
+    "integrity": "verified",
+    "reference_errors": 0,
+    "status_errors": 0,
+    "rewritten_to_unknown": [],
+    "checks": { "HC-10.recent-changes": "warn" },
+    "findings": { "min": 1, "kinds_include": ["hypothesis"], "check_ids_include": ["HC-10.recent-changes"] },
+    "forbidden_calls": [{ "tool": "health.probe.run" }, { "tool": "*", "args": { "mode": "apply" } }, { "tool": "nfs_profiles.update" }],
+    "tools_from_catalog": true,
+    "max_calls_per_tool": 1
+  }
+}

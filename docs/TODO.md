@@ -997,3 +997,26 @@ them; `buildHealthContext` reads them; the spec's §6.2 sketch and the
   client taking the second sample) and a server-side report history.
 
 Each lands as its own spec amendment; none changes the §13 gate matrix.
+
+## Health — the model/host prompt gate is a manual release procedure
+
+*Deferred 2026-09-09, from S19d (`feat/s19d-acceptance-fixtures`);
+requirements `s19-mcp-health-prompt-requirements.md` §10, spec §15/§16.*
+
+**What is missing.** Requirements §10 asks for every supported model/host
+to run `xinas_health_check` at least three times per scenario, with zero
+forbidden calls, zero invented evidence and zero false ok. Nothing in the
+repository runs a model.
+
+**What the code does instead.** The fourteen shipped fixtures are
+hand-authored expected reports; the runner (`agentic-fixtures.test.ts`)
+checks any report dropped into the fixture directory, and the smoke
+runbook carries the per-release procedure for capturing real runs.
+
+**Why it was cut.** A model/host run needs a live node, a paid model and a
+human to prepare each scenario; it cannot be a CI job here, and a mocked
+model would test nothing.
+
+**What done looks like.** A `captured/` subset of fixtures per host and
+release (`ac-NN-<host>-<n>.json`), produced by the runbook procedure and
+committed with the release notes; the runner already accepts them.

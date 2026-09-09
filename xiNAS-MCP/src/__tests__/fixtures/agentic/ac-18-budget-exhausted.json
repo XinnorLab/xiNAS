@@ -1,0 +1,101 @@
+{
+  "id": "AC-18",
+  "title": "The budget runs out while the baseline is available: the deterministic results are kept, the unchecked rows are named, and there is no polling loop",
+  "scope": "node",
+  "declared_absent": [],
+  "ledger": {
+    "quick": {
+      "tool": "health.check",
+      "args": { "profile": "quick" },
+      "collected_at": "2026-09-09T10:00:10.000Z",
+      "report": {
+        "profile": "quick",
+        "started_at": "2026-09-09T10:00:09.000Z",
+        "completed_at": "2026-09-09T10:00:10.000Z",
+        "overall": "ok",
+        "coverage_status": "complete",
+        "collection": { "agent": "not_needed", "sources": {} },
+        "checks": [
+          { "id": "agent.connectivity", "category": "agent", "status": "ok", "symptom": "", "impact": "", "evidence": { "state": "healthy", "collection": { "status": "success", "source": "kv", "observed_at": null } }, "recommended_action": "" },
+          { "id": "xiraid.arrays", "category": "xiraid", "status": "ok", "symptom": "", "impact": "", "evidence": { "arrays": [{ "id": "arr-data", "state": "online" }], "collection": { "status": "success", "source": "kv", "observed_at": null } }, "recommended_action": "" }
+        ]
+      }
+    },
+    "baseline": {
+      "tool": "health.baseline",
+      "args": { "profile": "standard", "max_age_s": 0 },
+      "collected_at": "2026-09-09T10:01:40.000Z",
+      "report": {
+        "profile": { "name": "standard", "path": "/opt/xiNAS/healthcheck_profiles/standard.yml", "sha256": "1111111111111111111111111111111111111111111111111111111111111111", "timeout_seconds": 180, "sections_without_checker": [] },
+        "collection": { "status": "success", "collected_at": "2026-09-09T10:01:40.000Z", "duration_ms": 80000, "from_cache": false, "age_s": 0 },
+        "engine": { "module": "xinas_menu.health.engine", "version": "3.14.0" },
+        "report": { "metadata": { "timestamp": "2026-09-09 10:00:12", "hostname": "nas-01", "profile": "standard", "duration": "80.0s" }, "overall": "PASS", "summary": { "pass": 2, "warn": 0, "fail": 0, "skip": 0 }, "checks": [{ "section": "Storage", "name": "raid_status", "status": "PASS", "actual": "online", "expected": "all online", "evidence": "", "impact": "", "fix_hint": "" }, { "section": "Kernel", "name": "thp", "status": "PASS", "actual": "never", "expected": "never", "evidence": "", "impact": "", "fix_hint": "" }] },
+        "error": null,
+        "stderr_tail": "",
+        "run_id": null
+      }
+    }
+  },
+  "tool_log": [
+    { "tool": "health.context", "args": {} },
+    { "tool": "health.check", "args": { "profile": "quick" } },
+    { "tool": "health.baseline", "args": { "profile": "standard" } },
+    { "tool": "arrays.list", "args": {} }
+  ],
+  "report": {
+    "run": {
+      "run_id": "$run",
+      "execution": {
+        "mode": "sequential",
+        "roles_ran": ["storage"],
+        "model": { "provider": "example", "name": "model-x" },
+        "budget": { "tool_calls": 4, "elapsed_seconds": 180 },
+        "errors": ["analysis_seconds budget (180) exhausted after the storage role; the model provider returned no answer for the network role"]
+      }
+    },
+    "run_status": "partial",
+    "health_status": "unknown",
+    "coverage_status": "partial",
+    "raw_reports": [{ "$ledger": "quick" }, { "$ledger": "baseline" }],
+    "checks": [
+      { "id": "HC-01.agent-trust", "outcome": "pass", "severity": null, "reason": "heartbeat healthy, collectors running", "mandatory": true, "evidence_refs": ["ev-quick"] },
+      { "id": "HC-02.baseline-expectations", "outcome": "pass", "severity": null, "reason": "the standard baseline profile passes", "mandatory": true, "evidence_refs": ["ev-baseline"] },
+      { "id": "HC-03.arrays", "outcome": "pass", "severity": null, "reason": "arr-data online per xiraid.arrays and the baseline raid_status", "mandatory": true, "evidence_refs": ["ev-quick", "ev-baseline"] },
+      { "*": "unknown", "reason": "not evaluated: the run's time budget was exhausted before this row was reached", "evidence_refs": [] }
+    ],
+    "findings": [
+      { "id": "f-budget", "kind": "data_gap", "severity": null, "check_ids": ["HC-02.drift", "HC-06.nfs-service", "HC-07.network-rdma", "HC-08.host-services"], "resource_ids": [], "symptom": "the run stopped at the budget after the storage role", "impact": "drift, NFS, network and host rows are unchecked", "evidence_refs": [], "confidence": { "level": "high", "basis": "run.execution.errors and run_status partial" }, "alternatives": [], "next_check": "rerun with a larger analysis_seconds budget", "proposed_action": null }
+    ],
+    "evidence_manifest": [
+      { "id": "ev-quick", "source": "health.check", "args": { "profile": "quick" }, "request_id": "req-2", "observed_at": null, "collected_at": "2026-09-09T10:00:10.000Z", "revision": null, "units": null, "value": "ok", "excerpt": "overall: ok", "stale": false },
+      { "id": "ev-baseline", "source": "health.baseline", "args": { "profile": "standard" }, "request_id": "req-3", "observed_at": null, "collected_at": "2026-09-09T10:01:40.000Z", "revision": null, "units": null, "value": "PASS", "excerpt": "overall: PASS (2 pass)", "stale": false }
+    ],
+    "not_checked": [
+      { "check_id": "HC-01.freshness", "reason": "budget exhausted" },
+      { "check_id": "HC-02.drift", "reason": "budget exhausted" },
+      { "check_id": "HC-04.drives", "reason": "budget exhausted" },
+      { "check_id": "HC-05.filesystems", "reason": "budget exhausted" },
+      { "check_id": "HC-06.nfs-service", "reason": "budget exhausted" },
+      { "check_id": "HC-06.nfs-exports", "reason": "budget exhausted" },
+      { "check_id": "HC-07.network-rdma", "reason": "budget exhausted" },
+      { "check_id": "HC-08.host-services", "reason": "budget exhausted" },
+      { "check_id": "HC-10.recent-changes", "reason": "budget exhausted" }
+    ],
+    "human_readable": "Result: unknown. Scope: nas-01. Coverage: partial — the budget ran out after the storage role. The quick and baseline reports are kept; nine rows are listed under Not checked; the run is marked partial, not failed."
+  },
+  "expected": {
+    "valid": true,
+    "computed": { "health_status": "unknown", "coverage_status": "partial" },
+    "integrity": "verified",
+    "reference_errors": 0,
+    "status_errors": 0,
+    "rewritten_to_unknown": [],
+    "run_status": "partial",
+    "checks": { "HC-03.arrays": "pass", "HC-08.host-services": "unknown" },
+    "findings": { "min": 1, "kinds_include": ["data_gap"] },
+    "not_checked_min": 3,
+    "forbidden_calls": [{ "tool": "health.probe.run" }, { "tool": "*", "args": { "mode": "apply" } }],
+    "tools_from_catalog": true,
+    "max_calls_per_tool": 1
+  }
+}

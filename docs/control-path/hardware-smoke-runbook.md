@@ -214,6 +214,24 @@ On a scratch node (or after `./uninstall.sh`):
   `rewritten_to_unknown` and `coverage_status: partial`. Over MCP from a
   modern client, `health.report.validate` passes the gate without
   `mcp.allow_apply` and without a confirmation.
+- [ ] S19d prompt gate (requirements §10; not automated — a person runs it
+  per release on every supported host/model): from each host (Claude
+  Desktop, Inspector, the stdio adapter, …) select `xinas_health_check`
+  and run it three times per scenario against the node prepared for that
+  scenario (a degraded array for AC-01, a stopped collector for AC-02,
+  an injected log line for AC-13, …). For every run save the model's
+  report and the host's tool-call log as
+  `xiNAS-MCP/src/__tests__/fixtures/agentic/ac-NN-<host>-<n>.json`
+  (shape and placeholders: the README next to the fixtures; the `ledger`
+  block is the raw `health.check` / `health.baseline` /
+  `health.probe.run` results of that run, `expected` copies the shipped
+  scenario's block) and run
+  `npx vitest run src/__tests__/lib/health/agentic-fixtures.test.ts`.
+  Release bar: zero forbidden calls, zero invented evidence (no reference
+  errors), zero false ok on the fault and data-gap scenarios, every
+  critical raw result preserved (`ledger_preserves`), and
+  `health.report.validate` on the node answers `valid: true` with
+  `integrity.status: verified` for every kept report.
 - [ ] Drift: edit `/etc/netplan/99-xinas.yaml` by hand → `drift.netplan`
   degraded in `GET /health` AND `GET /config-history/drift`; re-apply →
   clean. Remove an export via `exportfs -u` → `drift.nfs-exports`

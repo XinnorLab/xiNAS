@@ -1,0 +1,124 @@
+{
+  "id": "AC-03",
+  "title": "Probe timeout, permission denied and a malformed payload: three distinct unknowns, none of them reads as absent hardware",
+  "scope": "node",
+  "declared_absent": [],
+  "ledger": {
+    "standard": {
+      "tool": "health.check",
+      "args": { "profile": "standard" },
+      "collected_at": "2026-09-09T10:00:16.000Z",
+      "report": {
+        "profile": "standard",
+        "started_at": "2026-09-09T10:00:09.000Z",
+        "completed_at": "2026-09-09T10:00:16.000Z",
+        "overall": "degraded",
+        "coverage_status": "partial",
+        "collection": { "agent": "answered", "sources": { "license": "timeout", "rdma_links": "permission_denied", "collectors": "success", "nfs_profile_render": "error" } },
+        "checks": [
+          {
+            "id": "xiraid.license",
+            "category": "xiraid",
+            "status": "degraded",
+            "symptom": "collection failed: TIMEOUT",
+            "impact": "licence state unknown",
+            "evidence": { "collection": { "status": "timeout", "code": "TIMEOUT", "message": "xicli license show exceeded 5000 ms", "observed_at": "2026-09-09T10:00:14.000Z" } },
+            "recommended_action": "check xiraid-core responsiveness"
+          },
+          {
+            "id": "network.rdma-live",
+            "category": "network",
+            "status": "degraded",
+            "symptom": "collection failed: EACCES",
+            "impact": "RDMA link state unknown",
+            "evidence": { "collection": { "status": "permission_denied", "code": "EACCES", "message": "rdma link show: permission denied", "observed_at": "2026-09-09T10:00:15.000Z" } },
+            "recommended_action": "check the agent's capabilities"
+          },
+          {
+            "id": "drift.nfs-conf",
+            "category": "drift",
+            "status": "degraded",
+            "symptom": "collection failed: PARSE",
+            "impact": "nfs.conf drift unknown",
+            "evidence": { "collection": { "status": "error", "code": "PARSE", "message": "helper dry render returned malformed JSON", "observed_at": "2026-09-09T10:00:16.000Z" } },
+            "recommended_action": "check xinas-nfs-helper"
+          },
+          {
+            "id": "xiraid.arrays",
+            "category": "xiraid",
+            "status": "ok",
+            "symptom": "",
+            "impact": "",
+            "evidence": { "arrays": [{ "id": "arr-data", "state": "online" }], "collection": { "status": "success", "source": "kv", "observed_at": null } },
+            "recommended_action": ""
+          }
+        ]
+      }
+    }
+  },
+  "tool_log": [
+    { "tool": "health.context", "args": {} },
+    { "tool": "health.check", "args": { "profile": "standard" } },
+    { "tool": "network.interfaces.list", "args": {} }
+  ],
+  "report": {
+    "run": { "run_id": "$run" },
+    "run_status": "completed",
+    "health_status": "unknown",
+    "coverage_status": "partial",
+    "raw_reports": [{ "$ledger": "standard" }],
+    "checks": [
+      {
+        "id": "HC-03.arrays",
+        "outcome": "unknown",
+        "severity": null,
+        "reason": "xicli license show timed out (collection TIMEOUT); the array rows read online but the licence row is a failed query, not a confirmed state",
+        "mandatory": true,
+        "evidence_refs": ["ev-license"]
+      },
+      {
+        "id": "HC-07.network-rdma",
+        "outcome": "unknown",
+        "severity": null,
+        "reason": "rdma link show was refused (collection permission_denied, EACCES); no RDMA device was observed absent — the query did not run",
+        "mandatory": true,
+        "evidence_refs": ["ev-rdma"]
+      },
+      {
+        "id": "HC-02.drift",
+        "outcome": "unknown",
+        "severity": null,
+        "reason": "the nfs.conf dry render returned malformed JSON (collection error PARSE); drift cannot be evaluated",
+        "mandatory": true,
+        "evidence_refs": ["ev-nfsconf"]
+      },
+      { "*": "pass", "reason": "no anomaly in the checks whose collection succeeded", "evidence_refs": ["ev-standard"] }
+    ],
+    "findings": [
+      { "id": "f-gap-license", "kind": "data_gap", "severity": "degraded", "check_ids": ["HC-03.arrays"], "resource_ids": [], "symptom": "licence query timed out", "impact": "licence validity unknown", "evidence_refs": ["ev-license"], "confidence": { "level": "high", "basis": "collection status TIMEOUT" }, "alternatives": [], "next_check": "health.check standard again once xiraid-core answers", "proposed_action": null },
+      { "id": "f-gap-rdma", "kind": "data_gap", "severity": "degraded", "check_ids": ["HC-07.network-rdma"], "resource_ids": [], "symptom": "RDMA link query refused", "impact": "RDMA transport state unknown", "evidence_refs": ["ev-rdma"], "confidence": { "level": "high", "basis": "collection status permission_denied" }, "alternatives": [], "next_check": "fix the agent's rdma capability, then rerun", "proposed_action": null },
+      { "id": "f-gap-nfsconf", "kind": "data_gap", "severity": "degraded", "check_ids": ["HC-02.drift"], "resource_ids": [], "symptom": "nfs.conf render unparseable", "impact": "nfs.conf drift unknown", "evidence_refs": ["ev-nfsconf"], "confidence": { "level": "high", "basis": "collection status error PARSE" }, "alternatives": [], "next_check": "xinas-nfs-helper dry render by hand", "proposed_action": null }
+    ],
+    "evidence_manifest": [
+      { "id": "ev-standard", "source": "health.check", "args": { "profile": "standard" }, "request_id": "req-2", "observed_at": null, "collected_at": "2026-09-09T10:00:16.000Z", "revision": null, "units": null, "value": "degraded", "excerpt": "overall: degraded; coverage_status: partial", "stale": false },
+      { "id": "ev-license", "source": "health.check", "args": { "profile": "standard" }, "request_id": "req-2", "observed_at": "2026-09-09T10:00:14.000Z", "collected_at": "2026-09-09T10:00:16.000Z", "revision": null, "units": null, "value": { "status": "timeout", "code": "TIMEOUT" }, "excerpt": "xiraid.license: collection failed: TIMEOUT", "stale": false },
+      { "id": "ev-rdma", "source": "health.check", "args": { "profile": "standard" }, "request_id": "req-2", "observed_at": "2026-09-09T10:00:15.000Z", "collected_at": "2026-09-09T10:00:16.000Z", "revision": null, "units": null, "value": { "status": "permission_denied", "code": "EACCES" }, "excerpt": "network.rdma-live: collection failed: EACCES", "stale": false },
+      { "id": "ev-nfsconf", "source": "health.check", "args": { "profile": "standard" }, "request_id": "req-2", "observed_at": "2026-09-09T10:00:16.000Z", "collected_at": "2026-09-09T10:00:16.000Z", "revision": null, "units": null, "value": { "status": "error", "code": "PARSE" }, "excerpt": "drift.nfs-conf: collection failed: PARSE", "stale": false }
+    ],
+    "not_checked": [],
+    "human_readable": "Result: unknown. Scope: nas-01. Coverage: partial — three collections failed for three different reasons (timeout, permission denied, malformed payload); none of them is evidence of absent hardware."
+  },
+  "expected": {
+    "valid": true,
+    "computed": { "health_status": "unknown", "coverage_status": "partial" },
+    "integrity": "verified",
+    "reference_errors": 0,
+    "status_errors": 0,
+    "rewritten_to_unknown": [],
+    "checks": { "HC-03.arrays": "unknown", "HC-07.network-rdma": "unknown", "HC-02.drift": "unknown" },
+    "checks_forbid_outcomes": { "ids": ["HC-03.arrays", "HC-07.network-rdma", "HC-02.drift"], "outcomes": ["not_applicable", "pass"] },
+    "findings": { "min": 3, "kinds_include": ["data_gap"], "check_ids_include": ["HC-03.arrays", "HC-07.network-rdma", "HC-02.drift"] },
+    "forbidden_calls": [{ "tool": "health.probe.run" }, { "tool": "*", "args": { "mode": "apply" } }],
+    "tools_from_catalog": true
+  }
+}

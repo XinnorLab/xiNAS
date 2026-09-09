@@ -1,0 +1,77 @@
+{
+  "id": "AC-04",
+  "title": "A node without NFS or RAID per confirmed inventory: the rows are not_applicable with the inventory cited; an uncited not_applicable is rewritten to unknown",
+  "scope": "node",
+  "declared_absent": ["nfs", "raid"],
+  "ledger": {
+    "quick": {
+      "tool": "health.check",
+      "args": { "profile": "quick" },
+      "collected_at": "2026-09-09T10:00:10.000Z",
+      "report": {
+        "profile": "quick",
+        "started_at": "2026-09-09T10:00:09.000Z",
+        "completed_at": "2026-09-09T10:00:10.000Z",
+        "overall": "ok",
+        "coverage_status": "complete",
+        "collection": { "agent": "not_needed", "sources": {} },
+        "checks": [
+          { "id": "xiraid.arrays", "category": "xiraid", "status": "skipped", "symptom": "no xiRAID arrays configured", "impact": "", "evidence": { "arrays": [], "collection": { "status": "success", "source": "kv", "observed_at": null } }, "recommended_action": "" },
+          { "id": "nfs.server", "category": "nfs", "status": "skipped", "symptom": "nfs-server.service is not installed", "impact": "", "evidence": { "load_state": "not-found", "collection": { "status": "success", "source": "kv", "observed_at": null } }, "recommended_action": "" },
+          { "id": "nfs.exports", "category": "nfs", "status": "skipped", "symptom": "no desired shares", "impact": "", "evidence": { "desired": 0, "collection": { "status": "success", "source": "kv", "observed_at": null } }, "recommended_action": "" },
+          { "id": "agent.connectivity", "category": "agent", "status": "ok", "symptom": "", "impact": "", "evidence": { "state": "healthy", "collection": { "status": "success", "source": "kv", "observed_at": null } }, "recommended_action": "" }
+        ]
+      }
+    }
+  },
+  "tool_log": [
+    { "tool": "health.context", "args": {} },
+    { "tool": "health.check", "args": { "profile": "quick" } }
+  ],
+  "report": {
+    "run": { "run_id": "$run" },
+    "run_status": "completed",
+    "health_status": "ok",
+    "coverage_status": "complete",
+    "raw_reports": [{ "$ledger": "quick" }],
+    "checks": [
+      { "id": "HC-03.arrays", "outcome": "not_applicable", "severity": null, "reason": "raid is declared absent by the inventory: the XiraidArray collector is running and reports zero arrays (health.context.topology.declared_absent)", "mandatory": true, "evidence_refs": ["ev-context"] },
+      { "id": "HC-06.nfs-service", "outcome": "not_applicable", "severity": null, "reason": "nfs is declared absent by the inventory: nfs-server.service load_state not-found and no desired shares", "mandatory": true, "evidence_refs": ["ev-context", "ev-quick"] },
+      { "id": "HC-06.nfs-exports", "outcome": "not_applicable", "severity": null, "reason": "nfs declared absent (no desired shares, unit not installed)", "mandatory": true, "evidence_refs": ["ev-context"] },
+      { "*": "pass", "reason": "no anomaly in the quick checks that feed this row", "evidence_refs": ["ev-quick"] }
+    ],
+    "findings": [],
+    "evidence_manifest": [
+      { "id": "ev-context", "source": "health.context", "args": {}, "request_id": "req-1", "observed_at": "2026-09-09T09:59:50.000Z", "collected_at": "2026-09-09T10:00:05.000Z", "revision": 3, "units": null, "value": { "declared_absent": ["nfs", "raid"] }, "excerpt": "topology.declared_absent: [nfs, raid]", "stale": false },
+      { "id": "ev-quick", "source": "health.check", "args": { "profile": "quick" }, "request_id": "req-2", "observed_at": null, "collected_at": "2026-09-09T10:00:10.000Z", "revision": null, "units": null, "value": "ok", "excerpt": "overall: ok; xiraid.arrays skipped (no arrays); nfs.server skipped (not installed)", "stale": false }
+    ],
+    "not_checked": [],
+    "human_readable": "Result: ok. Scope: nas-01 (a node with neither xiRAID arrays nor an NFS server, per the inventory). Coverage: complete."
+  },
+  "expected": {
+    "valid": true,
+    "computed": { "health_status": "ok", "coverage_status": "complete" },
+    "integrity": "verified",
+    "reference_errors": 0,
+    "status_errors": 0,
+    "rewritten_to_unknown": [],
+    "checks": { "HC-03.arrays": "not_applicable", "HC-06.nfs-service": "not_applicable" },
+    "forbidden_calls": [{ "tool": "health.probe.run" }, { "tool": "*", "args": { "mode": "apply" } }],
+    "tools_from_catalog": true
+  },
+  "variant_uncited": {
+    "report": {
+      "checks": [
+        { "id": "HC-03.arrays", "outcome": "not_applicable", "severity": null, "reason": "no arrays were seen in the last query", "mandatory": true, "evidence_refs": ["ev-quick"] }
+      ]
+    },
+    "expected": {
+      "valid": false,
+      "computed": { "health_status": "unknown", "coverage_status": "partial" },
+      "integrity": "verified",
+      "reference_errors": 0,
+      "status_errors": 2,
+      "rewritten_to_unknown": ["HC-03.arrays"]
+    }
+  }
+}

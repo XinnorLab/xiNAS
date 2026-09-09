@@ -1,13 +1,14 @@
 # ADR-0018: MCP prompts and the agentic health check (S19)
 
-**Status:** proposed (2026-09-09), for validation with
-`s19-mcp-health-prompt-spec.md`; **S19a, S19b and S19c implemented
-2026-09-09** (the prompt on both eras, `health.context`, the run ledger,
-the check catalog, `health.probe.run`, the typed collection status, the
-`health.baseline` adapter over the sandboxed Python engine, the report
-schema and `health.report.validate` — the spec's inline "Implemented"
-notes record where the code deviates from this design; S19d fixtures are
-pending). Extends ADR-0009 (health profiles and
+**Status:** accepted — **S19a–S19d implemented 2026-09-09** (the prompt
+on both eras, `health.context`, the run ledger, the check catalog,
+`health.probe.run`, the typed collection status, the `health.baseline`
+adapter over the sandboxed Python engine, the report schema,
+`health.report.validate`, and the acceptance fixtures with their runner —
+the spec's inline "Implemented" notes record where the code deviates
+from this design). The manual model/host prompt gate of requirements §10
+is a release procedure in `hardware-smoke-runbook.md`, not a code
+artifact. Extends ADR-0009 (health profiles and
 the `health.probe` RPC), ADR-0010 (the MCP transport and its deferrals),
 ADR-0002 (one new enumerated agent method, `health.baseline`, and one
 renamed probe method) and the S15 confirmation decision.
