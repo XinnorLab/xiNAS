@@ -23,13 +23,14 @@
 > modern-only). Prompts and general-purpose data resources remain deferred.
 > See [`../s18-mcp-raid-create-app-spec.md`](../s18-mcp-raid-create-app-spec.md).
 >
-> **Extended by S19 (design 2026-09-09, not yet implemented).** ADR-0018
-> lifts the prompts deferral for exactly one user-controlled prompt,
-> `xinas_health_check`, served by one provider on both eras, and adds the
-> agentic health-check tools (`health.context`, `health.baseline`,
-> `health.probe.run`, `health.catalog`, `health.report_schema`,
-> `health.report.validate`). General-purpose prompt hosting stays
-> deferred. See
+> **Extended by S19 (design 2026-09-09; S19a and S19b implemented
+> 2026-09-09).** ADR-0018 lifts the prompts deferral for exactly one
+> user-controlled prompt, `xinas_health_check`, served by one provider on
+> both eras (live since S19b, advertised iff `mcp.health_prompt.enabled`),
+> and adds the agentic health-check tools — live: `health.probe.run`
+> (S19a), `health.context`, `health.catalog` (S19b); pending S19c:
+> `health.baseline`, `health.report_schema`, `health.report.validate`.
+> General-purpose prompt hosting stays deferred. See
 > [`0018-mcp-prompts-agentic-health-check.md`](0018-mcp-prompts-agentic-health-check.md)
 > and [`../s19-mcp-health-prompt-spec.md`](../s19-mcp-health-prompt-spec.md).
 

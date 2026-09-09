@@ -1,15 +1,19 @@
 # xiNAS S19 — proposed vendor health-check prompt v1.0.0
 
-> **Status:** proposed template, 2026-09-09. Companion to
+> **Status:** shipped as prompt v1.0.0 since S19b (2026-09-09). Companion to
 > [`s19-mcp-health-prompt-requirements.md`](s19-mcp-health-prompt-requirements.md).
 >
-> This is not an installed feature. Before use, bind the validated run
-> context, the versioned check catalog, the report schema and the
-> host-enforced tool policy (requirements §4–§8). Proposed adapters such as
-> `health.baseline` and `health.context` must not be advertised until they
-> are implemented (DATA-01, DATA-02). Return the prompt body as an MCP
-> `user`-role text message (MCP-02); this does not grant it system-message
-> priority (ARCH-03).
+> The "Prompt body" section below is the source of truth for the runtime
+> constant `xiNAS-MCP/src/api/mcp/prompts/health-check-template.ts`
+> (generated from this file; `mcp-prompts.test.ts` asserts equality).
+> Editing the body means bumping `HEALTH_PROMPT_VERSION`, the `v1.0.0` in
+> this title, and regenerating the constant. The server binds the
+> validated run context (`health.context`), the versioned check catalog
+> (`health.catalog`) and the host-enforced tool policy in the parameters
+> block it appends (spec §5.4); the report schema and `health.baseline`
+> arrive in S19c and are reported as unavailable until then (DATA-01,
+> DATA-02). The body is returned as an MCP `user`-role text message
+> (MCP-02); this does not grant it system-message priority (ARCH-03).
 
 ## Prompt body
 

@@ -27,6 +27,31 @@ Requires-Rebuild: xinas_node_build
   Operator rank; over MCP also `mcp.allow_apply` and a form confirmation
   bound to the tool and its arguments (the first direct entry on the S15
   confirmation flow), consumed before the probe runs.
+- **The `xinas_health_check` MCP prompt (S19b).** `/mcp` serves
+  `prompts/list` and `prompts/get` on both protocol eras and advertises
+  `prompts: { listChanged: false }` iff the provider is installed
+  (`mcp.health_prompt.enabled`, default true). `prompts/get` validates
+  its eight optional arguments by shape only, caps `probe_policy` at the
+  node's `probe_policy_max` (reported, never an error), and returns one
+  `user` message: the vendor prompt body plus a generated run-parameters
+  block with the versions, limits, tool map and installed adapters; the
+  user symptom is quoted as data. The body can be replaced per node with
+  `mcp.health_prompt.template_path`. One audit row per `prompts/get`,
+  without the symptom text.
+- **`health.context` and the run ledger (S19b).** `GET /health/context`
+  (`xinasctl health context`, MCP `health.context`) mints a `run_id` and
+  returns what the caller may run, the node, the linked topology
+  (arrays → filesystems → shares, interfaces), proven-absent components,
+  collector state, per-kind observation freshness, the baseline profile
+  catalog and the tools visible to the role — from the state store only,
+  so it answers when the agent is down. `GET /health` and
+  `POST /health/probe` record their result digests under a known
+  `run_id` and echo it; `probes_per_run` (default 4) is now enforced
+  per run (`PRECONDITION_FAILED`, `probe_budget_exhausted`).
+- **The agentic check catalog (S19b).** `GET /health/catalog`
+  (`xinasctl health catalog`, MCP `health.catalog`) serves the versioned
+  HC-01..HC-12 rows: producers, outcome and severity maps, side effects,
+  cost, and `no_source` rows that name what cannot be checked today.
 
 ### Fixed
 

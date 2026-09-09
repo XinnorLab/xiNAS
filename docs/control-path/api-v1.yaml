@@ -1527,6 +1527,9 @@ components:
         checks:
           type: array
           items: { $ref: '#/components/schemas/HealthCheck' }
+        run_id:
+          type: string
+          description: Echoed when the caller passed `run_id` (S19 §6.3); absent otherwise.
 
     HealthCheck:
       type: object
@@ -1568,7 +1571,11 @@ components:
           description: Filesystem id for `fs_io`, Share id for `nfs_loopback`.
         run_id:
           type: string
-          description: Optional S19 run id; carried into the artifact name and the audit row.
+          description: |
+            Optional S19 run id from `GET /health/context`; carried into the
+            artifact name and the audit row, counted against the run's
+            `probes_per_run` budget, and the result digest is recorded in
+            the run ledger.
         timeout_s:
           type: integer
           minimum: 1
@@ -1619,6 +1626,249 @@ components:
         confirmation_id:
           type: string
           description: The S15 confirmation this MCP call consumed; absent on REST calls.
+
+    HealthContext:
+      description: S19 §6.2 — the validated run context of an agentic health check.
+      type: object
+      required: [run, node, topology, collectors, freshness, baselines, catalog, tools, targets]
+      properties:
+        run:
+          type: object
+          required: [run_id, issued_at, expires_at, principal, role, versions, limits, permitted]
+          properties:
+            run_id: { type: string, format: uuid }
+            issued_at: { type: string, format: date-time }
+            expires_at: { type: string, format: date-time }
+            principal: { type: string }
+            role: { type: string }
+            versions:
+              type: object
+              description: The versions the run started with; the ledger keeps them even if the api is later restarted with a new template (AC-17).
+              properties:
+                prompt: { type: string }
+                template_sha256: { type: string }
+                policy: { type: string }
+                catalog: { type: string }
+                report_schema: { type: string }
+                server: { type: string }
+            limits:
+              type: object
+              description: '`mcp.health_prompt.limits` minus `run_ttl_seconds`; only the two probe counters are enforced by xiNAS (S19 §9.5).'
+              additionalProperties: { type: integer }
+            permitted:
+              type: object
+              description: Restates the catalog rank, the client type and `mcp.allow_apply`; never a grant.
+              properties:
+                deterministic:
+                  type: array
+                  items: { type: string, enum: [quick, standard, deep] }
+                baseline: { type: boolean }
+                probe_run: { type: string, enum: [denied, confirmable, allowed] }
+                apply: { type: boolean, enum: [false] }
+        node:
+          type: object
+          properties:
+            hostname: { type: string }
+            controller_id: { type: string }
+            xinas_version: { type: string }
+            kernel: { type: string, nullable: true }
+            xiraid_version: { type: string, nullable: true, description: 'null until a collector observes it.' }
+        topology:
+          type: object
+          description: The KV cross-references that exist today; a missing link is `null`, never inferred.
+          properties:
+            arrays:
+              type: array
+              items:
+                type: object
+                properties:
+                  id: { type: string }
+                  state: { type: string, nullable: true }
+                  revision: { type: integer }
+                  observed_at: { type: string, format: date-time }
+                  member_disk_ids: { type: array, items: { type: string } }
+            filesystems:
+              type: array
+              items:
+                type: object
+                properties:
+                  id: { type: string }
+                  array_id: { type: string, nullable: true }
+                  mountpoint: { type: string, nullable: true }
+                  mounted: { type: boolean, nullable: true }
+                  revision: { type: integer }
+                  observed_at: { type: string, format: date-time }
+            shares:
+              type: array
+              items:
+                type: object
+                properties:
+                  id: { type: string }
+                  path: { type: string, nullable: true }
+                  filesystem_id: { type: string, nullable: true }
+            interfaces:
+              type: array
+              items:
+                type: object
+                properties:
+                  id: { type: string }
+                  operstate: { type: string, nullable: true }
+                  mtu: { type: integer, nullable: true }
+                  revision: { type: integer }
+                  observed_at: { type: string, format: date-time }
+            declared_absent:
+              type: array
+              description: Components the inventory proves absent (`nfs`, `raid`); an empty answer after a failed query never lands here (AC-04).
+              items: { type: string }
+        collectors:
+          type: object
+          properties:
+            heartbeat: { type: string, enum: [healthy, degraded, offline] }
+            last_probe:
+              type: object
+              nullable: true
+              description: The api's cached last standard/deep agent probe, if any.
+              properties:
+                collected_at: { type: string, format: date-time }
+                level: { type: string, enum: [standard, deep] }
+                collectors:
+                  type: object
+                  additionalProperties: { type: string }
+        freshness:
+          type: object
+          description: Per observed kind, from the rows' `observed_at` (no universal TTL, DATA-05).
+          additionalProperties:
+            type: object
+            properties:
+              rows: { type: integer }
+              newest_observed_at: { type: string, format: date-time }
+              oldest_observed_at: { type: string, format: date-time }
+        baselines:
+          type: object
+          description: The Python baseline profile catalog listed once at startup (S19 §8.2).
+          properties:
+            dir: { type: string }
+            dir_present: { type: boolean }
+            profiles:
+              type: array
+              items:
+                type: object
+                properties:
+                  name: { type: string }
+                  path: { type: string, nullable: true }
+                  sha256: { type: string, nullable: true }
+                  timeout_seconds: { type: integer, nullable: true }
+                  sections_enabled: { type: array, items: { type: string } }
+                  sections_without_checker:
+                    type: array
+                    description: Enabled sections the engine has no checker for (`kerberos` today).
+                    items: { type: string }
+        catalog:
+          type: object
+          properties:
+            version: { type: string }
+            tool: { type: string }
+        tools:
+          type: array
+          description: Catalog entries visible to this role, with any argument escalation.
+          items:
+            type: object
+            properties:
+              name: { type: string }
+              min_role: { type: string, enum: [viewer, operator, admin] }
+              escalation:
+                type: object
+                properties:
+                  arg: { type: string }
+                  value: { type: string }
+                  min_role: { type: string, enum: [viewer, operator, admin] }
+                  requires_mcp_apply: { type: boolean }
+        targets:
+          type: object
+          properties:
+            resolved:
+              type: array
+              items:
+                type: object
+                properties:
+                  id: { type: string }
+                  kind: { type: string }
+                  source: { type: string, enum: [observed, desired] }
+            unknown:
+              type: array
+              items: { type: string }
+
+    AgenticCheckCatalog:
+      description: S19 §10 — the versioned check catalog, served verbatim by `GET /health/catalog`.
+      type: object
+      required: [version, checks]
+      properties:
+        version: { type: string }
+        checks:
+          type: array
+          items: { $ref: '#/components/schemas/AgenticCheck' }
+
+    AgenticCheck:
+      type: object
+      required: [id, version, area, goal, applicability, mandatory_for, expected_source, inputs, procedure, criterion, outcome_map, severity_map, side_effects, cost, next_check, no_source]
+      properties:
+        id: { type: string, description: '`HC-NN.slug`' }
+        version: { type: integer }
+        area: { type: string }
+        goal: { type: string }
+        applicability:
+          type: object
+          properties:
+            requires:
+              type: array
+              description: Keys of `HealthContext.topology`; an absent component makes the row not applicable.
+              items: { type: string, enum: [arrays, filesystems, shares, interfaces] }
+        mandatory_for:
+          type: array
+          items: { type: string, enum: [node, service_path] }
+        expected_source:
+          type: array
+          description: CFG-02 resolution order.
+          items: { type: string, enum: [local_override, desired, vendor] }
+        requires_policy:
+          type: string
+          enum: [bounded_active]
+          description: Present on the active-probe row only.
+        inputs:
+          type: array
+          description: |
+            Producers the row may consume: `mcp:health.check` (+ `check_id`,
+            `profile`), `baseline` (+ `section`, `check`), `read:<tool>`,
+            `resource:<uri>` or `probe:health.probe.run` (+ `probe`), each
+            with a `freshness` of `per_call` or `observed_at`.
+          items:
+            type: object
+            required: [source, freshness]
+            properties:
+              source: { type: string }
+              freshness: { type: string, enum: [per_call, observed_at] }
+              check_id: { type: string }
+              profile: { type: string, enum: [quick, standard, deep] }
+              section: { type: string }
+              check: { type: string }
+              probe: { type: string, enum: [fs_io, nfs_loopback] }
+        procedure: { type: string }
+        criterion: { type: string, description: Cites profile keys (`expectations.<key>`), never loose numbers. }
+        outcome_map:
+          type: object
+          additionalProperties: { type: string, enum: [pass, warn, fail, unknown, not_applicable] }
+        severity_map:
+          type: object
+          additionalProperties: { type: string, enum: [warning, degraded, critical] }
+        side_effects: { type: string, enum: [none, active_probe] }
+        cost:
+          type: object
+          properties:
+            timeout_s: { type: integer }
+        next_check: { type: string }
+        no_source:
+          type: boolean
+          description: '`true` = listed for honesty; no producer exists today.'
 
     McpConfirmation:
       description: |
@@ -2950,11 +3200,19 @@ paths:
         `mcp.allow_apply: true`. For a single confirmed active probe
         prefer `POST /health/probe` (S19). Since S19 the report carries
         `coverage_status` and `collection` (how each probe section was
-        collected), and every check's `evidence.collection`.
+        collected), and every check's `evidence.collection`. With a
+        `run_id` from `GET /health/context` the report's digest is recorded
+        in that run's ledger and `run_id` is echoed in the result; an
+        unknown or expired run is accepted with a `RUN_UNKNOWN` warning
+        (S19 §6.3).
       parameters:
         - in: query
           name: profile
           schema: { type: string, enum: [quick, standard, deep], default: quick }
+        - in: query
+          name: run_id
+          schema: { type: string }
+          description: An S19 run id from `GET /health/context` (optional).
       responses:
         '200':
           description: OK
@@ -2966,6 +3224,78 @@ paths:
                   - type: object
                     properties:
                       result: { $ref: '#/components/schemas/HealthReport' }
+        '403': { $ref: '#/components/responses/PermissionDenied' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /health/context:
+    get:
+      tags: [health]
+      operationId: getHealthContext
+      summary: Start or re-read an agentic health-check run (S19 §6).
+      description: |
+        The validated run context the `xinas_health_check` MCP prompt
+        starts from. Reads the state store, the heartbeat tracker's last
+        snapshot and the static catalog only — never the agent — so it
+        answers when the agent is down and says so in
+        `collectors.heartbeat`. Mints a `run_id` into the api's in-memory
+        run ledger (TTL `mcp.health_prompt.limits.run_ttl_seconds`) or
+        re-reads a run this principal started; an unknown, expired or
+        foreign `run_id` yields a new run plus a `RUN_UNKNOWN` warning.
+        `permitted` restates what the catalog rank, the client type and
+        `mcp.allow_apply` already enforce; nothing here is a grant.
+        `declared_absent` lists only components the inventory proves
+        absent. Viewer rank. `UNSUPPORTED` when
+        `mcp.health_prompt.enabled` is false.
+      parameters:
+        - in: query
+          name: run_id
+          schema: { type: string }
+          description: Re-read this run instead of minting a new one.
+        - in: query
+          name: targets
+          schema: { type: string }
+          description: |
+            Comma-separated resource ids (at most 32, each
+            `^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`) to resolve against every
+            observed and desired kind.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      result: { $ref: '#/components/schemas/HealthContext' }
+        '400': { $ref: '#/components/responses/InvalidArgument' }
+        '403': { $ref: '#/components/responses/PermissionDenied' }
+        '422': { $ref: '#/components/responses/Unsupported' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /health/catalog:
+    get:
+      tags: [health]
+      operationId: getHealthCatalog
+      summary: The versioned agentic check catalog (S19 §10).
+      description: |
+        Static data served verbatim: one row per check the prompt asks the
+        model to cover (HC-01..HC-12), its producers, outcome and severity
+        maps, side effects, cost, and `no_source: true` on rows that have
+        no producer today so a client renders "Not checked" from the
+        catalog. Viewer rank.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      result: { $ref: '#/components/schemas/AgenticCheckCatalog' }
         '403': { $ref: '#/components/responses/PermissionDenied' }
         '500': { $ref: '#/components/responses/Internal' }
 
@@ -2990,7 +3320,13 @@ paths:
         the route consumes before the probe runs (`PRECONDITION_FAILED`
         with `reason: confirmation_required | confirmation_binding |
         confirmation_not_approved` otherwise). One probe at a time per
-        node (`CONFLICT`, `reason: PROBE_IN_PROGRESS`).
+        node (`CONFLICT`, `reason: PROBE_IN_PROGRESS`). With a `run_id`
+        from `GET /health/context` the probe counts against that run's
+        `probes_per_run` budget — checked before any confirmation is
+        consumed and before the agent is asked (`PRECONDITION_FAILED`,
+        `reason: probe_budget_exhausted`) — and its result digest is
+        recorded in the run ledger; an unknown or expired run is accepted
+        with a `RUN_UNKNOWN` warning (S19 §6.3, §9.5).
       requestBody:
         required: true
         content:

@@ -3,12 +3,17 @@
 **Status:** design validated 2026-09-09 (defaults of §18 kept);
 **S19a implemented 2026-09-09** — typed collection status (§7), the
 hardened probe host and `health.probe.run` (§9), the S15 direct-entry
-binding (§9.1). S19b (prompt, context, catalog), S19c (baseline adapter,
-report validator) and S19d (acceptance fixtures) are pending; their
-"MUST"s still describe the intended end state. Deviations found while
-implementing S19a are recorded inline where they apply (§7.2 quick-check
-evidence, §9.1 binding fields, §9.3 `openat`/`flock` substitutes, §9.5
-`probes_per_run`). Extends **ADR-0009**
+binding (§9.1); **S19b implemented 2026-09-09** — the `xinas_health_check`
+prompt on both eras with truthful discovery (§4, §5), `health.context`
+and the in-memory run ledger (§6), `probes_per_run` (§9.5), the check
+catalog and `health.catalog` (§10), `mcp.health_prompt` (§12.1). S19c
+(baseline adapter, report validator) and S19d (acceptance fixtures) are
+pending; their "MUST"s still describe the intended end state. Deviations
+found while implementing are recorded inline where they apply (S19a: §7.2
+quick-check evidence, §9.1 binding fields, §9.3 `openat`/`flock`
+substitutes; S19b: §5.3 symptom marker, §6.1 run ownership and the
+disabled case, §6.2 field sources, §6.3 sweep and bound, §8.2 static
+section list, §10.1 loader, §12.1 override file shape). Extends **ADR-0009**
 (`health.probe`, the profile engine), **ADR-0010** / `s8-clients-spec.md`
 (the catalog, the gate, the `/mcp` transport), **S14**
 (`s14-mcp-modern-era-spec.md`, both protocol eras), **S15**
@@ -305,6 +310,17 @@ KV store or the network (ARCH-01). Any violation is `-32602` with
 | `language` | `^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$` | tag |
 | unknown name | — | `-32602` |
 
+*Implemented (S19b, `api/mcp/prompts/health-check.ts`):* two rules beyond
+the table. A `symptom` containing the literal `</user_symptom>` marker is
+refused (`-32602`, `argument: symptom`) so the quoted block cannot be
+closed from inside (SAFE-01); and the default `baseline_profile`
+(`standard`) is validated against the loaded catalog like an explicit
+one, so a node whose `profiles_dir` lacks `standard.yml` answers a clear
+`-32602` instead of serving a prompt that names an absent profile.
+`time_window` accepts the `P[nD][T[nH][nM][nS]]` subset of ISO-8601
+(no weeks, months or fractions). Unknown argument names are checked
+before the table rows.
+
 ### 5.4 `prompts/get` result (D-02)
 
 One `user` message (F-09; MCP-02 forbids an invented `system` role):
@@ -393,6 +409,13 @@ thrown as `McpError(ErrorCode.InvalidParams, …)` so the SDK emits
 the normalized arguments **except** `symptom` (free text is not audited
 verbatim; its length and sha256 are), and the principal.
 
+*Implemented (S19b):* the row's `request_id` / `operation_id` is the
+server-minted correlation id of the HTTP request on the modern era; the
+legacy SDK path has no per-request correlation id, so `dispatch.ts`
+mints a uuid per `prompts/get` there. `parameters_hash` is the sha256 of
+the canonical normalized arguments plus `symptom_sha256` and
+`symptom_length`; `result_hash` is the sha256 of `template_sha256`.
+
 ## 6. Run context — `health.context`
 
 ### 6.1 Catalog entry
@@ -402,6 +425,18 @@ viewer`, `mutability: read`. Input: `{ run_id?: string }` — absent
 mints a new run; a known, unexpired id returns the same context again
 (idempotent re-read within a run). It MUST NOT call the agent: it answers
 when the agent is down, and says so.
+
+*Implemented (S19b, `api/health/context.ts`, `routes/health.ts`):* the
+input also takes `targets` (comma-separated ids, the §5.3 grammar, at
+most 32) and resolves them. A run may be re-read only by the principal
+that started it — another principal's `run_id` is treated as unknown
+(new run plus `RUN_UNKNOWN`), so a run never leaks its minted identity
+across callers. With `mcp.health_prompt.enabled: false` the route
+answers `UNSUPPORTED` (`reason: health_prompt_disabled`) rather than
+serving a context without a ledger; §12.1's "still served" is therefore
+not what ships — the ledger, the versions and the profile catalog all
+live on the prompt context, and a run without them would carry nothing
+the validator can later check.
 
 ### 6.2 Response
 
@@ -457,6 +492,30 @@ when the agent is down, and says so.
   (`member_disk_ids`, `array_id`, `filesystem_id`); a missing link is
   `null`, not inferred.
 
+*Implemented (S19b) — field sources and deviations from the sketch
+above:*
+
+- `node.kernel` is the observed `inventory/snapshot` row's
+  `status.os_kernel`; `node.xiraid_version` is always `null` — no
+  collector observes it yet (`docs/TODO.md`). `node.hostname` is
+  `os.hostname()`, `xinas_version` is `SERVER_INFO.version`.
+- `topology.arrays[].observed_at` and every other `observed_at` is the
+  row's `status.observed_at`, falling back to the KV `modified_at`;
+  `array_id` matches `Filesystem.status.backing_device` to
+  `XiraidArray.status.volume_path`; `filesystem_id` is the longest
+  mountpoint that contains the share path.
+- `topology.interfaces[]` carry `operstate` and `mtu` (what the
+  `NetworkInterface` collector observes), not `rdma_capable` /
+  `rdma_link_state`: RDMA link state is only observed by the standard
+  profile's `network.rdma-live` check (`docs/TODO.md`).
+- `declared_absent`: the collector map is the cached last probe's, else
+  the tracker's last heartbeat snapshot, and is treated as unknown while
+  the heartbeat is `offline` (a stale "running" proves nothing).
+- `collectors.last_probe` also carries `level` (`standard` | `deep`).
+- `baselines` is an object `{ dir, dir_present, profiles[] }` rather than
+  a bare array, so a node with no profile directory says so.
+- `tools[].escalation` omits the human `reason` (it is in `tools/list`).
+
 ### 6.3 Run ledger (D-10)
 
 In-memory, per api process: `run_id → { issued_at, expires_at, principal,
@@ -469,6 +528,15 @@ the returned `result`) to the ledger. That digest is what
 `health.report.validate` compares raw reports against (§11.4). An
 unknown or expired `run_id` is accepted with `warnings:
 [RUN_UNKNOWN]` — a run must not fail because the api restarted (SAFE-04).
+
+*Implemented (S19b, `api/health/run-ledger.ts`):* the ledger sweeps
+expired entries lazily on every mint (and `get` drops an expired entry
+on read) rather than on the S15 sweeper's timer, and is bounded to 256
+live runs — past that the oldest live run is evicted. Digests are
+`sha256:<hex>` over the canonical JSON (`lib/canonical-json.ts`) of the
+result as sent, `run_id` included; `args_digest` covers the call's
+arguments (`{ profile }` for `health.check`; `{ probe, target,
+timeout_s }` for `health.probe.run`). `health.baseline` joins in S19c.
 
 ## 7. Typed collection status
 
@@ -799,10 +867,12 @@ prompt text already forbids it.
   RPC handler's in-flight guard, plus the loopback lock shared with the
   deep profile; the api maps the agent's `PROBE_IN_PROGRESS` to `409`.
 - `probes_per_run` (default 4): counted in the run ledger per `run_id`;
-  exceeded → `PRECONDITION_FAILED` (`probe_budget_exhausted`). *Not
-  enforced in S19a:* the ledger arrives with `health.context` (S19b);
-  until then `run_id` is accepted, echoed and carried into the artifact
-  name and the audit row only (`docs/TODO.md`).
+  exceeded → `PRECONDITION_FAILED` (`probe_budget_exhausted`).
+  *Implemented (S19b):* the route counts the probe against the run
+  BEFORE the S15 confirmation is consumed and before the agent is asked,
+  so an exhausted run never burns a confirmation; an unknown or expired
+  `run_id` is accepted with `RUN_UNKNOWN` and not counted. The counter
+  moves on every accepted attempt, including one the agent then refuses.
 - Everything else in `limits` (analysis time, tool calls, roles,
   retries) is recorded and reported, not enforced: xiNAS cannot see the
   host's tool-call loop.
@@ -813,7 +883,16 @@ prompt text already forbids it.
 
 `xiNAS-MCP/src/lib/health/agentic-catalog.json` (version `"1"`), served
 verbatim by `read('health.catalog', 'GET', '/health/catalog', …)`,
-viewer rank. Each row:
+viewer rank. *Implemented (S19b):* `lib/health/agentic-catalog.ts` reads
+the file once at module load (`npm run build` copies it into `dist/`) and
+exports `validateAgenticCatalog`, which the unit test runs against the
+real sources: every `mcp:health.check` input names a produced check id
+(`MCP_CHECK_IDS`), every `baseline` input a section and check of a
+shipped profile, every `read:` a catalog tool, every `expectations.<key>`
+a key the profiles define, every `next_check` a row. Rows gained two
+fields beyond the sketch: `requires_policy: bounded_active` on the
+active-probe row, and `probe:health.probe.run` / `resource:<feed uri>`
+input sources with their own `probe:*` outcome family. Each row:
 
 ```jsonc
 {
@@ -951,8 +1030,8 @@ was validated without keeping the text.
 
 | Key | Default | Validation | Effect |
 |---|---|---|---|
-| `enabled` | `true` | boolean | installs the prompt provider; `false` → `prompts` capability absent, both methods `-32601`, `health.context` still served (the tools are independent of the prompt, ARCH-02) |
-| `template_path` | unset | readable file, UTF-8, ≤ 64 KiB, no NUL, must contain the marker line `## Prompt body` | replaces the body; `template_sha256` reflects it; the constant's `prompt_version` gains `+local` |
+| `enabled` | `true` | boolean | installs the prompt provider; `false` → `prompts` capability absent, both methods `-32601`, and — *as implemented (S19b, §6.1)* — `health.context` answers `UNSUPPORTED`; `health.catalog`, `health.check` and `health.probe.run` stay served |
+| `template_path` | unset | readable file, UTF-8, ≤ 64 KiB, no NUL, must contain the marker line `## Prompt body` | replaces the body (the text after the marker, trimmed); `template_sha256` reflects it; the constant's `prompt_version` gains `+local`. *Implemented (S19b):* read once at startup by `buildHealthPromptContext`; a missing, unreadable, oversized, NUL-bearing, marker-less or empty file aborts startup with the key named |
 | `policy_version` | `"1"` | `^[A-Za-z0-9.+-]{1,32}$` | echoed |
 | `probe_policy_max` | `observe_only` | enum | caps the effective `probe_policy` (§5.3); does **not** grant anything — the gate matrix (§9.1) still applies |
 | `limits.analysis_seconds` | 180 | 30–3600 | recorded |
@@ -1038,14 +1117,16 @@ validate --file`) from the catalog without CLI code.
 
 | Layer | What is pinned |
 |---|---|
-| Unit — `prompts.test.ts` | argument table of §5.3 (every row accepted, every violation `-32602` with `data.argument`); the parameters block is valid JSON; the symptom is only inside `<user_symptom>`; the runtime constant equals the docs template body; `prompt_version`/sha256 stability |
-| Unit — `discover` | `prompts` present iff the provider is installed, `{ listChanged: false }`; absent with `enabled: false` (AC-12, AC-16) |
+| Unit — `mcp-prompts.test.ts` (S19b) | argument table of §5.3 (every row accepted, every violation `-32602` with `data.argument`); the parameters block is valid JSON; the symptom is only inside `<user_symptom>`; the runtime constant equals the docs template body; `prompt_version`/sha256 stability; the audit row carries no symptom text |
+| Unit — `mcp-prompts-modern.test.ts`, `mcp-discover.test.ts`, `health-prompt-context.test.ts` (S19b) | `prompts` present iff the provider is installed, `{ listChanged: false }`; `-32601` without a provider; absent with `enabled: false`; the override file and its hash (AC-12, AC-16) |
+| Unit — `run-ledger.test.ts`, `routes-health-context.test.ts`, `routes-health-probe-budget.test.ts` (S19b) | mint/TTL/record/`startProbe`/sweep/bound; the §6.2 body over seeded KV; `permitted` per role and client; `declared_absent` proven only; targets; re-read by `run_id`; `RUN_UNKNOWN`; the fifth probe of a run refused before the agent is called |
+| Unit — `lib/health/agentic-catalog.test.ts` (S19b) | the shipped catalog validates against the produced check ids, the shipped profiles' sections/checks/expectation keys and the tool catalog; the honesty rows; the validator rejects each broken reference |
 | Unit — `standard.ts` | every `CollectionStatus` maps per §7.2; `not_supported` is the only `skipped`; `success` + empty keeps the old symptom with `collection.status: success` (AC-03) |
 | Unit — `routes-health` | `coverage_status` and `collection` per §7.3; a v1-shaped probe result maps to `LEGACY_AGENT`; `overall` semantics unchanged (REPORT-01) |
 | Unit — `probe-host` (fake fs via the existing file-backed fakes plus a real `tmpdir` case) | unique names, `EEXIST` retry, symlinked `.xinas-health` refused, foreign-device refused, cleanup failure surfaced, timeout stops the step, two concurrent loopbacks → one `PROBE_IN_PROGRESS` (AC-15) |
 | Unit — `health-baseline` (agent) | command line, env sanitization, realpath allow-list, `--sections` parsing, SIGKILL at timeout, concurrent callers share one run, stdout cap |
 | Unit — `report-validate` | the verdict table of §11.3 on fixtures (AC-01, AC-02, AC-19 edited FAIL → `mismatch`), reference errors, `unverifiable` on unknown run |
-| Contract — `mcp-schema.test.ts` | `prompts/list` and `prompts/get` responses validate against the pinned `2026-07-28` schema on the modern era; legacy shapes against the SDK zod schemas; both through HTTP and the stdio adapter (AC-16) |
+| Contract — `mcp-wire.test.ts` (S19b) | `prompts/list` and `prompts/get` responses validate against the pinned `2026-07-28` schema on the modern era (`ListPromptsResult`, `Prompt`, `GetPromptResult`, `JSONRPCErrorResponse`); `mcp-integration.test.ts` drives the legacy shapes over the wire (no `resultType`, `initialize` advertises `prompts`) and the audit row. The stdio adapter forwards every method unchanged, so it is covered by the HTTP contract (AC-16) |
 | Integration — `rbac.test.ts`, `mcp-dispatch.test.ts`, `mcp-integration.test.ts` | the §13 matrix per entry; viewer `health.probe.run` denied on REST and MCP; operator with `allow_apply` on a legacy client → `MCP_CONFIRMATION_UNSUPPORTED`; modern → confirmation flow, consumed once (AC-14) |
 | e2e — `health-support.test.ts` extension | deep through the hardened host: artifact names differ per call, none left behind; `health.baseline` against a fixture engine (`python3` stub printing a canned report) with `not_supported` for a missing interpreter; `health.context` while the agent is stopped answers with `heartbeat: offline` (AC-18) |
 | Fixtures — `src/__tests__/fixtures/agentic/` | the anonymized incident set of requirements §10 (one directory per AC with the raw reports, the expected outcomes and the forbidden calls); a fixture runner asserts validator results, not prompt text |

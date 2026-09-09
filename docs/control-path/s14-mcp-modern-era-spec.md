@@ -170,11 +170,12 @@ versions remain reachable only through `initialize`.
   and `false` otherwise, so the flags describe exactly what is implemented
   (requirement §2.4). `listChanged` stays `false`: the list is static for
   the process lifetime.
-- `prompts` — **absent today.** No handler exists (ADR-0010 defers them).
-  S19 (`s19-mcp-health-prompt-spec.md` §4, ADR-0018; design, not yet
-  implemented) lifts the deferral for exactly one prompt: once its
-  provider is installed the flag becomes `{ "listChanged": false }` on
-  both eras, and it stays absent whenever the provider is not installed
+- `prompts` — **present iff the `xinas_health_check` provider is
+  installed (S19b, 2026-09-09).** S19 (`s19-mcp-health-prompt-spec.md`
+  §4, ADR-0018) lifted the ADR-0010 deferral for exactly one prompt: with
+  its provider installed the flag is `{ "listChanged": false }` on both
+  eras and `prompts/list` / `prompts/get` answer; it stays absent and
+  both methods answer `-32601` whenever the provider is not installed
   (`mcp.health_prompt.enabled: false`). The discovery test row for this
   flag changes with that slice, not before.
 - `extensions` — one map shared by every implemented extension:
@@ -442,7 +443,7 @@ loopback request produces.
 | 4 | all of `resultType`, `supportedVersions`, `capabilities`, `ttlMs`, `cacheScope`, `serverInfo`, `instructions` | `mcp-discover.test.ts` |
 | 5 | `supportedVersions` contains `2026-07-28` | `mcp-discover.test.ts` (and asserts no legacy version leaks in) |
 | 6 | extensions under `capabilities.extensions`, never top-level | `mcp-discover.test.ts` |
-| 7 | advertised capabilities match available handlers | `mcp-discover.test.ts` — `prompts` absent; `resources` `{ subscribe: false, listChanged: false }` without a journal (S18 view only) and `{ subscribe: true, listChanged: false }` with one (S17); `extensions.io.modelcontextprotocol/ui` present (S18); `tools` present iff the catalog has MCP-visible entries |
+| 7 | advertised capabilities match available handlers | `mcp-discover.test.ts` — `prompts` `{ listChanged: false }` with the S19b provider installed (absent without it: `mcp-prompts-modern.test.ts`); `resources` `{ subscribe: false, listChanged: false }` without a journal (S18 view only) and `{ subscribe: true, listChanged: false }` with one (S17); `extensions.io.modelcontextprotocol/ui` present (S18); `tools` present iff the catalog has MCP-visible entries |
 | 8 | two calls: no state change, semantically equal | `mcp-discover.test.ts` |
 | 9 | direct modern operational request without discovery | `mcp-discover.test.ts` — stateless `tools/list` + `tools/call` |
 | 10 | official SDK selects modern in `auto` mode | `@modelcontextprotocol/client` 2.0.0 in `versionNegotiation: { mode: 'auto' }` — S15 §15.4 (was "not implementable" until the v2 packages shipped; see below) |

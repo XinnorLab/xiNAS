@@ -1,7 +1,11 @@
 # ADR-0018: MCP prompts and the agentic health check (S19)
 
 **Status:** proposed (2026-09-09), for validation with
-`s19-mcp-health-prompt-spec.md`. Extends ADR-0009 (health profiles and
+`s19-mcp-health-prompt-spec.md`; **S19a and S19b implemented 2026-09-09**
+(the prompt on both eras, `health.context`, the run ledger, the check
+catalog, `health.probe.run` and the typed collection status — the spec's
+inline "Implemented" notes record where the code deviates from this
+design). Extends ADR-0009 (health profiles and
 the `health.probe` RPC), ADR-0010 (the MCP transport and its deferrals),
 ADR-0002 (one new enumerated agent method, `health.baseline`, and one
 renamed probe method) and the S15 confirmation decision.
