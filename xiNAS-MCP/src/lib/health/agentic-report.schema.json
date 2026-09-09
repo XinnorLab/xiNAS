@@ -1,0 +1,247 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://xinnor.io/xinas/schemas/agentic-health-report/1",
+  "title": "xiNAS agentic health-check report v1",
+  "description": "S19 spec §11.1 (REPORT-01, REPORT-06). health_status and coverage_status MUST equal the values health.report.validate computes; raw_reports are verbatim tool results whose digests the run ledger can verify.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "report_schema_version",
+    "run",
+    "scope",
+    "run_status",
+    "health_status",
+    "coverage_status",
+    "raw_reports",
+    "checks",
+    "findings",
+    "evidence_manifest",
+    "not_checked",
+    "human_readable"
+  ],
+  "properties": {
+    "report_schema_version": { "const": "1" },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["run_id", "started_at", "completed_at", "principal", "node", "versions", "execution"],
+      "properties": {
+        "run_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "started_at": { "type": "string", "format": "date-time" },
+        "completed_at": { "type": "string", "format": "date-time" },
+        "principal": { "type": "string", "minLength": 1 },
+        "node": {
+          "type": "object",
+          "required": ["hostname", "controller_id", "xinas_version"],
+          "properties": {
+            "hostname": { "type": "string" },
+            "controller_id": { "type": "string" },
+            "xinas_version": { "type": "string" },
+            "kernel": { "type": ["string", "null"] },
+            "xiraid_version": { "type": ["string", "null"] }
+          }
+        },
+        "versions": {
+          "type": "object",
+          "required": ["prompt", "template_sha256", "policy", "catalog", "report_schema"],
+          "properties": {
+            "prompt": { "type": "string" },
+            "template_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "policy": { "type": "string" },
+            "catalog": { "type": "string" },
+            "report_schema": { "type": "string" },
+            "server": { "type": "string" }
+          }
+        },
+        "execution": {
+          "type": "object",
+          "required": ["mode", "roles_ran", "model", "budget", "errors"],
+          "properties": {
+            "mode": { "enum": ["sequential", "subagents"] },
+            "roles_ran": { "type": "array", "items": { "type": "string" } },
+            "model": {
+              "oneOf": [
+                { "type": "null" },
+                {
+                  "type": "object",
+                  "required": ["provider", "name"],
+                  "properties": { "provider": { "type": "string" }, "name": { "type": "string" } }
+                }
+              ]
+            },
+            "budget": {
+              "type": "object",
+              "required": ["tool_calls", "elapsed_seconds"],
+              "properties": {
+                "tool_calls": { "type": "integer", "minimum": 0 },
+                "elapsed_seconds": { "type": "number", "minimum": 0 }
+              }
+            },
+            "errors": {
+              "type": "array",
+              "items": {
+                "oneOf": [
+                  { "type": "string" },
+                  {
+                    "type": "object",
+                    "required": ["message"],
+                    "properties": { "stage": { "type": "string" }, "message": { "type": "string" } }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "required": ["kind", "targets", "client_path_in_scope", "time_window"],
+      "properties": {
+        "kind": { "enum": ["node", "service_path"] },
+        "targets": { "type": "array", "items": { "type": "string" } },
+        "client_path_in_scope": { "type": "boolean" },
+        "time_window": {
+          "type": "object",
+          "required": ["requested_seconds", "covered"],
+          "properties": {
+            "requested_seconds": { "type": "integer", "minimum": 0 },
+            "covered": {
+              "type": "object",
+              "required": ["from", "to"],
+              "properties": {
+                "from": { "type": "string", "format": "date-time" },
+                "to": { "type": "string", "format": "date-time" }
+              }
+            }
+          }
+        },
+        "declared_absent": {
+          "type": "array",
+          "description": "From health.context.topology.declared_absent; a not_applicable check must cite one of these or a scope exclusion.",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "run_status": { "enum": ["completed", "partial", "failed", "cancelled"] },
+    "health_status": { "$ref": "#/$defs/health_status" },
+    "coverage_status": { "enum": ["complete", "partial", "none"] },
+    "raw_reports": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["tool", "args", "collected_at", "digest", "report"],
+        "properties": {
+          "tool": { "type": "string", "minLength": 1 },
+          "args": { "type": "object" },
+          "collected_at": { "type": "string", "format": "date-time" },
+          "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+          "report": { "type": ["object", "array", "string", "number", "boolean", "null"] }
+        }
+      }
+    },
+    "checks": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/check" }
+    },
+    "findings": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/finding" }
+    },
+    "evidence_manifest": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/evidence" }
+    },
+    "not_checked": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["check_id", "reason"],
+        "properties": {
+          "check_id": { "type": "string" },
+          "reason": { "type": "string" }
+        }
+      }
+    },
+    "human_readable": { "type": "string" }
+  },
+  "$defs": {
+    "health_status": { "enum": ["ok", "warning", "degraded", "critical", "unknown"] },
+    "severity": { "enum": ["warning", "degraded", "critical", null] },
+    "check": {
+      "type": "object",
+      "required": ["id", "outcome", "severity", "reason", "mandatory", "evidence_refs"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^HC-[0-9]{2}\\.[a-z0-9-]+$" },
+        "outcome": { "enum": ["pass", "warn", "fail", "unknown", "not_applicable"] },
+        "severity": { "$ref": "#/$defs/severity" },
+        "reason": { "type": "string" },
+        "mandatory": { "type": "boolean" },
+        "evidence_refs": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "required": [
+        "id",
+        "kind",
+        "severity",
+        "check_ids",
+        "resource_ids",
+        "symptom",
+        "impact",
+        "evidence_refs",
+        "confidence",
+        "alternatives",
+        "next_check",
+        "proposed_action"
+      ],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "kind": { "enum": ["observation", "hypothesis", "data_gap", "conflict"] },
+        "severity": { "$ref": "#/$defs/severity" },
+        "check_ids": { "type": "array", "items": { "type": "string" } },
+        "resource_ids": { "type": "array", "items": { "type": "string" } },
+        "symptom": { "type": "string" },
+        "impact": { "type": "string" },
+        "evidence_refs": { "type": "array", "items": { "type": "string" } },
+        "confidence": {
+          "type": "object",
+          "required": ["level", "basis"],
+          "properties": {
+            "level": { "enum": ["high", "medium", "low"] },
+            "basis": { "type": "string" }
+          }
+        },
+        "alternatives": { "type": "array", "items": { "type": "string" } },
+        "next_check": { "type": "string" },
+        "proposed_action": { "type": ["string", "null"] }
+      },
+      "if": { "properties": { "kind": { "const": "hypothesis" } } },
+      "then": {
+        "description": "AC-10: a hypothesis names what would distinguish it and what to check next.",
+        "properties": {
+          "alternatives": { "minItems": 1 },
+          "next_check": { "minLength": 1 }
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "required": ["id", "source", "collected_at", "stale"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "source": { "type": "string", "minLength": 1 },
+        "args": {},
+        "request_id": { "type": ["string", "null"] },
+        "observed_at": { "type": ["string", "null"], "format": "date-time" },
+        "collected_at": { "type": "string", "format": "date-time" },
+        "revision": { "type": ["integer", "null"] },
+        "units": { "type": ["string", "null"] },
+        "value": {},
+        "excerpt": { "type": "string" },
+        "stale": { "type": "boolean" }
+      }
+    }
+  }
+}
