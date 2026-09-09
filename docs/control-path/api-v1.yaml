@@ -2848,6 +2848,13 @@ paths:
         quick is KV-derived and always answers; standard/deep add
         agent-probe-backed checks which degrade with EXECUTOR_UNAVAILABLE
         evidence when the agent is unreachable.
+
+        `deep` performs active probes — a probe-file write and read-back
+        on every mounted managed filesystem and a PID1 loopback mount of
+        the first desired export — and therefore requires the `operator`
+        role (`PERMISSION_DENIED` otherwise); `quick` and `standard` are
+        viewer reads. Over MCP, `profile=deep` additionally requires
+        `mcp.allow_apply: true`.
       parameters:
         - in: query
           name: profile
@@ -2863,6 +2870,7 @@ paths:
                   - type: object
                     properties:
                       result: { $ref: '#/components/schemas/HealthReport' }
+        '403': { $ref: '#/components/responses/PermissionDenied' }
         '500': { $ref: '#/components/responses/Internal' }
 
   # =========================================================================

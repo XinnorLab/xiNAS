@@ -8,8 +8,9 @@
  * via the forwarded headers under the ephemeral loopback bearer —
  * one auth/RBAC/audit spine, exactly one audit row per call.
  *
- * Gate verdicts (ADR-0010 §gate):
+ * Gate verdicts (ADR-0010 §gate; S8 §4):
  *   read                          → allow
+ *   read + escalation (G-04)      → escalating value: mcp.allow_apply || MCP_APPLY_DISABLED
  *   plan_apply  mode=plan         → allow
  *   plan_apply  mode=apply        → mcp.allow_apply || MCP_APPLY_DISABLED
  *   direct                        → requires_mcp_apply ? gate : allow
@@ -27,7 +28,7 @@ import {
   McpError,
   ReadResourceRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
-import { CATALOG, type CatalogEntry, mcpVisible } from './catalog.js';
+import { CATALOG, type CatalogEntry, isEscalated, mcpVisible } from './catalog.js';
 import {
   MCP_UI_EXTENSION,
   RAID_CREATE_APP_URI,
@@ -139,6 +140,17 @@ export function gateVerdict(
   args: Record<string, unknown>,
   allowApply: boolean,
 ): { allowed: boolean; reason?: string } {
+  // G-04 (S8 §3): an escalated call is apply-class whatever the entry's
+  // mutability — checked first so a read entry cannot pass on its class.
+  const esc = entry.escalation;
+  if (esc !== undefined && esc.requires_mcp_apply && isEscalated(entry, args) && !allowApply) {
+    return {
+      allowed: false,
+      reason:
+        `${entry.name} ${esc.arg}=${esc.value} ${esc.reason} and requires mcp.allow_apply: true ` +
+        `in the api config; run it via REST/xinasctl with an ${esc.min_role} token, or choose another ${esc.arg}`,
+    };
+  }
   if (entry.mutability === 'read') return { allowed: true };
   if (entry.mutability === 'direct') {
     if (!entry.requires_mcp_apply || allowApply) return { allowed: true };
@@ -235,11 +247,20 @@ export function listTools(): McpTool[] {
       e.returns_async_task === true
         ? ' Returns a task_id and executes asynchronously — follow it with tasks.wait.'
         : '';
+    // G-04: the escalation clause is generated from the same field the gate
+    // and the REST RBAC rank read, so the description cannot drift from them.
+    const esc = e.escalation;
+    const escalationClause =
+      esc !== undefined
+        ? ` ${esc.arg}=${esc.value} ${esc.reason}; it requires the ${esc.min_role} role` +
+          `${esc.requires_mcp_apply ? ' and mcp.allow_apply: true' : ''}.`
+        : '';
     return {
       name: e.name,
       description:
         (e.status === 'degraded' ? `${e.description} [DEGRADED backend]` : e.description) +
-        asyncClause,
+        asyncClause +
+        escalationClause,
       inputSchema: e.input_schema as { type: 'object'; [k: string]: unknown },
       ...(e.ui !== undefined ? { _meta: { ui: { ...e.ui } } } : {}),
     };

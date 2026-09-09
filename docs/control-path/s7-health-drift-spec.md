@@ -153,6 +153,15 @@ evidence. The RPC mutates nothing beyond the probe artifacts
 (`.xinas-health-probe` files are deleted in the same call;
 `/run/xinas/health-probe/mnt` is unmounted in a `finally`).
 
+**Access (2026-09-09, G-04).** Those artifacts are still host side
+effects, so `deep` is not a viewer-rank read: `GET /health?profile=deep`
+requires the `operator` role over REST and, over MCP, additionally
+`mcp.allow_apply: true`. The rule is declared once, by the `escalation`
+field of the `health.check` catalog entry (S8 §3), and enforced by
+`rbacMiddleware` and the MCP dispatch gate (S8 §4). `quick` and
+`standard` remain viewer-rank reads. The `health.probe` RPC itself, its
+allow-list entry and the probe implementation are unchanged.
+
 ## 5. Drift details (T3)
 
 - **nfs-exports (quick):** desired Shares → `compileShareToExportEntry`

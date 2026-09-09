@@ -135,7 +135,9 @@ On a scratch node (or after `./uninstall.sh`):
   text; `drift.nfs-conf` ok on a freshly applied profile (the helper
   dry render runs with `dry_run: true` — confirm zero writes:
   `inotifywait -m /etc/nfs` stays silent during the GET).
-- [ ] `profile=deep`: `filesystem.io` touches every mounted managed fs
+- [ ] `profile=deep` (operator token or higher — a viewer token is refused
+  with `PERMISSION_DENIED`; over MCP the call also needs
+  `mcp.allow_apply: true`): `filesystem.io` touches every mounted managed fs
   (probe file appears/disappears); `nfs.loopback` performs a REAL
   PID1-delegated `systemd-mount localhost:<export>` at
   `/run/xinas/health-probe/mnt` and unmounts (check `systemd-mount

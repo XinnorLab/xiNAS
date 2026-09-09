@@ -22,6 +22,19 @@ import { RAID_CREATE_APP_URI } from './apps.js';
 export type Mutability = 'read' | 'plan_apply' | 'direct';
 export type MinRole = 'viewer' | 'operator' | 'admin';
 
+/** See `CatalogEntry.escalation`. */
+export interface Escalation {
+  /** The input_schema property whose value escalates the call. */
+  arg: string;
+  value: string;
+  /** Rank required when the call carries `value`; must exceed the entry's own. */
+  min_role: MinRole;
+  /** Over MCP the escalated call is apply-class: gated by `mcp.allow_apply`. */
+  requires_mcp_apply: boolean;
+  /** Names the side effects — surfaces in tools/list and in the gate error. */
+  reason: string;
+}
+
 export interface CatalogEntry {
   name: string;
   description: string;
@@ -69,6 +82,23 @@ export interface CatalogEntry {
   confirmation?: 'required';
   /** S18: optional MCP Apps View linked to this tool. */
   ui?: { resourceUri: string; visibility?: Array<'model' | 'app'> };
+  /**
+   * 2026-09-09 (G-04 of the agentic health-check requirements): one argument
+   * value lifts the call above the entry's own class. `health.check` is a
+   * viewer read, but `profile=deep` writes a probe file on every mounted
+   * managed filesystem and performs a PID1 loopback mount. An argument cannot
+   * change `mutability`, so the entry declares the escalation and three
+   * consumers enforce it: `rbacMiddleware` (the REST role), the MCP gate
+   * (`requires_mcp_apply` → `mcp.allow_apply`) and `listTools` (the generated
+   * description clause). s8-clients-spec.md §3.
+   */
+  escalation?: Escalation;
+}
+
+/** True when `args` carry the entry's escalating argument value. */
+export function isEscalated(entry: CatalogEntry, args: Record<string, unknown>): boolean {
+  const esc = entry.escalation;
+  return esc !== undefined && args[esc.arg] === esc.value;
 }
 
 const NO_INPUT: Record<string, unknown> = {
@@ -346,6 +376,16 @@ export const CATALOG: CatalogEntry[] = [
         profile: { type: 'string', enum: ['quick', 'standard', 'deep'], default: 'quick' },
       },
       additionalProperties: false,
+    },
+    // G-04: quick/standard are reads; deep is the S7 active-probe profile.
+    escalation: {
+      arg: 'profile',
+      value: 'deep',
+      min_role: 'operator',
+      requires_mcp_apply: true,
+      reason:
+        'performs active probes (a probe-file write and read-back on every mounted managed ' +
+        'filesystem and a PID1 loopback NFS mount of the first desired export)',
     },
   },
   read(

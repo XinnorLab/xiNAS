@@ -21,7 +21,27 @@ const entry = (name: string) => {
 describe('gateVerdict (S8 T6 — the WS12 exit criterion)', () => {
   it('reads always pass', () => {
     expect(gateVerdict(entry('arrays.list'), {}, false).allowed).toBe(true);
-    expect(gateVerdict(entry('health.check'), { profile: 'deep' }, false).allowed).toBe(true);
+    expect(gateVerdict(entry('health.check'), {}, false).allowed).toBe(true);
+    expect(gateVerdict(entry('health.check'), { profile: 'quick' }, false).allowed).toBe(true);
+    expect(gateVerdict(entry('health.check'), { profile: 'standard' }, false).allowed).toBe(true);
+  });
+
+  it('G-04: health.check profile=deep is gated by mcp.allow_apply like an apply', () => {
+    // deep writes a probe file on every managed fs and loopback-mounts an
+    // export — a read entry whose one argument value escalates it.
+    const denied = gateVerdict(entry('health.check'), { profile: 'deep' }, false);
+    expect(denied.allowed).toBe(false);
+    expect(denied.reason).toContain('mcp.allow_apply');
+    expect(denied.reason).toContain('profile=deep');
+    expect(gateVerdict(entry('health.check'), { profile: 'deep' }, true).allowed).toBe(true);
+  });
+
+  it('G-04: tools/list names the deep escalation in the health.check description', () => {
+    const tool = listTools().find((t) => t.name === 'health.check');
+    expect(tool).toBeDefined();
+    expect(tool?.description).toContain('profile=deep');
+    expect(tool?.description).toContain('operator');
+    expect(tool?.description).toContain('mcp.allow_apply');
   });
 
   it('plan passes; apply is gated by mcp.allow_apply', () => {

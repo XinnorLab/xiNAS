@@ -10,6 +10,17 @@ supported source for installing and updating xiNAS.
 
 ### Fixed
 
+- **`health.check profile=deep` is no longer a viewer read.** The deep
+  profile writes a probe file on every mounted managed filesystem and
+  performs a PID1 loopback NFS mount, yet the catalog classified the whole
+  tool as a viewer-rank read, so a viewer token could trigger both over
+  REST and over MCP with no gate. `GET /health?profile=deep` now requires
+  the `operator` role (`PERMISSION_DENIED` otherwise), and over MCP the
+  call additionally requires `mcp.allow_apply: true` (`MCP_APPLY_DISABLED`
+  otherwise); the rule is one `escalation` declaration on the catalog
+  entry, enforced by the REST RBAC middleware and the MCP dispatch gate
+  and named in the tool's `tools/list` description. `quick` and `standard`
+  are unchanged.
 - **S17 event producers no longer turn missing data into state.** An
   unknown xiRAID array or member word neither completes nor fails an
   initialization/reconstruction (the operation stays active until a proven

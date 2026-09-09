@@ -937,3 +937,34 @@ additive UI and would have doubled the review surface of a security change.
 `control_client.py`, showing exactly the fields the web page shows (S15
 §9.3), refusing to approve without the phrase, and a pytest against the
 stub server for approve / decline / policy refusal rendering.
+
+## Health — the deep-profile probe artifacts are not hardened
+
+*Deferred 2026-09-09, from the G-04 gating fix
+(`fix/health-deep-profile-gating`); scoped out of the agentic
+health-check requirements' PROBE-03.*
+
+**What is missing.** The `deep` filesystem probe writes a fixed name
+(`.xinas-health-probe`) at the root of every mounted managed filesystem
+with a plain `writeFile` — no exclusive create, no symlink or path
+check — and deletes that name in a `finally`; the loopback probe mounts a
+fixed mountpoint (`/run/xinas/health-probe/mnt`) with no serialization
+between concurrent runs. A cleanup failure is swallowed rather than
+reported.
+
+**What the code does instead.** The write overwrites whatever carries
+that name, the unlink removes it, and two concurrent deep runs race on
+the same mountpoint. The G-04 fix limits who can start a run (`operator`
+role; `mcp.allow_apply` over MCP) but does not change the probe itself.
+
+**Why it was cut.** The gating was the live privilege hole and ships on
+its own; the hardening belongs with the `health.probe.run` tool the
+agentic health-check requirements introduce, where the per-run probe
+directory, unique filename and mountpoint isolation are specified
+together.
+
+**What done looks like.** A unique per-run filename created with
+`O_EXCL` under a dedicated probe directory whose path is checked for
+symlinks; a per-run (or serialized) loopback mountpoint; cleanup that
+removes only its own objects and reports failure as a finding; a
+timeout that stops the probe on the agent, not just the API wait.
