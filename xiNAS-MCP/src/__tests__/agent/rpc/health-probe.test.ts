@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { ProbeCollectionError } from '../../../agent/health/collect.js';
 import {
   type HealthProbeDeps,
-  type HealthProbeResult,
+  type HealthProbeResultV2,
   makeHealthProbeHandler,
 } from '../../../agent/rpc/methods/health-probe.js';
 import { parseXicliLicense } from '../../../lib/parse/xicli-license.js';
@@ -38,6 +39,10 @@ describe('parseXicliLicense', () => {
   });
 });
 
+// The agent's clock for observed_at (distinct from NOW, the license clock).
+const CLOCK = () => 1_700_000_000_000; // 2023-11-14T22:13:20.000Z
+const AT = '2023-11-14T22:13:20.000Z';
+
 function deps(over: Partial<HealthProbeDeps> = {}): HealthProbeDeps {
   return {
     readLicenseText: async () => GOLDEN_VALID,
@@ -46,50 +51,95 @@ function deps(over: Partial<HealthProbeDeps> = {}): HealthProbeDeps {
     getCollectorHealth: () => ({ disk: 'running', xiraid: 'running' }),
     dryRenderNfsProfile: async () => ({ '/etc/nfs/nfsd.conf': 'sha256:abc' }),
     now: NOW,
+    clock: CLOCK,
     ...over,
   };
 }
 
-describe('health.probe handler', () => {
-  it('rejects bad levels; assembles all standard sections', async () => {
+/** S19a T1 (spec §7.1): every section carries a typed collection status. */
+describe('health.probe handler (schema 2)', () => {
+  it('rejects bad levels; assembles every standard section as success with the clock time', async () => {
     const handler = makeHealthProbeHandler(deps());
     await expect(handler({ level: 'quick' })).rejects.toThrow(/level/);
 
     const result = (await handler({
       level: 'standard',
       desired_nfs_profile: { versions: {} },
-    })) as HealthProbeResult;
-    expect(result.license?.status).toBe('active');
-    expect(result.rdma_links).toHaveLength(1);
-    expect(result.collectors.xiraid).toBe('running');
-    expect(result.nfs_profile_render).toEqual({ '/etc/nfs/nfsd.conf': 'sha256:abc' });
-    expect(result.probes).toBeUndefined();
+    })) as HealthProbeResultV2;
+    expect(result.schema).toBe(2);
+    expect(result.sections.license.status).toBe('success');
+    expect(result.sections.license.observed_at).toBe(AT);
+    expect(result.sections.license.value?.status).toBe('active');
+    expect(result.sections.rdma_links).toMatchObject({
+      status: 'success',
+      value: [{ ifname: 'ibp65s0/1', state: 'ACTIVE', physical_state: 'LINK_UP' }],
+    });
+    expect(result.sections.collectors).toMatchObject({
+      status: 'success',
+      value: { disk: 'running', xiraid: 'running' },
+    });
+    expect(result.sections.nfs_profile_render).toMatchObject({
+      status: 'success',
+      value: { '/etc/nfs/nfsd.conf': 'sha256:abc' },
+    });
+    expect(result.sections.probes).toBeUndefined();
     expect(JSON.stringify(result)).not.toContain('SECRET');
   });
 
-  it('per-section degradation: each failing source nulls only itself', async () => {
+  it('each failing source degrades only its own section, with the reason kept', async () => {
     const handler = makeHealthProbeHandler(
       deps({
-        readLicenseText: async () => null,
+        readLicenseText: async () => {
+          throw Object.assign(new Error('spawn xicli ENOENT'), { code: 'ENOENT' });
+        },
         rdmaLinkShow: async () => {
-          throw new Error('rdma tool missing');
+          throw Object.assign(new Error('rdma: EACCES'), { code: 'EACCES' });
         },
         dryRenderNfsProfile: async () => {
-          throw new Error('helper down');
+          throw new ProbeCollectionError('error', 'HELPER_UNREACHABLE', 'refused');
         },
       }),
     );
     const result = (await handler({
       level: 'standard',
       desired_nfs_profile: { versions: {} },
-    })) as HealthProbeResult;
-    expect(result.license).toBeNull();
-    expect(result.rdma_links).toEqual([]);
-    expect(result.nfs_profile_render).toBeNull();
-    expect(result.collectors.disk).toBe('running'); // unaffected section
+    })) as HealthProbeResultV2;
+    expect(result.sections.license).toEqual({
+      status: 'not_supported',
+      observed_at: AT,
+      error: { code: 'TOOL_ABSENT', message: 'spawn xicli ENOENT' },
+    });
+    expect(result.sections.rdma_links).toMatchObject({
+      status: 'permission_denied',
+      error: { code: 'EACCES' },
+    });
+    expect(result.sections.nfs_profile_render).toMatchObject({
+      status: 'error',
+      error: { code: 'HELPER_UNREACHABLE', message: 'refused' },
+    });
+    expect(result.sections.collectors.status).toBe('success'); // unaffected section
   });
 
-  it('no desired profile → render section null without calling the helper', async () => {
+  it('a license text of null is success with value null (xicli ran, printed nothing)', async () => {
+    const handler = makeHealthProbeHandler(deps({ readLicenseText: async () => null }));
+    const result = (await handler({ level: 'standard' })) as HealthProbeResultV2;
+    expect(result.sections.license).toEqual({ status: 'success', observed_at: AT, value: null });
+  });
+
+  it('rdma: empty output is success with []; non-object rows are dropped', async () => {
+    const empty = makeHealthProbeHandler(deps({ rdmaLinkShow: async () => '' }));
+    expect(
+      ((await empty({ level: 'standard' })) as HealthProbeResultV2).sections.rdma_links,
+    ).toEqual({ status: 'success', observed_at: AT, value: [] });
+    const mixed = makeHealthProbeHandler(
+      deps({ rdmaLinkShow: async () => JSON.stringify([{ netdev: 'a' }, 7, null]) }),
+    );
+    expect(
+      ((await mixed({ level: 'standard' })) as HealthProbeResultV2).sections.rdma_links.value,
+    ).toEqual([{ netdev: 'a' }]);
+  });
+
+  it('no desired profile → render section success with value null, helper not called', async () => {
     let called = false;
     const handler = makeHealthProbeHandler(
       deps({
@@ -99,12 +149,16 @@ describe('health.probe handler', () => {
         },
       }),
     );
-    const result = (await handler({ level: 'standard' })) as HealthProbeResult;
-    expect(result.nfs_profile_render).toBeNull();
+    const result = (await handler({ level: 'standard' })) as HealthProbeResultV2;
+    expect(result.sections.nfs_profile_render).toEqual({
+      status: 'success',
+      observed_at: AT,
+      value: null,
+    });
     expect(called).toBe(false);
   });
 
-  it('deep runs the probes when wired; a throwing prober degrades into the result', async () => {
+  it('deep: the probes section is success when wired and error when the runner throws', async () => {
     const handler = makeHealthProbeHandler(
       deps({
         runDeepProbes: async (firstExport) => ({
@@ -120,9 +174,14 @@ describe('health.probe handler', () => {
     const result = (await handler({
       level: 'deep',
       first_export_path: '/mnt/a',
-    })) as HealthProbeResult;
-    expect(result.probes?.fs_io[0]?.ok).toBe(true);
-    expect(result.probes?.nfs_loopback?.export).toBe('/mnt/a');
+    })) as HealthProbeResultV2;
+    expect(result.sections.probes).toMatchObject({
+      status: 'success',
+      value: {
+        fs_io: [{ mountpoint: '/mnt/a', ok: true }],
+        nfs_loopback: { attempted: true, export: '/mnt/a', ok: true },
+      },
+    });
 
     const failing = makeHealthProbeHandler(
       deps({
@@ -131,8 +190,16 @@ describe('health.probe handler', () => {
         },
       }),
     );
-    const failed = (await failing({ level: 'deep' })) as HealthProbeResult;
-    expect(failed.probes?.nfs_loopback?.ok).toBe(false);
-    expect(failed.probes?.nfs_loopback?.error).toContain('probe blew up');
+    const failed = (await failing({ level: 'deep' })) as HealthProbeResultV2;
+    expect(failed.sections.probes).toEqual({
+      status: 'error',
+      observed_at: AT,
+      error: { code: 'ERROR', message: 'probe blew up' },
+    });
+  });
+
+  it('deep without a wired runner has no probes section', async () => {
+    const result = (await makeHealthProbeHandler(deps())({ level: 'deep' })) as HealthProbeResultV2;
+    expect(result.sections.probes).toBeUndefined();
   });
 });
