@@ -80,6 +80,28 @@ describe('client catalog (S8 T2)', () => {
     expect(ROLE_RANK.admin).toBeGreaterThan(ROLE_RANK.operator);
   });
 
+  it('G-04: an escalation names a real argument value and lifts the entry above its own rank', () => {
+    const escalated = CATALOG.filter((e) => e.escalation !== undefined);
+    expect(escalated.map((e) => e.name)).toEqual(['health.check']);
+    for (const e of escalated) {
+      const esc = e.escalation;
+      if (esc === undefined) throw new Error('unreachable');
+      const props = (e.input_schema as { properties?: Record<string, { enum?: unknown[] }> })
+        .properties;
+      expect(props, `${e.name} escalation arg missing from schema`).toHaveProperty(esc.arg);
+      expect(props?.[esc.arg]?.enum, `${e.name} escalation value not in enum`).toContain(esc.value);
+      expect(ROLE_RANK[esc.min_role]).toBeGreaterThan(ROLE_RANK[e.min_role]);
+      expect(esc.reason.length).toBeGreaterThan(0);
+    }
+    const health = CATALOG.find((e) => e.name === 'health.check');
+    expect(health?.escalation).toMatchObject({
+      arg: 'profile',
+      value: 'deep',
+      min_role: 'operator',
+      requires_mcp_apply: true,
+    });
+  });
+
   it('matchCatalog resolves parameterized paths; unknown → undefined', () => {
     expect(matchCatalog('GET', '/arrays/a1')?.name).toBe('arrays.get');
     expect(matchCatalog('PATCH', '/network/interfaces/ibp65s0')?.name).toBe(

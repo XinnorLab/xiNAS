@@ -167,6 +167,16 @@ describe('MCP integration: default posture (S8 T8)', () => {
     expect(JSON.stringify(plan.payload)).toContain('PERMISSION_DENIED');
   });
 
+  it('G-04: health.check profile=deep is blocked by the default gate; standard passes', async () => {
+    // deep writes a probe file on every managed fs and loopback-mounts an
+    // export, so over MCP it is apply-class even for an admin session.
+    const deep = await callTool(port, adminSession, 'health.check', { profile: 'deep' });
+    expect(deep.isError).toBe(true);
+    expect(JSON.stringify(deep.payload)).toContain('MCP_APPLY_DISABLED');
+    const standard = await callTool(port, adminSession, 'health.check', { profile: 'standard' });
+    expect(standard.isError).toBe(false);
+  });
+
   it('config_history.snapshots is live (S9): result without the stub warning', async () => {
     const out = await callTool(port, adminSession, 'config_history.snapshots', {});
     expect(out.isError).toBe(false);
@@ -232,6 +242,26 @@ describe('MCP integration: allow_apply=true flips the gate only', () => {
       plan_id: 'no-such-plan',
     });
     expect(JSON.stringify(apply.payload)).not.toContain('MCP_APPLY_DISABLED');
+  });
+
+  it('G-04: allow_apply opens the gate for deep, but RBAC still refuses a viewer', async () => {
+    const admin = await rpc(port, INITIALIZE, { token: 'tok-admin' });
+    const adminDeep = await callTool(port, admin.session as string, 'health.check', {
+      profile: 'deep',
+    });
+    expect(adminDeep.isError).toBe(false);
+    expect(JSON.stringify(adminDeep.payload)).not.toContain('MCP_APPLY_DISABLED');
+
+    const viewer = await rpc(port, INITIALIZE, { token: 'tok-viewer' });
+    const viewerSession = viewer.session as string;
+    const viewerStandard = await callTool(port, viewerSession, 'health.check', {
+      profile: 'standard',
+    });
+    expect(viewerStandard.isError).toBe(false);
+    // The role travels on the forwarded loopback hop; the REST rule refuses it.
+    const viewerDeep = await callTool(port, viewerSession, 'health.check', { profile: 'deep' });
+    expect(viewerDeep.isError).toBe(true);
+    expect(JSON.stringify(viewerDeep.payload)).toContain('PERMISSION_DENIED');
   });
 });
 

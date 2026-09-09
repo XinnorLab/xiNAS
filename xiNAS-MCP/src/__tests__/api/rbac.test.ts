@@ -73,6 +73,35 @@ describe('rbacMiddleware (S8 T3)', () => {
     );
   });
 
+  it('G-04: a viewer may run the quick and standard health profiles but not deep', async () => {
+    // deep writes a probe file on every mounted managed fs and performs a
+    // PID1 loopback mount — the catalog entry escalates that one value to
+    // operator while the entry itself stays a viewer read.
+    expect(
+      (
+        await request(setup.app)
+          .get('/api/v1/health?profile=standard')
+          .set('Authorization', VIEWER_TOKEN)
+      ).status,
+    ).toBe(200);
+    const deep = await request(setup.app)
+      .get('/api/v1/health?profile=deep')
+      .set('Authorization', VIEWER_TOKEN);
+    denied(deep);
+    const details = (deep.body as { errors: Array<{ details?: Record<string, unknown> }> })
+      .errors[0]?.details;
+    expect(details?.required_role).toBe('operator');
+    expect(details?.operation).toBe('health.check');
+  });
+
+  it('G-04: an operator may run the deep health profile', async () => {
+    const deep = await request(setup.app)
+      .get('/api/v1/health?profile=deep')
+      .set('Authorization', OPERATOR_TOKEN);
+    expect(deep.status).toBe(200);
+    expect(deep.body.result.profile).toBe('deep');
+  });
+
   it('uncataloged public routes default to admin (deny-by-default)', async () => {
     // /reference is deliberately NOT in the catalog
     denied(

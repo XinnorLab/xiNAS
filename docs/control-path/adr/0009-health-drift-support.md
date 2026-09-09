@@ -1,5 +1,14 @@
 # ADR-0009: Health profiles, drift detection, support bundle (S7, WS9+WS10)
 
+> **Amended 2026-09-09 (G-04 gating).** The decision below calls
+> `health.probe` a read-style diagnostic. That holds for `standard`;
+> `deep` writes a probe file on every mounted managed filesystem and
+> performs a PID1 loopback mount, so `GET /health?profile=deep` now
+> requires the `operator` role over REST and `mcp.allow_apply: true`
+> over MCP — the `health.check` catalog entry's `escalation` field
+> (S8 §3, §4; S7 §4). The RPC allow-list and the probe implementation
+> are unchanged.
+
 **Status:** accepted (2026-06-11). Extends ADR-0002 (one new enumerated
 agent method), ADR-0004 (one new internal task kind), ADR-0005 (the
 profile renderer becomes the drift oracle for its own files).

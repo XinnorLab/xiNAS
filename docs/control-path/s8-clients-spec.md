@@ -224,6 +224,12 @@ interface CatalogEntry {
   operation_kinds?: string[];         // S15: the engine kinds a plan_apply entry's route can produce
   mcp_exposed?: boolean;              // S15: default true; false = xinasctl + RBAC only, never an MCP tool
   confirmation?: 'required';          // S15: explicit opt-in for an entry that fits neither shape
+  escalation?: {                      // 2026-09-09 (G-04): one argument value lifts the call above the entry's class
+    arg: string; value: string;
+    min_role: 'viewer' | 'operator' | 'admin';
+    requires_mcp_apply: boolean;
+    reason: string;
+  };
 }
 ```
 
@@ -249,6 +255,36 @@ because inferring it from `plan_apply` is exactly what would leave
 `support.bundle` handing a client a `task_id` with no way to follow it.
 It drives two things in the MCP layer (§3.1) and nothing in the REST
 contract — it is a catalog field, not an API field.
+
+**Escalation (2026-09-09, G-04 of the agentic health-check requirements).**
+`health.check` is a `read` entry with `min_role: viewer`, but
+`profile=deep` runs the S7 active probes: a probe-file write and
+read-back on every mounted managed filesystem and a PID1 loopback NFS
+mount of the first desired export. An argument value cannot change an
+entry's `mutability`, so the entry declares the escalation instead:
+`escalation: { arg: 'profile', value: 'deep', min_role: 'operator',
+requires_mcp_apply: true, reason }`. Three consumers read it, and nothing
+else does:
+
+- `rbacMiddleware` ranks the caller against `escalation.min_role` when
+  the request carries that argument value (the query string for GET, the
+  parsed body otherwise), so a viewer's `GET /health?profile=deep` is
+  refused with `PERMISSION_DENIED` (`required_role: operator`,
+  `operation: health.check`) exactly like every other RBAC denial.
+- `gateVerdict` (§4) treats the escalated call as apply: without
+  `mcp.allow_apply` it returns `MCP_APPLY_DISABLED`. The MCP role check
+  needs no MCP code — dispatch forwards the caller's role on the loopback
+  hop and the REST rule refuses it there.
+- `listTools` appends a generated clause naming the requirement and the
+  side effects, the way it generates the asynchronous clause, so the
+  description cannot drift from the enforcement.
+
+`quick` and `standard` stay viewer-rank reads. The escalated call does
+not pass through the S15 confirmation service: there is no plan document
+to confirm, and the probes are self-cleaning. Its long-term home is the
+`health.probe.run` tool of the agentic health-check requirements, where
+the probe-file hardening also lands (`docs/TODO.md`, "Health — the
+deep-profile probe artifacts are not hardened").
 
 Namespaces (≈40 entries): `arrays.*` (list/get/create/modify/delete/
 import), `disks.*` (list/get), `filesystems.*` (list/get/create/
@@ -352,11 +388,13 @@ operation with the protocol methods. Client-side rules
 
 ## 4. The gate (T4)
 
-In the MCP dispatch layer (REST untouched):
+In the MCP dispatch layer (REST untouched, except that an `escalation`
+is also ranked by `rbacMiddleware` — §3):
 
 | entry mutability | request | verdict |
 |---|---|---|
 | read | any | allow |
+| read + `escalation` | the escalating argument value (`health.check profile=deep`) | `config.mcp.allow_apply ? allow : MCP_APPLY_DISABLED` |
 | plan_apply | `mode: 'plan'` | allow |
 | plan_apply | `mode: 'apply'` | `config.mcp.allow_apply ? allow : MCP_APPLY_DISABLED` |
 | direct | — | `requires_mcp_apply ? gate : allow` |
