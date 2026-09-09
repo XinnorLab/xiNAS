@@ -17,21 +17,38 @@
  *   4. deep — fake ProbeHost: one fs touch failure → filesystem.io
  *      critical; loopback attempted for the first export and UNMOUNTED
  *      (ops recorded).
+ *   4c. baseline (S19c) — GET /health/baseline runs a stub engine through
+ *      the agent's sandboxed subprocess; max_age_s serves the cache; the
+ *      engine's --sections list drives sections_without_checker.
+ *   4d. report (S19c) — the schema is served; a report built on the run's
+ *      raw quick report validates `verified`; an edited raw report is a
+ *      `mismatch`.
  *   5. agent down — SIGSTOP: standard degrades ONLY probe-backed
- *      checks with EXECUTOR_UNAVAILABLE; SIGCONT recovers.
+ *      checks with EXECUTOR_UNAVAILABLE; health.context still answers;
+ *      SIGCONT recovers.
  *   6. bundle — POST /support-bundle → 202 → task success → GET streams
  *      a tar.gz whose extracted files carry no seeded secrets and a
  *      PARSED-only license.
  */
 
 import { type ChildProcess, execSync, spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import * as http from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { renderNetplan } from '../../lib/net/render.js';
 import { XINAS_NETPLAN } from '../../lib/parse/netplan.js';
+import { digestOf } from '../../api/health/run-ledger.js';
 import { openStateStore } from '../../state/index.js';
 
 const PROJECT_ROOT = resolve(import.meta.dirname, '../../..');
@@ -326,6 +343,31 @@ describe.sequential('e2e: S7 health/drift/support (fixture mode)', () => {
     });
     await seedStore.close();
 
+    // S19c: the baseline engine is a stub interpreter (a shell script the
+    // agent's health_baseline.python points at) so the adapter runs a REAL
+    // subprocess through the sandbox without needing the Python venv; the
+    // profiles dir holds a copy of the shipped quick.yml for both daemons.
+    const profilesDir = join(tmpDir, 'profiles');
+    mkdirSync(profilesDir, { recursive: true });
+    copyFileSync(
+      join(PROJECT_ROOT, '..', 'healthcheck_profiles', 'quick.yml'),
+      join(profilesDir, 'quick.yml'),
+    );
+    const fakePython = join(tmpDir, 'bin', 'fake-python');
+    mkdirSync(join(tmpDir, 'bin'), { recursive: true });
+    writeFileSync(
+      fakePython,
+      [
+        '#!/bin/sh',
+        'case "$*" in',
+        `  *--sections*) printf '%s\\n' '{"sections":["services","storage","nfs"],"version":"e2e-9"}';;`,
+        `  *) printf '%s\\n' '{"metadata":{"profile":"quick","hostname":"e2e"},"overall":"PASS","summary":{"pass":1,"warn":0,"fail":0,"skip":0},"checks":[{"section":"storage","name":"raid_status","status":"PASS","actual":"online","expected":"all online","evidence":"","impact":"","fix_hint":""}]}';;`,
+        'esac',
+        '',
+      ].join('\n'),
+    );
+    chmodSync(fakePython, 0o755);
+
     writeFileSync(
       apiConfigPath,
       JSON.stringify({
@@ -338,6 +380,7 @@ describe.sequential('e2e: S7 health/drift/support (fixture mode)', () => {
         state: { databasePath: dbPath, auditJsonlPath: auditPath },
         agent: { socket: agentSockPath, heartbeat_interval_ms: HEARTBEAT_INTERVAL_MS },
         support_bundle_dir: bundleDir,
+        mcp: { health_prompt: { baseline: { profiles_dir: profilesDir } } },
       }),
     );
 
@@ -349,6 +392,12 @@ describe.sequential('e2e: S7 health/drift/support (fixture mode)', () => {
         controller_id_path: controllerIdPath,
         agent_token_path: agentTokenPath,
         socket_group: 'nogroup',
+        health_baseline: {
+          python: fakePython,
+          module_root: tmpDir,
+          log_dir: join(tmpDir, 'hc-logs'),
+          profiles_dir: profilesDir,
+        },
       }),
     );
 
@@ -580,6 +629,168 @@ describe.sequential('e2e: S7 health/drift/support (fixture mode)', () => {
     expect(missing.status).toBe(404);
   });
 
+  it('4c. S19c: GET /health/baseline runs the stub engine through the agent sandbox; max_age_s serves the cache', async () => {
+    const res = await requestJson(
+      apiSockPath,
+      '/api/v1/health/baseline?profile=quick',
+      ADMIN_TOKEN,
+      'GET',
+    );
+    expect(res.status).toBe(200);
+    const result = res.body.result as {
+      profile: { name: string; timeout_seconds: number; sections_without_checker: string[] };
+      collection: { status: string; from_cache: boolean; collected_at: string };
+      engine: { module: string; version: string } | null;
+      report: { overall: string; checks: unknown[] } | null;
+      error: unknown;
+    };
+    expect(result.collection).toMatchObject({ status: 'success', from_cache: false });
+    expect(result.engine).toEqual({ module: 'xinas_menu.health.engine', version: 'e2e-9' });
+    expect(result.report?.overall).toBe('PASS');
+    expect(result.report?.checks).toHaveLength(1);
+    expect(result.error).toBeNull();
+    expect(result.profile).toMatchObject({ name: 'quick', timeout_seconds: 60 });
+    // the stub engine checks only services/storage/nfs: every other section
+    // quick.yml enables is reported as unsupported (AC-06), from the live list
+    expect(result.profile.sections_without_checker).toEqual([
+      'cpu',
+      'kernel',
+      'vm',
+      'network',
+      'perf_tuning',
+    ]);
+
+    const cached = await requestJson(
+      apiSockPath,
+      '/api/v1/health/baseline?profile=quick&max_age_s=600',
+      ADMIN_TOKEN,
+      'GET',
+    );
+    expect(cached.body.result).toMatchObject({
+      collection: { from_cache: true, collected_at: result.collection.collected_at },
+    });
+
+    const ctx = await requestJson(apiSockPath, '/api/v1/health/context', ADMIN_TOKEN, 'GET');
+    expect(ctx.status).toBe(200);
+    expect((ctx.body.result as { baselines: { sections_source: string } }).baselines).toMatchObject(
+      {
+        sections_source: 'engine',
+        engine_version: 'e2e-9',
+      },
+    );
+  });
+
+  it('4d. S19c: a report built on the run’s raw quick report validates verified; an edited raw report is a mismatch', async () => {
+    const ctx = await requestJson(apiSockPath, '/api/v1/health/context', ADMIN_TOKEN, 'GET');
+    const runId = (ctx.body.result as { run: { run_id: string } }).run.run_id;
+    const quick = await requestJson(
+      apiSockPath,
+      `/api/v1/health?profile=quick&run_id=${runId}`,
+      ADMIN_TOKEN,
+      'GET',
+    );
+    const raw = quick.body.result as Record<string, unknown>;
+    const schema = await requestJson(
+      apiSockPath,
+      '/api/v1/health/report-schema',
+      ADMIN_TOKEN,
+      'GET',
+    );
+    expect(schema.status).toBe(200);
+    expect(
+      (schema.body.result as { properties: { report_schema_version: { const: string } } })
+        .properties.report_schema_version.const,
+    ).toBe('1');
+    const catalog = await requestJson(apiSockPath, '/api/v1/health/catalog', ADMIN_TOKEN, 'GET');
+    const mandatory = (
+      catalog.body.result as { checks: Array<{ id: string; mandatory_for: string[] }> }
+    ).checks
+      .filter((c) => c.mandatory_for.includes('node'))
+      .map((c) => c.id);
+    const T = '2026-09-09T10:00:00.000Z';
+    const report = (rawReport: Record<string, unknown>) => ({
+      report_schema_version: '1',
+      run: {
+        run_id: runId,
+        started_at: T,
+        completed_at: T,
+        principal: 'admin:e2e',
+        node: { hostname: 'e2e', controller_id: CONTROLLER_ID, xinas_version: '1.0.0' },
+        versions: {
+          prompt: '1.0.0',
+          template_sha256: 'b'.repeat(64),
+          policy: '1',
+          catalog: '1',
+          report_schema: '1',
+        },
+        execution: {
+          mode: 'sequential',
+          roles_ran: [],
+          model: null,
+          budget: { tool_calls: 3, elapsed_seconds: 2 },
+          errors: [],
+        },
+      },
+      scope: {
+        kind: 'node',
+        targets: [],
+        client_path_in_scope: false,
+        time_window: { requested_seconds: 3600, covered: { from: T, to: T } },
+        declared_absent: [],
+      },
+      run_status: 'completed',
+      health_status: 'ok',
+      coverage_status: 'complete',
+      raw_reports: [
+        {
+          tool: 'health.check',
+          args: { profile: 'quick' },
+          collected_at: raw.completed_at,
+          digest: digestOf(raw),
+          report: rawReport,
+        },
+      ],
+      checks: mandatory.map((id) => ({
+        id,
+        outcome: 'pass',
+        severity: null,
+        reason: 'ok',
+        mandatory: true,
+        evidence_refs: ['ev-1'],
+      })),
+      findings: [],
+      evidence_manifest: [
+        { id: 'ev-1', source: 'health.check', collected_at: T, observed_at: null, stale: false },
+      ],
+      not_checked: [],
+      human_readable: 'ok',
+    });
+    const verified = await requestJson(
+      apiSockPath,
+      '/api/v1/health/report/validate',
+      ADMIN_TOKEN,
+      'POST',
+      report(raw),
+    );
+    expect(verified.status).toBe(200);
+    expect(verified.body.result).toMatchObject({
+      valid: true,
+      integrity: { status: 'verified', checked: 1 },
+      computed: { health_status: 'ok', coverage_status: 'complete' },
+    });
+    const tampered = await requestJson(
+      apiSockPath,
+      '/api/v1/health/report/validate',
+      ADMIN_TOKEN,
+      'POST',
+      report({ ...raw, overall: 'ok', checks: [] }),
+    );
+    expect(tampered.body.result).toMatchObject({
+      valid: false,
+      integrity: { status: 'mismatch' },
+    });
+  });
+
   it('5. agent down: only probe-backed checks degrade; recovery restores', async () => {
     agentProc?.kill('SIGSTOP');
     try {
@@ -592,6 +803,13 @@ describe.sequential('e2e: S7 health/drift/support (fixture mode)', () => {
       // KV checks still answer
       expect(checks.get('nfs.server')?.status).toBe('ok');
       expect(checks.get('xinas-api.alive')?.status).toBe('ok');
+      // S19c (AC-18): the run context never asks the agent, so it still answers
+      // and says the heartbeat is not healthy
+      const ctx = await requestJson(apiSockPath, '/api/v1/health/context', ADMIN_TOKEN, 'GET');
+      expect(ctx.status).toBe(200);
+      expect(
+        (ctx.body.result as { collectors: { heartbeat: string } }).collectors.heartbeat,
+      ).not.toBe('healthy');
     } finally {
       agentProc?.kill('SIGCONT');
     }
