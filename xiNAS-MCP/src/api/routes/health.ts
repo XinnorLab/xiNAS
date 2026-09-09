@@ -64,6 +64,7 @@ import { getOrNull, sendOk } from '../handlers/reads.js';
 import {
   type AgenticReport,
   REPORT_SCHEMA,
+  isReportValid,
   validateReportShape,
 } from '../../lib/health/report-validate.js';
 import { parseMaxAgeS, runBaseline } from '../health/baseline.js';
@@ -438,11 +439,7 @@ export function healthRouter(ctx: ApiContext): Router {
         if (entry === null) warnings.push(runUnknownWarning(runId));
         else integrity = checkIntegrity(entry, report.raw_reports);
       }
-      const valid =
-        shape.schema_errors.length === 0 &&
-        shape.reference_errors.length === 0 &&
-        shape.status_errors.length === 0 &&
-        integrity.status !== 'mismatch';
+      const valid = isReportValid(shape, integrity.status);
       sendOk(
         req,
         res,

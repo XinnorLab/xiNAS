@@ -187,6 +187,23 @@ export function computeVerdict(
   return { health_status, coverage_status, rewritten_to_unknown };
 }
 
+/**
+ * §11.2: a report is valid iff it has no schema, reference or status errors
+ * and its raw reports did not mismatch the ledger; `unverifiable` (an
+ * unknown or expired run) never invalidates (SAFE-04, AC-18).
+ */
+export function isReportValid(
+  shape: Pick<ShapeVerdict, 'schema_errors' | 'reference_errors' | 'status_errors'>,
+  integrity: 'verified' | 'mismatch' | 'unverifiable',
+): boolean {
+  return (
+    shape.schema_errors.length === 0 &&
+    shape.reference_errors.length === 0 &&
+    shape.status_errors.length === 0 &&
+    integrity !== 'mismatch'
+  );
+}
+
 /** Schema, references and the §11.3 verdict; pure over the report and the catalog. */
 export function validateReportShape(report: unknown, catalog: AgenticCatalog): ShapeVerdict {
   const schema_errors = schemaErrorsOf(report);

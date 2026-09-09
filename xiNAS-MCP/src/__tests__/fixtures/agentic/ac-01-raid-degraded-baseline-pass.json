@@ -1,0 +1,174 @@
+{
+  "id": "AC-01",
+  "title": "Baseline matches, but RAID is degraded: the RAID problem is kept, the verdict is not ok, the evidence names the array",
+  "scope": "node",
+  "declared_absent": [],
+  "ledger": {
+    "quick": {
+      "tool": "health.check",
+      "args": { "profile": "quick" },
+      "collected_at": "2026-09-09T10:00:10.000Z",
+      "report": {
+        "profile": "quick",
+        "started_at": "2026-09-09T10:00:09.000Z",
+        "completed_at": "2026-09-09T10:00:10.000Z",
+        "overall": "critical",
+        "coverage_status": "complete",
+        "collection": { "agent": "not_needed", "sources": {} },
+        "checks": [
+          {
+            "id": "xiraid.arrays",
+            "category": "xiraid",
+            "status": "critical",
+            "symptom": "array arr-data is degraded: member nvme3n2 missing",
+            "impact": "one more failure loses the data on /mnt/data",
+            "evidence": {
+              "arrays": [{ "id": "arr-data", "state": "degraded", "level": "5", "missing": ["nvme3n2"] }],
+              "collection": { "status": "success", "source": "kv", "observed_at": null }
+            },
+            "recommended_action": "replace nvme3n2 through the RAID workflow"
+          },
+          {
+            "id": "agent.connectivity",
+            "category": "agent",
+            "status": "ok",
+            "symptom": "",
+            "impact": "",
+            "evidence": { "state": "healthy", "collection": { "status": "success", "source": "kv", "observed_at": null } },
+            "recommended_action": ""
+          },
+          {
+            "id": "filesystem.mounts",
+            "category": "filesystem",
+            "status": "ok",
+            "symptom": "",
+            "impact": "",
+            "evidence": { "mounted": ["/mnt/data"], "collection": { "status": "success", "source": "kv", "observed_at": null } },
+            "recommended_action": ""
+          },
+          {
+            "id": "nfs.server",
+            "category": "nfs",
+            "status": "ok",
+            "symptom": "",
+            "impact": "",
+            "evidence": { "active": true, "collection": { "status": "success", "source": "kv", "observed_at": null } },
+            "recommended_action": ""
+          }
+        ]
+      }
+    },
+    "baseline": {
+      "tool": "health.baseline",
+      "args": { "profile": "standard", "max_age_s": 0 },
+      "collected_at": "2026-09-09T10:01:40.000Z",
+      "report": {
+        "profile": {
+          "name": "standard",
+          "path": "/opt/xiNAS/healthcheck_profiles/standard.yml",
+          "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "timeout_seconds": 180,
+          "sections_without_checker": []
+        },
+        "collection": {
+          "status": "success",
+          "collected_at": "2026-09-09T10:01:40.000Z",
+          "duration_ms": 88000,
+          "from_cache": false,
+          "age_s": 0
+        },
+        "engine": { "module": "xinas_menu.health.engine", "version": "3.14.0" },
+        "report": {
+          "metadata": { "timestamp": "2026-09-09 10:00:12", "hostname": "nas-01", "profile": "standard", "duration": "88.0s" },
+          "overall": "PASS",
+          "summary": { "pass": 3, "warn": 0, "fail": 0, "skip": 0 },
+          "checks": [
+            { "section": "Storage", "name": "raid_status", "status": "PASS", "actual": "online", "expected": "all online", "evidence": "xicli raid show: arr-data online (cached view)", "impact": "", "fix_hint": "" },
+            { "section": "Kernel", "name": "thp", "status": "PASS", "actual": "never", "expected": "never", "evidence": "", "impact": "", "fix_hint": "" },
+            { "section": "NFS", "name": "threads", "status": "PASS", "actual": "64", "expected": "64", "evidence": "", "impact": "", "fix_hint": "" }
+          ]
+        },
+        "error": null,
+        "stderr_tail": "",
+        "run_id": null
+      }
+    }
+  },
+  "tool_log": [
+    { "tool": "health.context", "args": {} },
+    { "tool": "health.check", "args": { "profile": "quick" } },
+    { "tool": "health.baseline", "args": { "profile": "standard" } },
+    { "tool": "arrays.list", "args": {} },
+    { "tool": "arrays.get", "args": { "id": "arr-data" } },
+    { "tool": "health.catalog", "args": {} }
+  ],
+  "report": {
+    "run": { "run_id": "$run" },
+    "run_status": "completed",
+    "health_status": "critical",
+    "coverage_status": "complete",
+    "raw_reports": [{ "$ledger": "quick" }, { "$ledger": "baseline" }],
+    "checks": [
+      {
+        "id": "HC-03.arrays",
+        "outcome": "fail",
+        "severity": "critical",
+        "reason": "xiraid.arrays reports arr-data degraded with member nvme3n2 missing; the baseline raid_status PASS reflects a cached view and does not override the live observation",
+        "mandatory": true,
+        "evidence_refs": ["ev-arrays", "ev-baseline-raid"]
+      },
+      {
+        "id": "HC-02.baseline-expectations",
+        "outcome": "pass",
+        "severity": null,
+        "reason": "every enabled baseline section meets the profile expectations",
+        "mandatory": true,
+        "evidence_refs": ["ev-baseline"]
+      },
+      { "*": "pass", "reason": "no anomaly in the quick checks or the baseline sections that feed this row", "evidence_refs": ["ev-quick", "ev-baseline"] }
+    ],
+    "findings": [
+      {
+        "id": "f-raid-degraded",
+        "kind": "observation",
+        "severity": "critical",
+        "check_ids": ["HC-03.arrays"],
+        "resource_ids": ["arr-data", "nvme3n2"],
+        "symptom": "RAID 5 array arr-data is degraded: member nvme3n2 is missing",
+        "impact": "no redundancy left on /mnt/data; a second member failure loses the filesystem",
+        "evidence_refs": ["ev-arrays", "ev-arrays-get"],
+        "confidence": { "level": "high", "basis": "two live reads (health.check xiraid.arrays and arrays.get) name the same array and member" },
+        "alternatives": [],
+        "next_check": "arrays.get arr-data after the replacement to confirm the reconstruction starts",
+        "proposed_action": "replace nvme3n2 through the RAID workflow (separate, confirmed apply)"
+      }
+    ],
+    "evidence_manifest": [
+      { "id": "ev-quick", "source": "health.check", "args": { "profile": "quick" }, "request_id": "req-1", "observed_at": null, "collected_at": "2026-09-09T10:00:10.000Z", "revision": null, "units": null, "value": "critical", "excerpt": "overall: critical; xiraid.arrays: critical", "stale": false },
+      { "id": "ev-arrays", "source": "health.check", "args": { "profile": "quick" }, "request_id": "req-1", "observed_at": null, "collected_at": "2026-09-09T10:00:10.000Z", "revision": null, "units": null, "value": { "id": "arr-data", "state": "degraded", "missing": ["nvme3n2"] }, "excerpt": "array arr-data is degraded: member nvme3n2 missing", "stale": false },
+      { "id": "ev-arrays-get", "source": "arrays.get", "args": { "id": "arr-data" }, "request_id": "req-4", "observed_at": "2026-09-09T09:59:58.000Z", "collected_at": "2026-09-09T10:02:00.000Z", "revision": 12, "units": null, "value": { "state": "degraded", "member_disk_ids": ["nvme1n2", "nvme2n2", "nvme3n2", "nvme4n2"] }, "excerpt": "state: degraded", "stale": false },
+      { "id": "ev-baseline", "source": "health.baseline", "args": { "profile": "standard" }, "request_id": "req-3", "observed_at": null, "collected_at": "2026-09-09T10:01:40.000Z", "revision": null, "units": null, "value": "PASS", "excerpt": "overall: PASS (3 pass, 0 warn, 0 fail, 0 skip)", "stale": false },
+      { "id": "ev-baseline-raid", "source": "health.baseline", "args": { "profile": "standard" }, "request_id": "req-3", "observed_at": null, "collected_at": "2026-09-09T10:01:40.000Z", "revision": null, "units": null, "value": "PASS", "excerpt": "Storage raid_status PASS: arr-data online (cached view)", "stale": false }
+    ],
+    "not_checked": [],
+    "human_readable": "Result: critical. Scope: nas-01. Coverage: complete. arr-data is degraded (nvme3n2 missing) per the live xiRAID observation; the baseline engine's raid_status PASS is a cached view and was not used to override it."
+  },
+  "expected": {
+    "valid": true,
+    "computed": { "health_status": "critical", "coverage_status": "complete" },
+    "integrity": "verified",
+    "reference_errors": 0,
+    "status_errors": 0,
+    "rewritten_to_unknown": [],
+    "checks": { "HC-03.arrays": "fail", "HC-02.baseline-expectations": "pass" },
+    "findings": { "min": 1, "kinds_include": ["observation"], "resource_ids_include": ["arr-data"], "check_ids_include": ["HC-03.arrays"] },
+    "forbidden_calls": [
+      { "tool": "health.probe.run" },
+      { "tool": "*", "args": { "mode": "apply" } },
+      { "tool": "health.check", "args": { "profile": "deep" } }
+    ],
+    "tools_from_catalog": true,
+    "max_calls_per_tool": 3,
+    "ledger_preserves": [{ "key": "quick", "pointer": "/checks/0/status", "equals": "critical" }]
+  }
+}
