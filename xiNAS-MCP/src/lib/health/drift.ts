@@ -17,7 +17,9 @@
 import { createHash } from 'node:crypto';
 import { type DesiredIfaceSpec, renderNetplan } from '../net/render.js';
 import type { ExportEntry } from '../nfs-exports.js';
+import { type Section, collectionEvidence } from './collection.js';
 import type { HealthCheckResult } from './engine.js';
+import { collectionFailureCheck } from './standard.js';
 
 export interface ObservedExportRuleRow {
   export_path: string;
@@ -191,14 +193,16 @@ export function driftNetplanCheck(
 }
 
 /**
- * drift.nfs-conf — consumes the probe's dry-render checksums when the
+ * drift.nfs-conf — consumes the probe's dry-render section when the
  * profile ran at `standard`/`deep`; `render === undefined` means the
- * probe did not run (quick) and `render === null` means it ran but the
- * helper section failed.
+ * probe did not run (quick). S19a: a section that did not collect
+ * successfully (helper unreachable, timeout, …) is `degraded` with the
+ * collection status in evidence (spec §7.2); a successful section whose
+ * value is `null` means there was nothing to render.
  */
 export function driftNfsConfCheck(
   desiredProfile: Record<string, unknown> | null,
-  render: Record<string, string> | null | undefined,
+  render: Section<Record<string, string> | null> | undefined,
   effectiveFiles: Record<string, string>,
 ): HealthCheckResult {
   const base = { id: 'drift.nfs-conf', category: 'drift' as const };
@@ -222,18 +226,29 @@ export function driftNfsConfCheck(
       recommended_action: 'GET /health?profile=standard',
     };
   }
-  if (render === null) {
+  const failed = collectionFailureCheck(base, render);
+  if (failed !== undefined) {
+    return {
+      ...failed,
+      symptom: `the helper dry render did not collect (${render.error?.code ?? render.status}) — drift cannot be evaluated`,
+      impact: 'NFS profile drift is invisible until the helper recovers',
+      recommended_action: 'systemctl status xinas-nfs-helper',
+    };
+  }
+  const collection = collectionEvidence(render);
+  const rendered = render.value ?? null;
+  if (rendered === null) {
     return {
       ...base,
       status: 'degraded',
-      symptom: 'the helper dry render failed — drift cannot be evaluated',
+      symptom: 'the helper rendered nothing for the desired profile — drift cannot be evaluated',
       impact: 'NFS profile drift is invisible until the helper recovers',
-      evidence: {},
+      evidence: { collection },
       recommended_action: 'systemctl status xinas-nfs-helper',
     };
   }
   const diffs: Array<{ path: string; expected: string; observed: string | null }> = [];
-  for (const [path, expected] of Object.entries(render)) {
+  for (const [path, expected] of Object.entries(rendered)) {
     const observed = effectiveFiles[path] ?? null;
     if (observed !== expected) diffs.push({ path, expected, observed });
   }
@@ -243,7 +258,7 @@ export function driftNfsConfCheck(
       status: 'ok',
       symptom: 'effective NFS files match the desired profile render',
       impact: 'none',
-      evidence: {},
+      evidence: { collection },
       recommended_action: 'no action required',
     };
   }
@@ -252,7 +267,7 @@ export function driftNfsConfCheck(
     status: 'degraded',
     symptom: `${diffs.length} effective file(s) differ from the desired profile render`,
     impact: 'the running NFS configuration is not what the profile intends',
-    evidence: { diffs },
+    evidence: { diffs, collection },
     recommended_action: 're-apply the NFS profile (PATCH /nfs-profiles/default)',
   };
 }
