@@ -389,6 +389,36 @@ export const CATALOG: CatalogEntry[] = [
         'filesystem and a PID1 loopback NFS mount of the first desired export)',
     },
   },
+  // S19b (spec §6, ADR-0018 §2): the validated run context an agentic
+  // health check starts from. KV-only, never calls the agent; mints a
+  // run_id into the in-memory ledger (or re-reads a known one).
+  {
+    ...read(
+      'health.context',
+      'GET',
+      '/health/context',
+      'Start (or re-read) an agentic health-check run: mints a run_id and returns what the ' +
+        'caller may run, the node and its linked topology, collector state, observation ' +
+        'freshness, the baseline profile catalog and the tools visible to this role. Reads KV ' +
+        'only — answers when the agent is down and says so. Pass the prompt targets to have ' +
+        'them resolved to resource kinds.',
+    ),
+    input_schema: {
+      type: 'object',
+      properties: {
+        run_id: {
+          type: 'string',
+          description:
+            'a run_id from an earlier health.context call to re-read it (unknown → new run + RUN_UNKNOWN)',
+        },
+        targets: {
+          type: 'string',
+          description: 'comma-separated resource ids to resolve (max 32)',
+        },
+      },
+      additionalProperties: false,
+    },
+  },
   // S19a (spec §9.1, ADR-0018 §4): ONE confirmed active probe. A direct
   // entry — no plan document — that is operator-rank, apply-class over MCP
   // and the first user of the S15 `confirmation: 'required'` hook: the

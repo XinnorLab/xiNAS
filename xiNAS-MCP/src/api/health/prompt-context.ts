@@ -26,9 +26,17 @@ import {
   sha256Hex,
 } from '../mcp/prompts/health-check.js';
 import { type ProfileCatalog, loadProfileCatalog } from './profiles.js';
+import { RunLedger } from './run-ledger.js';
 
 /** The check catalog version (spec §10); the catalog file lands with `health.catalog`. */
 export const AGENTIC_CATALOG_VERSION = '1';
+
+/** The api's cached last agent probe (spec §6.2 `collectors.last_probe`). */
+export interface LastProbe {
+  collected_at: string;
+  level: 'standard' | 'deep';
+  collectors: Record<string, string>;
+}
 
 export interface HealthPromptContext {
   config: ResolvedHealthPromptConfig;
@@ -43,6 +51,10 @@ export interface HealthPromptContext {
     catalog: string;
     report_schema: string;
   };
+  /** S19 §6.3: the in-memory run ledger `health.context` mints into. */
+  ledger: RunLedger;
+  /** Written by `GET /health` whenever the agent answered a standard/deep probe. */
+  lastProbe: LastProbe | null;
 }
 
 export interface HealthPromptDeps {
@@ -51,6 +63,8 @@ export interface HealthPromptDeps {
   loadProfiles?: (dir: string) => ProfileCatalog;
   /** Injectable for tests; defaults to `readFileSync(path, 'utf8')`. */
   readTemplate?: (path: string) => string;
+  /** Injectable clock for the ledger; defaults to `Date.now`. */
+  now?: () => number;
 }
 
 /** `available.*` of spec §5.4: installed handlers only — the catalog entry exists. */
@@ -115,5 +129,10 @@ export function buildHealthPromptContext(
     body,
     templateSha256,
     versions,
+    ledger: new RunLedger({
+      now: deps.now ?? (() => Date.now()),
+      ttlMs: resolved.limits.run_ttl_seconds * 1000,
+    }),
+    lastProbe: null,
   };
 }

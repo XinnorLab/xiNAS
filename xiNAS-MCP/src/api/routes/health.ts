@@ -27,6 +27,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { hostname } from 'node:os';
 import { Router } from 'express';
 import { QUICK_CHECKS } from '../../lib/health/checks.js';
 import {
@@ -55,9 +56,12 @@ import {
 import { PROVES, type ProbeKind } from '../../lib/health/probe-types.js';
 import { AgentRpcError } from '../agent-client.js';
 import type { ApiContext, RequestContext } from '../context.js';
+import type { Warning } from '../envelope.js';
 import { ApiException } from '../errors.js';
 import { gatherHealthFacts } from '../handlers/health-facts.js';
 import { getOrNull, sendOk } from '../handlers/reads.js';
+import { buildHealthContext, runUnknownWarning } from '../health/context.js';
+import { SERVER_INFO } from '../mcp/discover.js';
 import { queueConfirmationEvent } from '../mcp/confirmation/audit.js';
 import { argumentsHash } from '../mcp/confirmation/policy.js';
 import type { ConfirmationRecord } from '../mcp/confirmation/types.js';
@@ -164,6 +168,11 @@ export function healthRouter(ctx: ApiContext): Router {
           { profile },
         );
       }
+      // S19b §6.3: an optional run to record this report's digest under.
+      const runId =
+        typeof req.query.run_id === 'string' && req.query.run_id.length > 0
+          ? req.query.run_id
+          : null;
       const startedAt = new Date().toISOString();
       const gathered = gatherHealthFacts(ctx);
 
@@ -231,21 +240,102 @@ export function healthRouter(ctx: ApiContext): Router {
             if (section !== undefined) sources[name] = section.status;
           }
           collection = { agent: 'answered', sources };
+          // S19b §6.2: health.context reports the api's last agent probe.
+          if (ctx.healthPrompt !== undefined) {
+            ctx.healthPrompt.lastProbe = {
+              collected_at: new Date().toISOString(),
+              level,
+              collectors:
+                sections.collectors.status === 'success' && sections.collectors.value !== undefined
+                  ? sections.collectors.value
+                  : {},
+            };
+          }
           coverage = Object.values(sources).some((s) => s !== undefined && isCollectionFailure(s))
             ? 'partial'
             : 'complete';
         }
       }
 
-      sendOk(req, res, {
+      const completedAt = new Date().toISOString();
+      const result = {
         profile,
         started_at: startedAt,
-        completed_at: new Date().toISOString(),
+        completed_at: completedAt,
         overall: overallOf(checks),
         coverage_status: coverage,
         collection,
         checks,
+        ...(runId !== null ? { run_id: runId } : {}),
+      };
+      const warnings: Warning[] = [];
+      if (
+        runId !== null &&
+        (ctx.healthPrompt === undefined ||
+          !ctx.healthPrompt.ledger.record(runId, 'health.check', { profile }, result, completedAt))
+      ) {
+        warnings.push(runUnknownWarning(runId));
+      }
+      sendOk(req, res, result, [], warnings);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /**
+   * GET /health/context (S19b, spec §6) — the validated run context. KV,
+   * tracker and catalog only; never the agent. Mints a run into the
+   * in-memory ledger, or re-reads one this principal started; an unknown,
+   * expired or foreign run_id yields a new run plus a RUN_UNKNOWN warning
+   * (SAFE-04: a run must not fail because the api restarted).
+   */
+  r.get('/health/context', (req, res, next) => {
+    try {
+      const hp = ctx.healthPrompt;
+      if (hp === undefined) {
+        throw new ApiException(
+          'UNSUPPORTED',
+          'the agentic health prompt is disabled on this node (mcp.health_prompt.enabled: false)',
+          { reason: 'health_prompt_disabled' },
+        );
+      }
+      const rc = req.context as RequestContext;
+      const requested =
+        typeof req.query.run_id === 'string' && req.query.run_id.length > 0
+          ? req.query.run_id
+          : null;
+      const targets = parseTargetsQuery(req.query.targets);
+      const warnings: Warning[] = [];
+      let run = requested === null ? null : hp.ledger.get(requested);
+      if (run !== null && run.principal !== rc.principal) run = null;
+      if (run === null) {
+        if (requested !== null) warnings.push(runUnknownWarning(requested));
+        run = hp.ledger.mint({
+          principal: rc.principal,
+          role: rc.role,
+          versions: {
+            prompt: hp.versions.prompt,
+            template_sha256: hp.templateSha256,
+            policy: hp.versions.policy,
+            catalog: hp.versions.catalog,
+            report_schema: hp.versions.report_schema,
+            server: SERVER_INFO.version,
+          },
+          limits: hp.config.limits,
+        });
+      }
+      const body = buildHealthContext({
+        state: ctx.state,
+        ...(ctx.tracker !== undefined ? { tracker: ctx.tracker } : {}),
+        healthPrompt: hp,
+        controllerId: ctx.config.controller_id,
+        allowApply: ctx.config.mcp?.allow_apply === true,
+        identity: { principal: rc.principal, role: rc.role, client_type: rc.client_type },
+        run,
+        targets,
+        hostname: hostname(),
       });
+      sendOk(req, res, body, [], warnings);
     } catch (err) {
       next(err);
     }
@@ -317,6 +407,25 @@ export function healthRouter(ctx: ApiContext): Router {
           throw new ApiException('NOT_FOUND', `no share ${target}`, { target });
         }
         path = share.value.spec.path;
+      }
+
+      // S19b §9.5: the per-run probe budget, counted BEFORE the confirmation
+      // is consumed and before the agent is asked — an exhausted run must not
+      // burn a confirmation. An unknown run is accepted with a warning.
+      const warnings: Warning[] = [];
+      const hp = ctx.healthPrompt;
+      if (runId !== null) {
+        const max = hp?.config.limits.probes_per_run ?? 0;
+        const verdict = hp === undefined ? 'unknown' : hp.ledger.startProbe(runId, max);
+        if (verdict === 'exhausted') {
+          throw new ApiException(
+            'PRECONDITION_FAILED',
+            `this run has used its probe budget (probes_per_run: ${max})`,
+            { reason: 'probe_budget_exhausted', run_id: runId, probes_per_run: max },
+            'Finish the diagnosis with the probes already taken, or start a new run with health.context.',
+          );
+        }
+        if (verdict === 'unknown') warnings.push(runUnknownWarning(runId));
       }
 
       // S15 §8.3 analogue for a direct entry: verify, then consume BEFORE running.
@@ -399,7 +508,7 @@ export function healthRouter(ctx: ApiContext): Router {
         throw err;
       }
       const { probe: _probe, path: _path, ...rest } = outcome;
-      sendOk(req, res, {
+      const result = {
         probe: kind,
         target,
         path,
@@ -407,11 +516,49 @@ export function healthRouter(ctx: ApiContext): Router {
         ...rest,
         proves: PROVES[kind],
         ...(confirmation !== undefined ? { confirmation_id: confirmation.confirmation_id } : {}),
-      });
+      };
+      if (runId !== null && hp !== undefined) {
+        hp.ledger.record(
+          runId,
+          PROBE_TOOL,
+          { probe: kind, target, timeout_s: timeoutS },
+          result,
+          typeof rest.completed_at === 'string' ? rest.completed_at : new Date().toISOString(),
+        );
+      }
+      sendOk(req, res, result, [], warnings);
     } catch (err) {
       next(err);
     }
   });
 
   return r;
+}
+
+const TARGET_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
+const TARGETS_MAX = 32;
+
+/** `?targets=a,b,c` — the prompt's `targets` argument, same grammar (spec §5.3). */
+function parseTargetsQuery(raw: unknown): string[] {
+  if (raw === undefined) return [];
+  if (typeof raw !== 'string') {
+    throw new ApiException('INVALID_ARGUMENT', 'targets must be one comma-separated string');
+  }
+  const ids = raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  if (ids.length > TARGETS_MAX) {
+    throw new ApiException('INVALID_ARGUMENT', `targets: at most ${TARGETS_MAX} ids`, {
+      count: ids.length,
+    });
+  }
+  const seen = new Set<string>();
+  for (const id of ids) {
+    if (!TARGET_RE.test(id)) {
+      throw new ApiException('INVALID_ARGUMENT', `targets: invalid resource id '${id}'`, { id });
+    }
+    seen.add(id);
+  }
+  return [...seen];
 }
