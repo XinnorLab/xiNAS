@@ -264,9 +264,12 @@ is live** (typed collection status on `health.probe`/`GET /health`, the
 hardened probe host, `health.probe.run`); **S19b is live** (the
 `xinas_health_check` prompt on both eras and the `prompts` capability
 iff `mcp.health_prompt.enabled`, `health.context` with the in-memory run
-ledger and `probes_per_run`, `health.catalog`); **S19c–d are design
-only** — do not describe `health.baseline`, the report schema or the
-report validator as live. The spec set under `docs/MCP/`
+ledger and `probes_per_run`, `health.catalog`); **S19c is live**
+(`health.baseline` over the agent's sandboxed Python engine subprocess,
+`health.report_schema`, `health.report.validate` with the deterministic
+verdict and run-ledger integrity, the engine's SKIP row for checker-less
+sections and `--sections`); **S19d (acceptance fixtures) is design
+only**. The spec set under `docs/MCP/`
 describes the legacy server and is kept for reference only — do not treat
 it as current.
 

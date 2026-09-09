@@ -13,7 +13,12 @@ on behalf of API callers.
 2. **Config directory + file** — creates `/etc/xinas-agent/` (mode `0755 root:root`)
    and templates `/etc/xinas-agent/config.json` (mode `0640 root:root`) from
    `xinas-agent-config.json.j2`. Contains socket paths, controller-id-path,
-   agent-token-path, and heartbeat interval.
+   agent-token-path, and heartbeat interval. The optional `health_baseline`
+   block (`python`, `module_root`, `log_dir`, `profiles_dir`; S19c) is not
+   rendered — the agent's built-in defaults (`/opt/xiNAS/venv/bin/python3`,
+   `/opt/xiNAS`, `/var/log/xinas/healthcheck`,
+   `/opt/xiNAS/healthcheck_profiles`) match this role's layout; add it by
+   hand only to relocate the baseline engine.
 
 3. **Systemd unit install** — copies `xinas-agent.service` from the repo checkout
    (`{{ xinas_agent_repo_path }}/xinas-agent.service`) to

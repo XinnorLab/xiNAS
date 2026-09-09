@@ -307,10 +307,13 @@ probe runs). **Live since S19b (2026-09-09):** `health.context`
 (`GET /health/context`; mints or re-reads a run in the api's in-memory
 ledger, KV-only) and `health.catalog` (`GET /health/catalog`; the check
 catalog, static data), both viewer reads; `health.check` and
-`health.probe.run` accept the run's `run_id`. **Design, not yet
-implemented (S19c):** `health.report_schema`, `health.baseline` (viewer
-reads) and `health.report.validate` (a viewer `direct` POST with no side
-effects). Their ranks and gates are the §13 table of
+`health.probe.run` accept the run's `run_id`. **Live since S19c (2026-09-09):** `health.baseline`
+(`GET /health/baseline`; the Python engine as a read-only agent
+subprocess, cached per profile) and `health.report_schema`
+(`GET /health/report-schema`), viewer reads; `health.report.validate`
+(`POST /health/report/validate`; a viewer `direct` POST with no side
+effects — `requires_mcp_apply: false`, no confirmation, the arguments
+are the report itself). Their ranks and gates are the §13 table of
 `s19-mcp-health-prompt-spec.md`; the generation invariant below applies
 to them unchanged. The `/mcp` transport also serves the
 `xinas_health_check` prompt (`prompts/list`, `prompts/get`) on both eras

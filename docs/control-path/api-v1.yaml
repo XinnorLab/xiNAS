@@ -1749,6 +1749,11 @@ components:
           properties:
             dir: { type: string }
             dir_present: { type: boolean }
+            sections_source:
+              type: string
+              enum: [static, engine]
+              description: S19c — `engine` once a `GET /health/baseline` call has obtained the engine's `--sections` list; `static` before that.
+            engine_version: { type: string, nullable: true }
             profiles:
               type: array
               items:
@@ -1869,6 +1874,109 @@ components:
         no_source:
           type: boolean
           description: '`true` = listed for honesty; no producer exists today.'
+
+    HealthBaselineResult:
+      description: S19 §8.4 — one baseline engine run (or its cached result).
+      type: object
+      required: [profile, collection, engine, report, error, stderr_tail, run_id]
+      properties:
+        profile:
+          type: object
+          properties:
+            name: { type: string }
+            path: { type: string, nullable: true }
+            sha256: { type: string, nullable: true }
+            timeout_seconds:
+              type: integer
+              description: The effective timeout — the profile's own `timeout_seconds` capped per profile.
+            sections_without_checker:
+              type: array
+              description: Enabled sections the engine cannot check; from the engine's `--sections` list once known, else the static copy.
+              items: { type: string }
+        collection:
+          type: object
+          properties:
+            status: { type: string, enum: [success, error, timeout, not_supported] }
+            collected_at: { type: string, format: date-time }
+            duration_ms: { type: integer }
+            from_cache: { type: boolean }
+            age_s: { type: integer, description: Seconds since the api received the cached result; 0 when not from cache. }
+        engine:
+          type: object
+          nullable: true
+          properties:
+            module: { type: string }
+            version: { type: string, nullable: true }
+        report:
+          type: object
+          nullable: true
+          description: The engine's JSON verbatim (`metadata`, `overall`, `summary`, `checks[]`); null unless `collection.status` is `success`.
+          additionalProperties: true
+        error:
+          type: object
+          nullable: true
+          properties:
+            code: { type: string }
+            message: { type: string }
+        stderr_tail: { type: string, description: The last 4 KiB of the engine's stderr. }
+        run_id: { type: string, nullable: true }
+
+    AgenticReportValidation:
+      description: S19 §11.2 — the validator's verdict over one report.
+      type: object
+      required: [valid, run_id, schema_errors, reference_errors, integrity, computed, status_errors, rewritten_to_unknown, report_digest]
+      properties:
+        valid: { type: boolean }
+        run_id:
+          type: string
+          nullable: true
+          description: The report's `run.run_id`; null when schema errors prevented reading it.
+        schema_errors:
+          type: array
+          items:
+            type: object
+            properties:
+              path: { type: string, description: JSON pointer into the report. }
+              message: { type: string }
+        reference_errors:
+          type: array
+          items:
+            type: object
+            properties:
+              path: { type: string }
+              ref: { type: string }
+              message: { type: string }
+        integrity:
+          type: object
+          properties:
+            status: { type: string, enum: [verified, mismatch, unverifiable] }
+            checked: { type: integer, description: Raw reports from ledger-writing tools that were checked. }
+            mismatches:
+              type: array
+              items:
+                type: object
+                properties:
+                  raw_report_index: { type: integer }
+                  reason: { type: string, enum: [report_rehash_mismatch, not_in_ledger, digest_mismatch] }
+                  expected_digest: { type: string, nullable: true }
+                  actual_digest: { type: string }
+        computed:
+          type: object
+          nullable: true
+          description: The deterministic verdict (S19 §11.3); null when the schema failed.
+          properties:
+            health_status: { type: string, enum: [ok, warning, degraded, critical, unknown] }
+            coverage_status: { type: string, enum: [complete, partial, none] }
+        status_errors:
+          type: array
+          items: { type: string }
+        rewritten_to_unknown:
+          type: array
+          description: Check ids whose `not_applicable` outcome cited no declared-absent component or scope exclusion (REPORT-02).
+          items: { type: string }
+        report_digest:
+          type: string
+          description: '`sha256:<hex>` over the canonical JSON of the body; bound into the audit row''s result hash.'
 
     McpConfirmation:
       description: |
@@ -3296,6 +3404,129 @@ paths:
                   - type: object
                     properties:
                       result: { $ref: '#/components/schemas/AgenticCheckCatalog' }
+        '403': { $ref: '#/components/responses/PermissionDenied' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /health/baseline:
+    get:
+      tags: [health]
+      operationId: runHealthBaseline
+      summary: Run the Python baseline engine for one profile (S19 §8).
+      description: |
+        The agent runs `python3 -m xinas_menu.health <profile> <log_dir>
+        --json --no-save` as a capped, sandboxed, read-only subprocess
+        (the profile must resolve inside the profiles directory) and the
+        engine's JSON report is returned verbatim. The timeout is
+        `min(profile.timeout_seconds, mcp.health_prompt.baseline.timeout_s[profile])`
+        (60/180/300 s for quick/standard/deep; a custom profile gets the
+        standard cap). With `max_age_s > 0` the last successful result of
+        that profile is served if it is younger (`from_cache: true`, the
+        original `collected_at`). Never fails because the agent is down:
+        `collection.status` and `error.code` (`EXECUTOR_UNAVAILABLE`,
+        `TIMEOUT`, `EXIT_<n>`, `PARSE`, `MODULE_ABSENT`, `ENOENT`, …) say
+        what happened and `report` is null. A `run_id` records the result
+        digest in the run ledger (`RUN_UNKNOWN` warning otherwise).
+        Viewer rank. `UNSUPPORTED` when `mcp.health_prompt.enabled` is
+        false. Coverage differs from `GET /health`; neither substitutes
+        for the other.
+      parameters:
+        - in: query
+          name: profile
+          schema: { type: string, default: standard }
+          description: A profile name from the startup catalog (`INVALID_ARGUMENT` names the known ones otherwise).
+        - in: query
+          name: max_age_s
+          schema: { type: integer, minimum: 0, maximum: 3600, default: 0 }
+        - in: query
+          name: run_id
+          schema: { type: string }
+      responses:
+        '200':
+          description: The engine ran, was served from cache, or could not run (see `collection.status`).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      result: { $ref: '#/components/schemas/HealthBaselineResult' }
+        '400': { $ref: '#/components/responses/InvalidArgument' }
+        '403': { $ref: '#/components/responses/PermissionDenied' }
+        '422': { $ref: '#/components/responses/Unsupported' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /health/report-schema:
+    get:
+      tags: [health]
+      operationId: getHealthReportSchema
+      summary: The agentic report contract (S19 §11.1).
+      description: |
+        The JSON Schema (2020-12, `report_schema_version` "1") an agentic
+        health report must conform to, served verbatim. `POST
+        /health/report/validate` checks a report against it. Viewer rank.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      result:
+                        type: object
+                        description: A JSON Schema document (draft 2020-12).
+                        additionalProperties: true
+        '403': { $ref: '#/components/responses/PermissionDenied' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /health/report/validate:
+    post:
+      tags: [health]
+      operationId: validateHealthReport
+      summary: Validate an agentic health report (S19 §11.2–§11.4).
+      description: |
+        A pure computation over the report in the body, nothing stored
+        (DATA-06): schema errors against `GET /health/report-schema`;
+        reference errors (every `evidence_refs` entry must be an
+        `evidence_manifest` id, every check id a catalog row);
+        the deterministic verdict — `health_status` and `coverage_status`
+        computed from the catalog's rows that are mandatory for the
+        declared scope (a `not_applicable` row must cite a declared-absent
+        component or a scope exclusion in its reason, else it counts as
+        `unknown`), which the report's own values must match; and raw-report
+        integrity against the run ledger: every `raw_reports` entry from a
+        ledger-writing tool (`health.check`, `health.baseline`,
+        `health.probe.run`) must re-hash to its `digest` and match a ledger
+        row for the same tool and arguments (`verified`), else `mismatch`;
+        an unknown or expired `run.run_id` is `unverifiable` (plus a
+        `RUN_UNKNOWN` warning) and does not invalidate the report.
+        `valid` is true iff there are no schema, reference or status errors
+        and integrity is not `mismatch`. Viewer rank; over MCP it is a
+        `direct` tool that needs no `mcp.allow_apply` and no confirmation.
+        The body is subject to the api-wide 1 MB JSON limit.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: The report (see `GET /health/report-schema`).
+              additionalProperties: true
+      responses:
+        '200':
+          description: 'The verdict (a report that fails validation is still a 200 with `valid: false`).'
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      result: { $ref: '#/components/schemas/AgenticReportValidation' }
+        '400': { $ref: '#/components/responses/InvalidArgument' }
         '403': { $ref: '#/components/responses/PermissionDenied' }
         '500': { $ref: '#/components/responses/Internal' }
 
