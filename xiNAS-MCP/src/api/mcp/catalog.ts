@@ -419,6 +419,14 @@ export const CATALOG: CatalogEntry[] = [
       additionalProperties: false,
     },
   },
+  // S19b (spec §10): the versioned check catalog, served verbatim.
+  read(
+    'health.catalog',
+    'GET',
+    '/health/catalog',
+    'The versioned agentic check catalog (HC-01..HC-12): per check its producers, outcome ' +
+      'and severity maps, side effects, cost and which rows have no producer today. Static data.',
+  ),
   // S19a (spec §9.1, ADR-0018 §4): ONE confirmed active probe. A direct
   // entry — no plan document — that is operator-rank, apply-class over MCP
   // and the first user of the S15 `confirmation: 'required'` hook: the

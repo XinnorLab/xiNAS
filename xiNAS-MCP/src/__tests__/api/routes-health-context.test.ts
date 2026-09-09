@@ -2,6 +2,7 @@ import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { declaredAbsent, permittedFor } from '../../api/health/context.js';
 import { digestOf } from '../../api/health/run-ledger.js';
+import { AGENTIC_CATALOG } from '../../lib/health/agentic-catalog.js';
 import { ADMIN_TOKEN, OPERATOR_TOKEN, VIEWER_TOKEN, buildTestApp } from './_helpers.js';
 
 const T1 = '2026-09-09T09:00:00.000Z';
@@ -234,6 +235,16 @@ describe('GET /api/v1/health/context (S19b)', () => {
     const admin = (await get(ADMIN_TOKEN)).body.result;
     expect(admin.run.permitted.probe_run).toBe('allowed');
     expect(admin.run.role).toBe('admin');
+  });
+
+  it('GET /health/catalog serves the versioned check catalog verbatim to a viewer', async () => {
+    const res = await request(setup.app)
+      .get('/api/v1/health/catalog')
+      .set('Authorization', VIEWER_TOKEN);
+    expect(res.status).toBe(200);
+    expect(res.body.result).toEqual(AGENTIC_CATALOG);
+    expect(res.body.result.version).toBe('1');
+    expect(res.body.result.checks.length).toBeGreaterThan(10);
   });
 
   it('answers UNSUPPORTED when the prompt feature is disabled', async () => {

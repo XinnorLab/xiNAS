@@ -29,6 +29,7 @@
 import { randomUUID } from 'node:crypto';
 import { hostname } from 'node:os';
 import { Router } from 'express';
+import { AGENTIC_CATALOG } from '../../lib/health/agentic-catalog.js';
 import { QUICK_CHECKS } from '../../lib/health/checks.js';
 import {
   type CollectionStatus,
@@ -336,6 +337,15 @@ export function healthRouter(ctx: ApiContext): Router {
         hostname: hostname(),
       });
       sendOk(req, res, body, [], warnings);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /** GET /health/catalog (S19b, spec §10) — the check catalog, verbatim. */
+  r.get('/health/catalog', (req, res, next) => {
+    try {
+      sendOk(req, res, AGENTIC_CATALOG);
     } catch (err) {
       next(err);
     }
