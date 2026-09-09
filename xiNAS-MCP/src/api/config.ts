@@ -129,6 +129,8 @@ export interface ApiConfig {
     confirmation?: McpConfirmationConfig;
     /** S17 §10 — operational controls for the event journal and subscriptions. */
     subscriptions?: McpSubscriptionsConfig;
+    /** S19 §12.1 — the xinas_health_check prompt, its limits and the baseline profile dir. */
+    health_prompt?: McpHealthPromptConfig;
   };
   /**
    * S2.1 worker pool (s2-task-envelope-spec §5.3). `max_inflight` caps the
@@ -158,6 +160,7 @@ export function loadConfig(opts: { configPath?: string; inline?: ApiConfig } = {
     validateTasksSection(opts.inline);
     validateMcpSection(opts.inline);
     validateSubscriptionsSection(opts.inline);
+    validateHealthPromptSection(opts.inline);
     validateTokensSection(opts.inline);
     return opts.inline;
   }
@@ -172,6 +175,7 @@ export function loadConfig(opts: { configPath?: string; inline?: ApiConfig } = {
   validateTasksSection(config);
   validateMcpSection(config);
   validateSubscriptionsSection(config);
+  validateHealthPromptSection(config);
 
   if (config.internalTokensPath && existsSync(config.internalTokensPath)) {
     const internalRaw = readFileSync(config.internalTokensPath, 'utf8');
@@ -605,5 +609,201 @@ function validateSubscriptionsSection(config: ApiConfig): void {
   }
   if (r.nfs_lock_threshold.enter > 0 && r.nfs_lock_threshold.clear >= r.nfs_lock_threshold.enter) {
     throw new Error('mcp.subscriptions.nfs_lock_threshold: clear must be < enter when enabled');
+  }
+}
+
+// ── S19 §12.1 — mcp.health_prompt ───────────────────────────────────────────
+
+export type ProbePolicy = 'observe_only' | 'bounded_active';
+
+/** Budgets the prompt reports; xiNAS enforces only the two probe counters (spec §9.5). */
+export interface HealthPromptLimits {
+  analysis_seconds: number;
+  tool_calls: number;
+  roles: number;
+  /** Exactly 1: one probe in flight per agent, any kind. */
+  active_probes_per_node: 1;
+  probes_per_run: number;
+  retries: number;
+  run_ttl_seconds: number;
+}
+
+/** Every field optional; defaults in HEALTH_PROMPT_DEFAULTS. */
+export interface McpHealthPromptConfig {
+  enabled?: boolean;
+  /** Operator override of the prompt body (spec §12.1); absolute path. */
+  template_path?: string;
+  policy_version?: string;
+  probe_policy_max?: ProbePolicy;
+  limits?: Partial<HealthPromptLimits>;
+  baseline?: {
+    profiles_dir?: string;
+    timeout_s?: Partial<Record<'quick' | 'standard' | 'deep', number>>;
+    max_age_s_default?: number;
+  };
+}
+
+export interface ResolvedHealthPromptConfig {
+  enabled: boolean;
+  template_path: string | null;
+  policy_version: string;
+  probe_policy_max: ProbePolicy;
+  limits: HealthPromptLimits;
+  baseline: {
+    profiles_dir: string;
+    timeout_s: { quick: number; standard: number; deep: number };
+    max_age_s_default: number;
+  };
+}
+
+export const HEALTH_PROMPT_DEFAULTS: ResolvedHealthPromptConfig = {
+  enabled: true,
+  template_path: null,
+  policy_version: '1',
+  probe_policy_max: 'observe_only',
+  limits: {
+    analysis_seconds: 180,
+    tool_calls: 40,
+    roles: 3,
+    active_probes_per_node: 1,
+    probes_per_run: 4,
+    retries: 2,
+    run_ttl_seconds: 900,
+  },
+  baseline: {
+    profiles_dir: '/opt/xiNAS/healthcheck_profiles',
+    timeout_s: { quick: 60, standard: 180, deep: 300 },
+    max_age_s_default: 0,
+  },
+};
+
+export function resolveHealthPromptConfig(config: ApiConfig): ResolvedHealthPromptConfig {
+  const c = config.mcp?.health_prompt ?? {};
+  const d = HEALTH_PROMPT_DEFAULTS;
+  const limits = c.limits ?? {};
+  const baseline = c.baseline ?? {};
+  return {
+    enabled: c.enabled ?? d.enabled,
+    template_path: c.template_path ?? d.template_path,
+    policy_version: c.policy_version ?? d.policy_version,
+    probe_policy_max: c.probe_policy_max ?? d.probe_policy_max,
+    limits: {
+      analysis_seconds: limits.analysis_seconds ?? d.limits.analysis_seconds,
+      tool_calls: limits.tool_calls ?? d.limits.tool_calls,
+      roles: limits.roles ?? d.limits.roles,
+      active_probes_per_node: 1,
+      probes_per_run: limits.probes_per_run ?? d.limits.probes_per_run,
+      retries: limits.retries ?? d.limits.retries,
+      run_ttl_seconds: limits.run_ttl_seconds ?? d.limits.run_ttl_seconds,
+    },
+    baseline: {
+      profiles_dir: baseline.profiles_dir ?? d.baseline.profiles_dir,
+      timeout_s: { ...d.baseline.timeout_s, ...(baseline.timeout_s ?? {}) },
+      max_age_s_default: baseline.max_age_s_default ?? d.baseline.max_age_s_default,
+    },
+  };
+}
+
+function hpRange(name: string, value: unknown, min: number, max: number): void {
+  if (value === undefined) return;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max) {
+    throw new Error(
+      `mcp.health_prompt.${name} must be an integer in [${min}, ${max}], got ${JSON.stringify(value)}`,
+    );
+  }
+}
+
+const HP_KEYS = new Set<string>([
+  'enabled',
+  'template_path',
+  'policy_version',
+  'probe_policy_max',
+  'limits',
+  'baseline',
+]);
+const HP_LIMIT_KEYS = new Set<string>([
+  'analysis_seconds',
+  'tool_calls',
+  'roles',
+  'active_probes_per_node',
+  'probes_per_run',
+  'retries',
+  'run_ttl_seconds',
+]);
+const HP_BASELINE_KEYS = new Set<string>(['profiles_dir', 'timeout_s', 'max_age_s_default']);
+const HP_PROFILE_KEYS = new Set<string>(['quick', 'standard', 'deep']);
+
+/**
+ * S19 §12.1: a bad value fails at load, before any listener exists. None
+ * of these keys can lower a rank, bypass mcp.allow_apply or confirmation,
+ * or change the validator (CFG-04) — they bound text, budgets and paths.
+ */
+export function validateHealthPromptSection(config: ApiConfig): void {
+  const c = config.mcp?.health_prompt;
+  if (c === undefined) return;
+  for (const key of Object.keys(c)) {
+    if (!HP_KEYS.has(key)) throw new Error(`mcp.health_prompt: unknown key ${key}`);
+  }
+  if (c.enabled !== undefined && typeof c.enabled !== 'boolean') {
+    throw new Error('mcp.health_prompt.enabled must be a boolean');
+  }
+  if (c.template_path !== undefined) {
+    if (typeof c.template_path !== 'string' || !c.template_path.startsWith('/')) {
+      throw new Error('mcp.health_prompt.template_path must be an absolute path');
+    }
+  }
+  if (c.policy_version !== undefined) {
+    if (typeof c.policy_version !== 'string' || !/^[A-Za-z0-9.+-]{1,32}$/.test(c.policy_version)) {
+      throw new Error(
+        'mcp.health_prompt.policy_version must match ^[A-Za-z0-9.+-]{1,32}$ (no spaces)',
+      );
+    }
+  }
+  if (
+    c.probe_policy_max !== undefined &&
+    c.probe_policy_max !== 'observe_only' &&
+    c.probe_policy_max !== 'bounded_active'
+  ) {
+    throw new Error(
+      "mcp.health_prompt.probe_policy_max must be 'observe_only' or 'bounded_active'",
+    );
+  }
+  if (c.limits !== undefined) {
+    for (const key of Object.keys(c.limits)) {
+      if (!HP_LIMIT_KEYS.has(key)) throw new Error(`mcp.health_prompt.limits: unknown key ${key}`);
+    }
+    hpRange('limits.analysis_seconds', c.limits.analysis_seconds, 30, 3600);
+    hpRange('limits.tool_calls', c.limits.tool_calls, 5, 500);
+    hpRange('limits.roles', c.limits.roles, 1, 8);
+    hpRange('limits.active_probes_per_node', c.limits.active_probes_per_node, 1, 1);
+    hpRange('limits.probes_per_run', c.limits.probes_per_run, 0, 16);
+    hpRange('limits.retries', c.limits.retries, 0, 5);
+    hpRange('limits.run_ttl_seconds', c.limits.run_ttl_seconds, 300, 7200);
+  }
+  if (c.baseline !== undefined) {
+    for (const key of Object.keys(c.baseline)) {
+      if (!HP_BASELINE_KEYS.has(key)) {
+        throw new Error(`mcp.health_prompt.baseline: unknown key ${key}`);
+      }
+    }
+    if (c.baseline.profiles_dir !== undefined) {
+      if (typeof c.baseline.profiles_dir !== 'string' || !c.baseline.profiles_dir.startsWith('/')) {
+        throw new Error('mcp.health_prompt.baseline.profiles_dir must be an absolute path');
+      }
+    }
+    if (c.baseline.timeout_s !== undefined) {
+      for (const key of Object.keys(c.baseline.timeout_s)) {
+        if (!HP_PROFILE_KEYS.has(key)) {
+          throw new Error(`mcp.health_prompt.baseline.timeout_s: unknown key ${key}`);
+        }
+        hpRange(
+          `baseline.timeout_s.${key}`,
+          (c.baseline.timeout_s as Record<string, unknown>)[key],
+          10,
+          900,
+        );
+      }
+    }
+    hpRange('baseline.max_age_s_default', c.baseline.max_age_s_default, 0, 3600);
   }
 }
