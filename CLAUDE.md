@@ -257,7 +257,11 @@ era), `docs/control-path/s15-mcp-mrtr-confirmation-spec.md` (apply
 confirmation), `docs/control-path/s16-mcp-tasks-spec.md` (the
 `io.modelcontextprotocol/tasks` extension — task handles for long
 operations) and `docs/control-path/s17-mcp-subscriptions-spec.md`
-(Resources + `subscriptions/listen` operational event feeds). The spec set under `docs/MCP/`
+(Resources + `subscriptions/listen` operational event feeds).
+`docs/control-path/s19-mcp-health-prompt-spec.md` with ADR-0018 (the
+`xinas_health_check` prompt and the agentic health-check tools) is a
+**design under validation, not yet implemented** — do not describe its
+tools or the `prompts` capability as live. The spec set under `docs/MCP/`
 describes the legacy server and is kept for reference only — do not treat
 it as current.
 
