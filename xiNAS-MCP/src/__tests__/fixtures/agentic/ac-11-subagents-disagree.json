@@ -1,0 +1,83 @@
+{
+  "id": "AC-11",
+  "title": "Sub-agents contradict each other and one is unavailable: the conflict and the partial run are visible, existing findings are not lost",
+  "scope": "node",
+  "declared_absent": [],
+  "ledger": {
+    "quick": {
+      "tool": "health.check",
+      "args": { "profile": "quick" },
+      "collected_at": "2026-09-09T10:00:10.000Z",
+      "report": {
+        "profile": "quick",
+        "started_at": "2026-09-09T10:00:09.000Z",
+        "completed_at": "2026-09-09T10:00:10.000Z",
+        "overall": "warning",
+        "coverage_status": "complete",
+        "collection": { "agent": "not_needed", "sources": {} },
+        "checks": [
+          { "id": "xiraid.arrays", "category": "xiraid", "status": "warning", "symptom": "array arr-data is reconstructing (42%)", "impact": "reduced redundancy until the reconstruction completes", "evidence": { "arrays": [{ "id": "arr-data", "state": "reconstructing", "progress": 42 }], "collection": { "status": "success", "source": "kv", "observed_at": null } }, "recommended_action": "wait for the reconstruction" }
+        ]
+      }
+    }
+  },
+  "tool_log": [
+    { "tool": "health.context", "args": {} },
+    { "tool": "health.check", "args": { "profile": "quick" } },
+    { "tool": "arrays.get", "args": { "id": "arr-data" } },
+    { "tool": "network.interfaces.list", "args": {} }
+  ],
+  "report": {
+    "run": {
+      "run_id": "$run",
+      "execution": {
+        "mode": "subagents",
+        "roles_ran": ["storage", "network"],
+        "model": { "provider": "example", "name": "model-x" },
+        "budget": { "tool_calls": 4, "elapsed_seconds": 150 },
+        "errors": [{ "stage": "system role", "message": "budget exhausted before the system role started" }]
+      }
+    },
+    "run_status": "partial",
+    "health_status": "warning",
+    "coverage_status": "partial",
+    "raw_reports": [{ "$ledger": "quick" }],
+    "checks": [
+      { "id": "HC-03.arrays", "outcome": "warn", "severity": "warning", "reason": "arr-data is reconstructing at 42% (storage role); one member was replaced", "mandatory": true, "evidence_refs": ["ev-arrays"] },
+      { "id": "HC-03.rebuild-progress", "outcome": "unknown", "severity": null, "reason": "the storage role read 42% at 10:00:10 and the network role's copy of arrays.get read 42% at 10:02:30 — the roles disagree on whether that is stalled or not; two identical samples 140 s apart do not settle it", "mandatory": false, "evidence_refs": ["ev-arrays", "ev-arrays-get"] },
+      { "id": "HC-08.host-services", "outcome": "unknown", "severity": null, "reason": "the system role did not run (budget exhausted); systemd and tuning were not evaluated", "mandatory": true, "evidence_refs": [] },
+      { "id": "HC-10.recent-changes", "outcome": "unknown", "severity": null, "reason": "the system role did not run; audit and history were not read", "mandatory": true, "evidence_refs": [] },
+      { "*": "pass", "reason": "no anomaly in the quick checks that feed this row (storage and network roles)", "evidence_refs": ["ev-quick"] }
+    ],
+    "findings": [
+      { "id": "f-reconstruction", "kind": "observation", "severity": "warning", "check_ids": ["HC-03.arrays"], "resource_ids": ["arr-data"], "symptom": "arr-data is reconstructing (42%)", "impact": "reduced redundancy until it completes", "evidence_refs": ["ev-arrays"], "confidence": { "level": "high", "basis": "the live array state names the reconstruction" }, "alternatives": [], "next_check": "arrays.get arr-data later for the progress", "proposed_action": null },
+      { "id": "f-stall-conflict", "kind": "conflict", "severity": "warning", "check_ids": ["HC-03.rebuild-progress"], "resource_ids": ["arr-data"], "symptom": "the storage role calls the reconstruction healthy at 42%; the network role reads the same 42% two minutes later and calls it stalled", "impact": "if stalled, redundancy is not being restored", "evidence_refs": ["ev-arrays", "ev-arrays-get"], "confidence": { "level": "low", "basis": "two samples 140 s apart at the same value; xiRAID updates progress in coarse steps" }, "alternatives": ["progress is reported in coarse steps and has not ticked yet", "the reconstruction is stalled on a failing member"], "next_check": "read the xinas://events/raid/progress feed for a third point, or arrays.get after 10 minutes", "proposed_action": null },
+      { "id": "f-system-role-gap", "kind": "data_gap", "severity": null, "check_ids": ["HC-08.host-services", "HC-10.recent-changes"], "resource_ids": [], "symptom": "the system role never ran", "impact": "services, tuning and recent changes are unchecked", "evidence_refs": [], "confidence": { "level": "high", "basis": "run.execution.errors records the budget exhaustion" }, "alternatives": [], "next_check": "rerun with a larger budget or sequentially", "proposed_action": null }
+    ],
+    "evidence_manifest": [
+      { "id": "ev-quick", "source": "health.check", "args": { "profile": "quick" }, "request_id": "req-2", "observed_at": null, "collected_at": "2026-09-09T10:00:10.000Z", "revision": null, "units": null, "value": "warning", "excerpt": "overall: warning; xiraid.arrays: reconstructing 42%", "stale": false },
+      { "id": "ev-arrays", "source": "health.check", "args": { "profile": "quick" }, "request_id": "req-2", "observed_at": null, "collected_at": "2026-09-09T10:00:10.000Z", "revision": null, "units": "percent", "value": 42, "excerpt": "arr-data reconstructing 42% at 10:00:10", "stale": false },
+      { "id": "ev-arrays-get", "source": "arrays.get", "args": { "id": "arr-data" }, "request_id": "req-3", "observed_at": "2026-09-09T10:02:30.000Z", "collected_at": "2026-09-09T10:02:31.000Z", "revision": 21, "units": "percent", "value": 42, "excerpt": "arr-data reconstructing 42% at 10:02:30", "stale": false }
+    ],
+    "not_checked": [
+      { "check_id": "HC-08.host-services", "reason": "system role did not run (budget)" },
+      { "check_id": "HC-10.recent-changes", "reason": "system role did not run (budget)" }
+    ],
+    "human_readable": "Result: warning (a confirmed reconstruction outranks the missing system role). Scope: nas-01. Coverage: partial — the system role never ran. arr-data is reconstructing (42%); the storage and network roles disagree on whether it is stalled and the conflict is kept as such, not resolved by fiat."
+  },
+  "expected": {
+    "valid": true,
+    "computed": { "health_status": "warning", "coverage_status": "partial" },
+    "integrity": "verified",
+    "reference_errors": 0,
+    "status_errors": 0,
+    "rewritten_to_unknown": [],
+    "run_status": "partial",
+    "execution_roles_ran_length": 2,
+    "checks": { "HC-03.arrays": "warn", "HC-08.host-services": "unknown" },
+    "findings": { "min": 3, "kinds_include": ["conflict", "observation", "data_gap"], "resource_ids_include": ["arr-data"] },
+    "not_checked_min": 2,
+    "forbidden_calls": [{ "tool": "health.probe.run" }, { "tool": "*", "args": { "mode": "apply" } }],
+    "tools_from_catalog": true
+  }
+}

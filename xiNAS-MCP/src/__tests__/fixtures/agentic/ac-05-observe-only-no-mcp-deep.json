@@ -1,0 +1,111 @@
+{
+  "id": "AC-05",
+  "title": "Python deep and MCP deep are different things: under observe_only the baseline deep profile runs, the MCP deep profile and active probes never do",
+  "scope": "node",
+  "declared_absent": [],
+  "ledger": {
+    "quick": {
+      "tool": "health.check",
+      "args": { "profile": "quick" },
+      "collected_at": "2026-09-09T10:00:10.000Z",
+      "report": {
+        "profile": "quick",
+        "started_at": "2026-09-09T10:00:09.000Z",
+        "completed_at": "2026-09-09T10:00:10.000Z",
+        "overall": "ok",
+        "coverage_status": "complete",
+        "collection": { "agent": "not_needed", "sources": {} },
+        "checks": [
+          { "id": "xiraid.arrays", "category": "xiraid", "status": "ok", "symptom": "", "impact": "", "evidence": { "arrays": [{ "id": "arr-data", "state": "online" }], "collection": { "status": "success", "source": "kv", "observed_at": null } }, "recommended_action": "" },
+          { "id": "filesystem.mounts", "category": "filesystem", "status": "ok", "symptom": "", "impact": "", "evidence": { "mounted": ["/mnt/data"], "collection": { "status": "success", "source": "kv", "observed_at": null } }, "recommended_action": "" }
+        ]
+      }
+    },
+    "standard": {
+      "tool": "health.check",
+      "args": { "profile": "standard" },
+      "collected_at": "2026-09-09T10:00:15.000Z",
+      "report": {
+        "profile": "standard",
+        "started_at": "2026-09-09T10:00:11.000Z",
+        "completed_at": "2026-09-09T10:00:15.000Z",
+        "overall": "ok",
+        "coverage_status": "complete",
+        "collection": { "agent": "answered", "sources": { "license": "success", "rdma_links": "success", "collectors": "success", "nfs_profile_render": "success" } },
+        "checks": [
+          { "id": "xiraid.license", "category": "xiraid", "status": "ok", "symptom": "", "impact": "", "evidence": { "days_left": 200, "collection": { "status": "success", "observed_at": "2026-09-09T10:00:13.000Z" } }, "recommended_action": "" },
+          { "id": "network.rdma-live", "category": "network", "status": "ok", "symptom": "", "impact": "", "evidence": { "links": [{ "name": "mlx5_0/1", "state": "ACTIVE" }], "collection": { "status": "success", "observed_at": "2026-09-09T10:00:14.000Z" } }, "recommended_action": "" }
+        ]
+      }
+    },
+    "baseline_deep": {
+      "tool": "health.baseline",
+      "args": { "profile": "deep", "max_age_s": 0 },
+      "collected_at": "2026-09-09T10:04:30.000Z",
+      "report": {
+        "profile": { "name": "deep", "path": "/opt/xiNAS/healthcheck_profiles/deep.yml", "sha256": "2222222222222222222222222222222222222222222222222222222222222222", "timeout_seconds": 300, "sections_without_checker": ["kerberos"] },
+        "collection": { "status": "success", "collected_at": "2026-09-09T10:04:30.000Z", "duration_ms": 250000, "from_cache": false, "age_s": 0 },
+        "engine": { "module": "xinas_menu.health.engine", "version": "3.14.0" },
+        "report": {
+          "metadata": { "timestamp": "2026-09-09 10:00:20", "hostname": "nas-01", "profile": "deep", "duration": "250.0s" },
+          "overall": "PASS",
+          "summary": { "pass": 3, "warn": 0, "fail": 0, "skip": 1 },
+          "checks": [
+            { "section": "Storage", "name": "raid_status", "status": "PASS", "actual": "online", "expected": "all online", "evidence": "", "impact": "", "fix_hint": "" },
+            { "section": "NVMe Health", "name": "wear_level", "status": "PASS", "actual": "3%", "expected": "<80%", "evidence": "", "impact": "", "fix_hint": "" },
+            { "section": "Filesystem", "name": "disk_usage", "status": "PASS", "actual": "41%", "expected": "<85%", "evidence": "", "impact": "", "fix_hint": "" },
+            { "section": "kerberos", "name": "checker", "status": "SKIP", "actual": "not supported by this engine", "expected": "N/A", "evidence": "section has no checker", "impact": "", "fix_hint": "" }
+          ]
+        },
+        "error": null,
+        "stderr_tail": "",
+        "run_id": null
+      }
+    }
+  },
+  "tool_log": [
+    { "tool": "health.context", "args": {} },
+    { "tool": "health.check", "args": { "profile": "quick" } },
+    { "tool": "health.check", "args": { "profile": "standard" } },
+    { "tool": "health.baseline", "args": { "profile": "deep" } },
+    { "tool": "arrays.list", "args": {} }
+  ],
+  "report": {
+    "run": { "run_id": "$run" },
+    "run_status": "completed",
+    "health_status": "ok",
+    "coverage_status": "complete",
+    "raw_reports": [{ "$ledger": "quick" }, { "$ledger": "standard" }, { "$ledger": "baseline_deep" }],
+    "checks": [
+      { "id": "HC-02.baseline-expectations", "outcome": "pass", "severity": null, "reason": "the deep baseline profile passes every section it can check; kerberos has no checker and is listed as not checked", "mandatory": true, "evidence_refs": ["ev-baseline-deep"] },
+      { "*": "pass", "reason": "no anomaly in the quick and standard checks or the deep baseline sections that feed this row", "evidence_refs": ["ev-quick", "ev-standard", "ev-baseline-deep"] }
+    ],
+    "findings": [],
+    "evidence_manifest": [
+      { "id": "ev-quick", "source": "health.check", "args": { "profile": "quick" }, "request_id": "req-2", "observed_at": null, "collected_at": "2026-09-09T10:00:10.000Z", "revision": null, "units": null, "value": "ok", "excerpt": "overall: ok", "stale": false },
+      { "id": "ev-standard", "source": "health.check", "args": { "profile": "standard" }, "request_id": "req-3", "observed_at": null, "collected_at": "2026-09-09T10:00:15.000Z", "revision": null, "units": null, "value": "ok", "excerpt": "overall: ok; rdma-live ACTIVE", "stale": false },
+      { "id": "ev-baseline-deep", "source": "health.baseline", "args": { "profile": "deep" }, "request_id": "req-4", "observed_at": null, "collected_at": "2026-09-09T10:04:30.000Z", "revision": null, "units": null, "value": "PASS", "excerpt": "overall: PASS (3 pass, 1 skip: kerberos checker not supported)", "stale": false }
+    ],
+    "not_checked": [
+      { "check_id": "HC-12.active-probe", "reason": "probe policy observe_only: no active probe was permitted; the MCP deep profile (probe writes and a loopback mount) was not run" },
+      { "check_id": "HC-02.baseline-expectations", "reason": "baseline section kerberos has no checker in this engine (SKIP checker row)" }
+    ],
+    "human_readable": "Result: ok. Scope: nas-01. Coverage: complete for the mandatory rows. The Python deep baseline profile ran (read-only); under observe_only no MCP deep profile and no active probe were issued — HC-12 is listed under Not checked."
+  },
+  "expected": {
+    "valid": true,
+    "computed": { "health_status": "ok", "coverage_status": "complete" },
+    "integrity": "verified",
+    "reference_errors": 0,
+    "status_errors": 0,
+    "rewritten_to_unknown": [],
+    "not_checked_mentions": ["HC-12.active-probe", "kerberos"],
+    "forbidden_calls": [
+      { "tool": "health.check", "args": { "profile": "deep" } },
+      { "tool": "health.probe.run" },
+      { "tool": "*", "args": { "mode": "apply" } }
+    ],
+    "tools_from_catalog": true,
+    "max_calls_per_tool": 2
+  }
+}

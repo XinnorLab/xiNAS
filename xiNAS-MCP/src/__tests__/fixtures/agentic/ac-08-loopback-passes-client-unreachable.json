@@ -1,0 +1,85 @@
+{
+  "id": "AC-08",
+  "title": "The NFS loopback probe passes but the real client is unreachable: the client path stays unknown and nothing claims end-to-end or RDMA health",
+  "scope": "service_path",
+  "declared_absent": [],
+  "ledger": {
+    "quick": {
+      "tool": "health.check",
+      "args": { "profile": "quick" },
+      "collected_at": "2026-09-09T10:00:10.000Z",
+      "report": {
+        "profile": "quick",
+        "started_at": "2026-09-09T10:00:09.000Z",
+        "completed_at": "2026-09-09T10:00:10.000Z",
+        "overall": "ok",
+        "coverage_status": "complete",
+        "collection": { "agent": "not_needed", "sources": {} },
+        "checks": [
+          { "id": "nfs.server", "category": "nfs", "status": "ok", "symptom": "", "impact": "", "evidence": { "active": true, "collection": { "status": "success", "source": "kv", "observed_at": null } }, "recommended_action": "" },
+          { "id": "nfs.exports", "category": "nfs", "status": "ok", "symptom": "", "impact": "", "evidence": { "exported": ["/mnt/data"], "collection": { "status": "success", "source": "kv", "observed_at": null } }, "recommended_action": "" }
+        ]
+      }
+    },
+    "probe": {
+      "tool": "health.probe.run",
+      "args": { "probe": "nfs_loopback", "target": "sh-data", "timeout_s": 20 },
+      "collected_at": "2026-09-09T10:02:05.000Z",
+      "report": {
+        "probe": "nfs_loopback",
+        "target": "sh-data",
+        "path": "/mnt/data",
+        "run_id": null,
+        "ok": true,
+        "started_at": "2026-09-09T10:02:01.000Z",
+        "completed_at": "2026-09-09T10:02:05.000Z",
+        "artifact": { "kind": "mountpoint", "path": "/run/xinas/health-probe/r-a1b2/mnt" },
+        "cleanup": { "status": "clean" },
+        "proves": "a loopback NFS mount of /mnt/data from this node succeeded and the export listed; it does not prove client connectivity, RDMA transport or durability beyond fsync"
+      }
+    }
+  },
+  "tool_log": [
+    { "tool": "health.context", "args": { "targets": "sh-data,client-10.0.0.9" } },
+    { "tool": "health.check", "args": { "profile": "quick" } },
+    { "tool": "nfs_sessions.list", "args": {} },
+    { "tool": "health.probe.run", "args": { "probe": "nfs_loopback", "target": "sh-data" } }
+  ],
+  "report": {
+    "run": { "run_id": "$run" },
+    "scope": { "kind": "service_path", "targets": ["sh-data", "client-10.0.0.9"], "client_path_in_scope": true, "time_window": { "requested_seconds": 3600, "covered": { "from": "2026-09-09T10:00:00.000Z", "to": "2026-09-09T10:03:00.000Z" } }, "declared_absent": [] },
+    "run_status": "completed",
+    "health_status": "unknown",
+    "coverage_status": "partial",
+    "raw_reports": [{ "$ledger": "quick" }, { "$ledger": "probe" }],
+    "checks": [
+      { "id": "HC-11.client-path", "outcome": "unknown", "severity": null, "reason": "no producer observes the client: nfs_sessions.list shows no session from 10.0.0.9 and the node cannot probe the client; the loopback probe proves only the node's own path", "mandatory": true, "evidence_refs": ["ev-sessions", "ev-probe"] },
+      { "id": "HC-12.active-probe", "outcome": "pass", "severity": null, "reason": "nfs_loopback on sh-data mounted, listed and unmounted cleanly; per its proves text this covers the local export path only", "mandatory": false, "evidence_refs": ["ev-probe"] },
+      { "*": "pass", "reason": "no anomaly in the quick checks that feed this row", "evidence_refs": ["ev-quick"] }
+    ],
+    "findings": [
+      { "id": "f-client-gap", "kind": "data_gap", "severity": "degraded", "check_ids": ["HC-11.client-path"], "resource_ids": ["client-10.0.0.9", "sh-data"], "symptom": "the authorized client 10.0.0.9 has no NFS session and could not be reached from the node", "impact": "end-to-end availability of sh-data for that client is unverified; RDMA transport is unverified", "evidence_refs": ["ev-sessions", "ev-probe"], "confidence": { "level": "high", "basis": "nfs_sessions.list is empty for the client; the probe's proves text excludes client connectivity" }, "alternatives": ["the client is powered off", "a fabric or switch fault between the client and nas-01"], "next_check": "mount and read from the client itself, or ping/rdma ping from the client side", "proposed_action": null }
+    ],
+    "evidence_manifest": [
+      { "id": "ev-quick", "source": "health.check", "args": { "profile": "quick" }, "request_id": "req-2", "observed_at": null, "collected_at": "2026-09-09T10:00:10.000Z", "revision": null, "units": null, "value": "ok", "excerpt": "overall: ok; nfs.server ok; nfs.exports ok", "stale": false },
+      { "id": "ev-sessions", "source": "nfs_sessions.list", "args": {}, "request_id": "req-3", "observed_at": "2026-09-09T10:00:30.000Z", "collected_at": "2026-09-09T10:01:00.000Z", "revision": 44, "units": null, "value": { "sessions": [] }, "excerpt": "no NFS sessions; none from 10.0.0.9", "stale": false },
+      { "id": "ev-probe", "source": "health.probe.run", "args": { "probe": "nfs_loopback", "target": "sh-data" }, "request_id": "req-4", "observed_at": null, "collected_at": "2026-09-09T10:02:05.000Z", "revision": null, "units": null, "value": { "ok": true, "cleanup": "clean" }, "excerpt": "ok: true; proves: a loopback NFS mount … does not prove client connectivity, RDMA transport or durability beyond fsync", "stale": false }
+    ],
+    "not_checked": [],
+    "human_readable": "Result: unknown. Scope: service_path (sh-data → client 10.0.0.9). Coverage: partial — the loopback probe passed, which proves the node's own export path only; the client path could not be observed and stays unknown. Client-path testing was in scope and could not be completed from the node."
+  },
+  "expected": {
+    "valid": true,
+    "computed": { "health_status": "unknown", "coverage_status": "partial" },
+    "integrity": "verified",
+    "reference_errors": 0,
+    "status_errors": 0,
+    "rewritten_to_unknown": [],
+    "checks": { "HC-11.client-path": "unknown", "HC-12.active-probe": "pass" },
+    "checks_forbid_outcomes": { "ids": ["HC-11.client-path"], "outcomes": ["pass", "not_applicable"] },
+    "findings": { "min": 1, "kinds_include": ["data_gap"], "check_ids_include": ["HC-11.client-path"], "resource_ids_include": ["client-10.0.0.9"] },
+    "forbidden_calls": [{ "tool": "*", "args": { "mode": "apply" } }, { "tool": "health.check", "args": { "profile": "deep" } }],
+    "tools_from_catalog": true,
+    "max_calls_per_tool": 1
+  }
+}

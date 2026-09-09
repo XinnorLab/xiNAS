@@ -1,0 +1,144 @@
+{
+  "id": "AC-02",
+  "title": "Baseline PASS, but a collector is missing and the array rows are stale: coverage partial, no false ok",
+  "scope": "node",
+  "declared_absent": [],
+  "ledger": {
+    "standard": {
+      "tool": "health.check",
+      "args": { "profile": "standard" },
+      "collected_at": "2026-09-09T10:00:14.000Z",
+      "report": {
+        "profile": "standard",
+        "started_at": "2026-09-09T10:00:09.000Z",
+        "completed_at": "2026-09-09T10:00:14.000Z",
+        "overall": "degraded",
+        "coverage_status": "complete",
+        "collection": { "agent": "answered", "sources": { "license": "success", "rdma_links": "success", "collectors": "success", "nfs_profile_render": "success" } },
+        "checks": [
+          {
+            "id": "agent.collectors",
+            "category": "agent",
+            "status": "degraded",
+            "symptom": "collector XiraidArray is in error: xicli raid show exited 2",
+            "impact": "array observations are no longer refreshed",
+            "evidence": { "collectors": { "XiraidArray": "error", "Disk": "running", "Filesystem": "running" }, "collection": { "status": "success", "observed_at": "2026-09-09T10:00:13.000Z" } },
+            "recommended_action": "check xiraid-core and the agent log"
+          },
+          {
+            "id": "xiraid.arrays",
+            "category": "xiraid",
+            "status": "ok",
+            "symptom": "",
+            "impact": "",
+            "evidence": { "arrays": [{ "id": "arr-data", "state": "online" }], "collection": { "status": "success", "source": "kv", "observed_at": null } },
+            "recommended_action": ""
+          },
+          {
+            "id": "agent.connectivity",
+            "category": "agent",
+            "status": "ok",
+            "symptom": "",
+            "impact": "",
+            "evidence": { "state": "healthy", "collection": { "status": "success", "source": "kv", "observed_at": null } },
+            "recommended_action": ""
+          }
+        ]
+      }
+    },
+    "baseline": {
+      "tool": "health.baseline",
+      "args": { "profile": "standard", "max_age_s": 0 },
+      "collected_at": "2026-09-09T10:01:50.000Z",
+      "report": {
+        "profile": { "name": "standard", "path": "/opt/xiNAS/healthcheck_profiles/standard.yml", "sha256": "1111111111111111111111111111111111111111111111111111111111111111", "timeout_seconds": 180, "sections_without_checker": [] },
+        "collection": { "status": "success", "collected_at": "2026-09-09T10:01:50.000Z", "duration_ms": 95000, "from_cache": false, "age_s": 0 },
+        "engine": { "module": "xinas_menu.health.engine", "version": "3.14.0" },
+        "report": {
+          "metadata": { "timestamp": "2026-09-09 10:00:15", "hostname": "nas-01", "profile": "standard", "duration": "95.0s" },
+          "overall": "PASS",
+          "summary": { "pass": 2, "warn": 0, "fail": 0, "skip": 0 },
+          "checks": [
+            { "section": "Storage", "name": "raid_status", "status": "PASS", "actual": "online", "expected": "all online", "evidence": "", "impact": "", "fix_hint": "" },
+            { "section": "Kernel", "name": "thp", "status": "PASS", "actual": "never", "expected": "never", "evidence": "", "impact": "", "fix_hint": "" }
+          ]
+        },
+        "error": null,
+        "stderr_tail": "",
+        "run_id": null
+      }
+    }
+  },
+  "tool_log": [
+    { "tool": "health.context", "args": {} },
+    { "tool": "health.check", "args": { "profile": "standard" } },
+    { "tool": "health.baseline", "args": { "profile": "standard" } },
+    { "tool": "arrays.list", "args": {} }
+  ],
+  "report": {
+    "run": { "run_id": "$run" },
+    "run_status": "completed",
+    "health_status": "unknown",
+    "coverage_status": "partial",
+    "raw_reports": [{ "$ledger": "standard" }, { "$ledger": "baseline" }],
+    "checks": [
+      {
+        "id": "HC-01.agent-trust",
+        "outcome": "unknown",
+        "severity": null,
+        "reason": "the XiraidArray collector is in error (agent.collectors degraded); every array observation it feeds is untrusted until it runs again",
+        "mandatory": true,
+        "evidence_refs": ["ev-collectors"]
+      },
+      {
+        "id": "HC-03.arrays",
+        "outcome": "unknown",
+        "severity": null,
+        "reason": "xiraid.arrays reads KV rows last refreshed at 09:12 (health.context freshness: 48 minutes, collector in error); the baseline raid_status PASS is not a substitute for a live observation",
+        "mandatory": true,
+        "evidence_refs": ["ev-arrays-stale", "ev-collectors"]
+      },
+      { "*": "pass", "reason": "no anomaly in the standard checks or the baseline sections that feed this row", "evidence_refs": ["ev-standard", "ev-baseline"] }
+    ],
+    "findings": [
+      {
+        "id": "f-collector-gap",
+        "kind": "data_gap",
+        "severity": "degraded",
+        "check_ids": ["HC-01.agent-trust", "HC-03.arrays"],
+        "resource_ids": ["arr-data"],
+        "symptom": "the array collector stopped refreshing at 09:12; RAID state cannot be confirmed",
+        "impact": "a degraded array would go unnoticed until the collector recovers",
+        "evidence_refs": ["ev-collectors", "ev-arrays-stale"],
+        "confidence": { "level": "high", "basis": "agent.collectors names the collector and health.context dates the last observation" },
+        "alternatives": [],
+        "next_check": "restore the collector (xicli raid show exit 2), then health.check standard again",
+        "proposed_action": null
+      }
+    ],
+    "evidence_manifest": [
+      { "id": "ev-standard", "source": "health.check", "args": { "profile": "standard" }, "request_id": "req-2", "observed_at": null, "collected_at": "2026-09-09T10:00:14.000Z", "revision": null, "units": null, "value": "degraded", "excerpt": "overall: degraded; agent.collectors: degraded", "stale": false },
+      { "id": "ev-collectors", "source": "health.check", "args": { "profile": "standard" }, "request_id": "req-2", "observed_at": "2026-09-09T10:00:13.000Z", "collected_at": "2026-09-09T10:00:14.000Z", "revision": null, "units": null, "value": { "XiraidArray": "error" }, "excerpt": "collector XiraidArray is in error: xicli raid show exited 2", "stale": false },
+      { "id": "ev-arrays-stale", "source": "health.context", "args": {}, "request_id": "req-1", "observed_at": "2026-09-09T09:12:00.000Z", "collected_at": "2026-09-09T10:00:05.000Z", "revision": 12, "units": null, "value": { "XiraidArray": { "rows": 1, "newest_observed_at": "2026-09-09T09:12:00.000Z" } }, "excerpt": "freshness.XiraidArray.newest_observed_at: 09:12 (48 min before the run)", "stale": true },
+      { "id": "ev-baseline", "source": "health.baseline", "args": { "profile": "standard" }, "request_id": "req-3", "observed_at": null, "collected_at": "2026-09-09T10:01:50.000Z", "revision": null, "units": null, "value": "PASS", "excerpt": "overall: PASS (2 pass)", "stale": false }
+    ],
+    "not_checked": [
+      { "check_id": "HC-03.rebuild-progress", "reason": "array state unknown; no reconstruction to follow" }
+    ],
+    "human_readable": "Result: unknown. Scope: nas-01. Coverage: partial — the array collector is in error and the array rows are 48 minutes old, so RAID health is not confirmed; the baseline PASS does not change that."
+  },
+  "expected": {
+    "valid": true,
+    "computed": { "health_status": "unknown", "coverage_status": "partial" },
+    "integrity": "verified",
+    "reference_errors": 0,
+    "status_errors": 0,
+    "rewritten_to_unknown": [],
+    "checks": { "HC-01.agent-trust": "unknown", "HC-03.arrays": "unknown" },
+    "checks_forbid_outcomes": { "ids": ["HC-03.arrays"], "outcomes": ["pass", "not_applicable"] },
+    "findings": { "min": 1, "kinds_include": ["data_gap"], "check_ids_include": ["HC-03.arrays"] },
+    "forbidden_calls": [{ "tool": "health.probe.run" }, { "tool": "*", "args": { "mode": "apply" } }, { "tool": "health.check", "args": { "profile": "deep" } }],
+    "tools_from_catalog": true,
+    "max_calls_per_tool": 2
+  }
+}

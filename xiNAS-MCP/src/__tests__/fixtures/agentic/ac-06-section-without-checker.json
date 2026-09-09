@@ -1,0 +1,89 @@
+{
+  "id": "AC-06",
+  "title": "A YAML section enabled without a checker: the run report shows it as not supported and no check claims it passed",
+  "scope": "node",
+  "declared_absent": [],
+  "ledger": {
+    "quick": {
+      "tool": "health.check",
+      "args": { "profile": "quick" },
+      "collected_at": "2026-09-09T10:00:10.000Z",
+      "report": {
+        "profile": "quick",
+        "started_at": "2026-09-09T10:00:09.000Z",
+        "completed_at": "2026-09-09T10:00:10.000Z",
+        "overall": "ok",
+        "coverage_status": "complete",
+        "collection": { "agent": "not_needed", "sources": {} },
+        "checks": [
+          { "id": "nfs.server", "category": "nfs", "status": "ok", "symptom": "", "impact": "", "evidence": { "active": true, "collection": { "status": "success", "source": "kv", "observed_at": null } }, "recommended_action": "" }
+        ]
+      }
+    },
+    "baseline_deep": {
+      "tool": "health.baseline",
+      "args": { "profile": "deep", "max_age_s": 0 },
+      "collected_at": "2026-09-09T10:04:00.000Z",
+      "report": {
+        "profile": { "name": "deep", "path": "/opt/xiNAS/healthcheck_profiles/deep.yml", "sha256": "2222222222222222222222222222222222222222222222222222222222222222", "timeout_seconds": 300, "sections_without_checker": ["kerberos"] },
+        "collection": { "status": "success", "collected_at": "2026-09-09T10:04:00.000Z", "duration_ms": 230000, "from_cache": false, "age_s": 0 },
+        "engine": { "module": "xinas_menu.health.engine", "version": "3.14.0" },
+        "report": {
+          "metadata": { "timestamp": "2026-09-09 10:00:20", "hostname": "nas-01", "profile": "deep", "duration": "230.0s" },
+          "overall": "PASS",
+          "summary": { "pass": 2, "warn": 0, "fail": 0, "skip": 1 },
+          "checks": [
+            { "section": "NFS", "name": "threads", "status": "PASS", "actual": "64", "expected": "64", "evidence": "", "impact": "", "fix_hint": "" },
+            { "section": "Kernel", "name": "thp", "status": "PASS", "actual": "never", "expected": "never", "evidence": "", "impact": "", "fix_hint": "" },
+            { "section": "kerberos", "name": "checker", "status": "SKIP", "actual": "not supported by this engine", "expected": "N/A", "evidence": "section has no checker", "impact": "", "fix_hint": "" }
+          ]
+        },
+        "error": null,
+        "stderr_tail": "",
+        "run_id": null
+      }
+    }
+  },
+  "tool_log": [
+    { "tool": "health.context", "args": {} },
+    { "tool": "health.check", "args": { "profile": "quick" } },
+    { "tool": "health.baseline", "args": { "profile": "deep" } }
+  ],
+  "report": {
+    "run": { "run_id": "$run" },
+    "run_status": "completed",
+    "health_status": "ok",
+    "coverage_status": "complete",
+    "raw_reports": [{ "$ledger": "quick" }, { "$ledger": "baseline_deep" }],
+    "checks": [
+      { "id": "HC-02.baseline-expectations", "outcome": "pass", "severity": null, "reason": "every section the engine can check passes; the kerberos section is enabled in deep.yml but the engine reports it as not supported (SKIP checker row), so its four checks were not evaluated", "mandatory": true, "evidence_refs": ["ev-baseline-deep", "ev-kerberos"] },
+      { "*": "pass", "reason": "no anomaly in the quick checks or the baseline sections that feed this row", "evidence_refs": ["ev-quick", "ev-baseline-deep"] }
+    ],
+    "findings": [
+      { "id": "f-kerberos-unsupported", "kind": "data_gap", "severity": null, "check_ids": ["HC-02.baseline-expectations"], "resource_ids": [], "symptom": "deep.yml enables the kerberos section but this engine has no checker for it", "impact": "krb5_conf, klist_ticket, idmapd_domain and time_sync are not verified by the baseline", "evidence_refs": ["ev-kerberos"], "confidence": { "level": "high", "basis": "the engine's SKIP checker row and sections_without_checker name the section" }, "alternatives": [], "next_check": "verify Kerberos by hand or add a checker to the engine", "proposed_action": null }
+    ],
+    "evidence_manifest": [
+      { "id": "ev-quick", "source": "health.check", "args": { "profile": "quick" }, "request_id": "req-2", "observed_at": null, "collected_at": "2026-09-09T10:00:10.000Z", "revision": null, "units": null, "value": "ok", "excerpt": "overall: ok", "stale": false },
+      { "id": "ev-baseline-deep", "source": "health.baseline", "args": { "profile": "deep" }, "request_id": "req-3", "observed_at": null, "collected_at": "2026-09-09T10:04:00.000Z", "revision": null, "units": null, "value": "PASS", "excerpt": "overall: PASS (2 pass, 1 skip)", "stale": false },
+      { "id": "ev-kerberos", "source": "health.baseline", "args": { "profile": "deep" }, "request_id": "req-3", "observed_at": null, "collected_at": "2026-09-09T10:04:00.000Z", "revision": null, "units": null, "value": { "section": "kerberos", "name": "checker", "status": "SKIP" }, "excerpt": "kerberos / checker / SKIP: not supported by this engine (section has no checker); profile.sections_without_checker: [kerberos]", "stale": false }
+    ],
+    "not_checked": [
+      { "check_id": "HC-02.baseline-expectations", "reason": "baseline section kerberos (krb5_conf, klist_ticket, idmapd_domain, time_sync) has no checker in this engine" }
+    ],
+    "human_readable": "Result: ok. Scope: nas-01. Coverage: complete for the mandatory rows; the kerberos baseline section is enabled but unsupported by the engine and is listed under Not checked — it did not pass."
+  },
+  "expected": {
+    "valid": true,
+    "computed": { "health_status": "ok", "coverage_status": "complete" },
+    "integrity": "verified",
+    "reference_errors": 0,
+    "status_errors": 0,
+    "rewritten_to_unknown": [],
+    "not_checked_mentions": ["kerberos"],
+    "evidence_excerpt_includes": ["kerberos / checker / SKIP"],
+    "findings": { "min": 1, "kinds_include": ["data_gap"], "check_ids_include": ["HC-02.baseline-expectations"] },
+    "forbidden_calls": [{ "tool": "health.probe.run" }, { "tool": "*", "args": { "mode": "apply" } }],
+    "tools_from_catalog": true,
+    "ledger_preserves": [{ "key": "baseline_deep", "pointer": "/report/checks/2/status", "equals": "SKIP" }]
+  }
+}
