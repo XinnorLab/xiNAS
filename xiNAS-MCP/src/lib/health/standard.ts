@@ -31,9 +31,21 @@ export interface ProbeRdmaLink {
   physical_state?: string;
 }
 
+/** S19a: what happened to the probe artifact (spec §9.3); absent from a pre-S19a agent. */
+export interface ProbeCleanupVerdict {
+  status: 'clean' | 'failed' | 'not_needed';
+  detail?: string;
+}
+
 export interface ProbeDeepResults {
-  fs_io: Array<{ mountpoint: string; ok: boolean; error?: string }>;
-  nfs_loopback: { attempted: boolean; export?: string; ok: boolean; error?: string } | null;
+  fs_io: Array<{ mountpoint: string; ok: boolean; error?: string; cleanup?: ProbeCleanupVerdict }>;
+  nfs_loopback: {
+    attempted: boolean;
+    export?: string;
+    ok: boolean;
+    error?: string;
+    cleanup?: ProbeCleanupVerdict;
+  } | null;
 }
 
 const STANDARD_CHECK_IDS = [
@@ -304,6 +316,21 @@ export function filesystemIoCheck(section: Section<ProbeDeepResults>): HealthChe
       recommended_action: 'check dmesg/journal for filesystem or RAID errors',
     };
   }
+  // S19a (PROBE-03): a probe that passed but left its file behind is a finding.
+  const leftovers = fsIo
+    .filter((r) => r.cleanup?.status === 'failed')
+    .map((r) => ({ mountpoint: r.mountpoint, detail: r.cleanup?.detail ?? 'unlink failed' }));
+  if (leftovers.length > 0) {
+    return {
+      ...base,
+      status: 'warning',
+      symptom: `I/O probe passed but its cleanup failed on: ${leftovers.map((l) => l.mountpoint).join(', ')}`,
+      impact: 'a probe file remains under .xinas-health on the listed filesystems',
+      evidence: { cleanup_failed: leftovers, collection },
+      recommended_action:
+        'remove the leftover probe file(s) under .xinas-health by hand and check the journal',
+    };
+  }
   return {
     ...base,
     status: 'ok',
@@ -338,6 +365,17 @@ export function nfsLoopbackCheck(section: Section<ProbeDeepResults>): HealthChec
       impact: 'clients likely cannot mount this server',
       evidence: { ...loopback, collection },
       recommended_action: 'journalctl -u nfs-server; exportfs -v',
+    };
+  }
+  // S19a (PROBE-03): a mount that could not be unmounted is a finding.
+  if (loopback.cleanup?.status === 'failed') {
+    return {
+      ...base,
+      status: 'warning',
+      symptom: `loopback NFS mount of ${loopback.export ?? '?'} succeeded but could not be unmounted`,
+      impact: 'a transient loopback mount remains under /run/xinas/health-probe',
+      evidence: { cleanup: loopback.cleanup, collection },
+      recommended_action: 'systemd-mount --list; systemd-umount the listed probe mountpoint',
     };
   }
   return {

@@ -25,7 +25,12 @@ import { buildConvergence, runConvergence } from './agent/convergence.js';
 import { log } from './agent/log.js';
 import { createDispatcher } from './agent/rpc/dispatch.js';
 import { makeHealthHandler } from './agent/rpc/methods/health.js';
-import { makeHealthProbeDeps, makeHealthProbeHandler } from './agent/rpc/methods/health-probe.js';
+import {
+  makeHealthProbeDeps,
+  makeHealthProbeHandler,
+  makeProbeHost,
+} from './agent/rpc/methods/health-probe.js';
+import { makeHealthProbeRunHandler } from './agent/rpc/methods/health-probe-run.js';
 import { makeConfigDiffDeps, makeConfigDiffHandler } from './agent/rpc/methods/config-diff.js';
 import { STUB_METHODS } from './agent/rpc/methods/stubs.js';
 import { makeTaskHandlers } from './agent/rpc/methods/task.js';
@@ -110,12 +115,18 @@ async function main(): Promise<void> {
 
   // health.probe (S7 T4, ADR-0009): the enumerated read-style diagnostic
   // behind the standard/deep health profiles. Fixture-aware deps.
+  // S19a: ONE probe host per process — the deep profile and
+  // health.probe.run share its in-process loopback guard (spec §9.5).
+  const probeHost = makeProbeHost();
   const healthProbeHandler = makeHealthProbeHandler(
     makeHealthProbeDeps({
       getCollectorHealth,
+      probeHost,
       ...(config.nfs_helper_socket !== undefined ? { helperSocket: config.nfs_helper_socket } : {}),
     }),
   );
+  // health.probe.run (S19a T2, ADR-0018 §4): one confirmed active probe.
+  const healthProbeRunHandler = makeHealthProbeRunHandler({ probeHost });
 
   // config.diff (S9 T3, ADR-0011): on-demand snapshot diff via the
   // xinas_history bridge (fixture-backed in fixture mode).
@@ -125,6 +136,7 @@ async function main(): Promise<void> {
     'agent.health': healthHandler,
     'agent.version': versionHandler,
     'health.probe': healthProbeHandler,
+    'health.probe.run': healthProbeRunHandler,
     'config.diff': configDiffHandler,
     ...STUB_METHODS,
     ...taskHandlers,

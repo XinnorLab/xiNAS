@@ -19,6 +19,9 @@
 
 export type RpcHandler = (params: unknown) => unknown | Promise<unknown>;
 
+/** Structured refusal codes a handler may throw (`err.code`) that reach the api as `-32000` `data.code`. */
+const PASSTHROUGH_CODES = new Set(['PROBE_IN_PROGRESS', 'PRECONDITION_FAILED', 'NOT_FOUND']);
+
 export interface RpcHandlerMap {
   [method: string]: RpcHandler;
 }
@@ -91,6 +94,14 @@ export function createDispatcher(handlers: RpcHandlerMap): (line: string) => Pro
       }
       if (typed.code === 'INVALID_PARAMS') {
         return errorEnvelope(id, -32602, typed.message);
+      }
+      // S19a: a handler that refuses for a structured, client-actionable
+      // reason passes the code (and its details) through as -32000 data,
+      // the way EXECUTOR_UNSUPPORTED does — the api maps it to its own
+      // error (PROBE_IN_PROGRESS → 409 CONFLICT).
+      if (typeof typed.code === 'string' && PASSTHROUGH_CODES.has(typed.code)) {
+        const details = (typed as { details?: Record<string, unknown> }).details ?? {};
+        return errorEnvelope(id, -32000, typed.message, { code: typed.code, ...details });
       }
       return errorEnvelope(id, -32603, `Internal error: ${typed.message}`);
     }

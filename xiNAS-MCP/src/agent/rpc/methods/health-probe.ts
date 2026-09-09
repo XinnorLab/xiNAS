@@ -17,12 +17,20 @@
  */
 
 import type { Section } from '../../../lib/health/collection.js';
+import type { ProbeCleanup, ProbeOutcome } from '../../../lib/health/probe-types.js';
 import { type ParsedLicense, parseXicliLicense } from '../../../lib/parse/xicli-license.js';
 import { ProbeCollectionError, collect } from '../../health/collect.js';
 
+/** S19a: each row also says what happened to its artifact (cleanup verdict). */
 export interface DeepProbeResults {
-  fs_io: Array<{ mountpoint: string; ok: boolean; error?: string }>;
-  nfs_loopback: { attempted: boolean; export?: string; ok: boolean; error?: string } | null;
+  fs_io: Array<{ mountpoint: string; ok: boolean; error?: string; cleanup?: ProbeCleanup }>;
+  nfs_loopback: {
+    attempted: boolean;
+    export?: string;
+    ok: boolean;
+    error?: string;
+    cleanup?: ProbeCleanup;
+  } | null;
 }
 
 export interface RdmaLink {
@@ -148,6 +156,18 @@ export interface HealthProbeWiring {
   fixtureDir?: string | null;
   getCollectorHealth(): Record<string, string>;
   helperSocket?: string;
+  /**
+   * S19a: the ONE probe host per agent process, shared with
+   * `health.probe.run` so deep and on-demand probes share the in-process
+   * loopback guard. Defaults to {@link makeProbeHost}.
+   */
+  probeHost?: ProbeHost;
+}
+
+/** The process-wide ProbeHost: file-backed in fixture mode, real otherwise. */
+export function makeProbeHost(fixture?: string | null): ProbeHost {
+  const fdir = fixture !== undefined ? fixture : fixtureDir();
+  return fdir !== null ? createFakeProbeHost(fdir) : createRealProbeHost();
 }
 
 /**
@@ -157,6 +177,7 @@ export interface HealthProbeWiring {
  */
 export function makeHealthProbeDeps(wiring: HealthProbeWiring): HealthProbeDeps {
   const fdir = wiring.fixtureDir !== undefined ? wiring.fixtureDir : fixtureDir();
+  const probeHost = wiring.probeHost ?? makeProbeHost(fdir);
   if (fdir !== null) {
     return {
       // A missing fixture file models "xicli is not installed".
@@ -195,7 +216,7 @@ export function makeHealthProbeDeps(wiring: HealthProbeWiring): HealthProbeDeps 
         }
       },
       runDeepProbes: makeDeepProbeRunner({
-        probeHost: createFakeProbeHost(fdir),
+        probeHost,
         listMountedManaged: makeListMountedManaged(fdir),
       }),
     };
@@ -221,21 +242,28 @@ export function makeHealthProbeDeps(wiring: HealthProbeWiring): HealthProbeDeps 
       }
     },
     runDeepProbes: makeDeepProbeRunner({
-      probeHost: createRealProbeHost(),
+      probeHost,
       listMountedManaged: makeListMountedManaged(null),
     }),
   };
 }
 
-// ---- Deep probe runner (T5) ----
+// ---- Deep probe runner (T5; S19a on the hardened host) ----
 
 import { createFakeProbeHost } from '../../health/fake-probe-host.js';
 import { type ProbeHost, createRealProbeHost } from '../../health/probe-host.js';
 import { createFilesystemProbe } from '../../probe/filesystem.js';
 
+/** Deep probes run with no S19 run id and the S7 20 s bound per probe. */
+const DEEP_PROBE_OPTS = { runId: null, timeoutMs: 20_000 } as const;
+
+const errorText = (o: ProbeOutcome): string | undefined =>
+  o.error !== undefined ? `${o.error.code}: ${o.error.message}` : undefined;
+
 /**
- * Run the deep probes: a touch test per mounted managed filesystem and
+ * Run the deep probes: an fs_io probe per mounted managed filesystem and
  * one loopback mount of the first export (skipped when none exists).
+ * Every row carries the probe's cleanup verdict (spec §9.3).
  */
 export function makeDeepProbeRunner(opts: {
   probeHost: ProbeHost;
@@ -251,18 +279,26 @@ export function makeDeepProbeRunner(opts: {
 
     const fsIo: DeepProbeResults['fs_io'] = [];
     for (const mountpoint of mountpoints) {
-      const r = await opts.probeHost.touchProbe(mountpoint);
-      fsIo.push({ mountpoint, ok: r.ok, ...(r.error !== undefined ? { error: r.error } : {}) });
+      const r = await opts.probeHost.fsIo(mountpoint, DEEP_PROBE_OPTS);
+      const error = errorText(r);
+      fsIo.push({
+        mountpoint,
+        ok: r.ok,
+        ...(error !== undefined ? { error } : {}),
+        cleanup: r.cleanup,
+      });
     }
 
     let loopback: DeepProbeResults['nfs_loopback'] = null;
     if (firstExportPath !== null) {
-      const r = await opts.probeHost.loopbackMount(firstExportPath);
+      const r = await opts.probeHost.nfsLoopback(firstExportPath, DEEP_PROBE_OPTS);
+      const error = errorText(r);
       loopback = {
         attempted: true,
         export: firstExportPath,
         ok: r.ok,
-        ...(r.error !== undefined ? { error: r.error } : {}),
+        ...(error !== undefined ? { error } : {}),
+        cleanup: r.cleanup,
       };
     }
 

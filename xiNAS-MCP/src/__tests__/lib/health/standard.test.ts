@@ -110,6 +110,43 @@ describe('collection status → check status (spec §7.2)', () => {
     ).toBe('ok');
   });
 
+  it('S19a: a probe that passed but could not clean up is a warning naming the leftover', () => {
+    const fs = filesystemIoCheck(
+      ok({
+        fs_io: [
+          { mountpoint: '/m1', ok: true, cleanup: { status: 'clean' } },
+          { mountpoint: '/m2', ok: true, cleanup: { status: 'failed', detail: 'EACCES: unlink' } },
+        ],
+        nfs_loopback: null,
+      }),
+    );
+    expect(fs.status).toBe('warning');
+    expect(fs.symptom).toContain('/m2');
+    expect(fs.evidence.cleanup_failed).toEqual([{ mountpoint: '/m2', detail: 'EACCES: unlink' }]);
+    const loop = nfsLoopbackCheck(
+      ok({
+        fs_io: [],
+        nfs_loopback: {
+          attempted: true,
+          export: '/srv',
+          ok: true,
+          cleanup: { status: 'failed', detail: 'systemd-umount: busy' },
+        },
+      }),
+    );
+    expect(loop.status).toBe('warning');
+    expect(loop.evidence.cleanup).toEqual({ status: 'failed', detail: 'systemd-umount: busy' });
+    // a failed probe stays critical even if its cleanup also failed
+    expect(
+      filesystemIoCheck(
+        ok({
+          fs_io: [{ mountpoint: '/m', ok: false, error: 'EIO', cleanup: { status: 'failed' } }],
+          nfs_loopback: null,
+        }),
+      ).status,
+    ).toBe('critical');
+  });
+
   it('probeUnavailable degrades every probe-backed check with EXECUTOR_UNAVAILABLE collection evidence', () => {
     const checks = probeUnavailable('deep', 'connect refused');
     expect(checks.map((c) => c.id)).toEqual([
