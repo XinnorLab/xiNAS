@@ -170,7 +170,13 @@ versions remain reachable only through `initialize`.
   and `false` otherwise, so the flags describe exactly what is implemented
   (requirement §2.4). `listChanged` stays `false`: the list is static for
   the process lifetime.
-- `prompts` — **absent.** No handler exists (ADR-0010 defers them).
+- `prompts` — **absent today.** No handler exists (ADR-0010 defers them).
+  S19 (`s19-mcp-health-prompt-spec.md` §4, ADR-0018; design, not yet
+  implemented) lifts the deferral for exactly one prompt: once its
+  provider is installed the flag becomes `{ "listChanged": false }` on
+  both eras, and it stays absent whenever the provider is not installed
+  (`mcp.health_prompt.enabled: false`). The discovery test row for this
+  flag changes with that slice, not before.
 - `extensions` — one map shared by every implemented extension:
   `io.modelcontextprotocol/ui` (present since S18 with the supported
   `text/html;profile=mcp-app` MIME type) and `io.modelcontextprotocol/tasks`

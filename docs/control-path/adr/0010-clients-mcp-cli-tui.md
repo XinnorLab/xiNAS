@@ -22,6 +22,16 @@
 > era through the SDK server's own resource handlers (the feeds stay
 > modern-only). Prompts and general-purpose data resources remain deferred.
 > See [`../s18-mcp-raid-create-app-spec.md`](../s18-mcp-raid-create-app-spec.md).
+>
+> **Extended by S19 (design 2026-09-09, not yet implemented).** ADR-0018
+> lifts the prompts deferral for exactly one user-controlled prompt,
+> `xinas_health_check`, served by one provider on both eras, and adds the
+> agentic health-check tools (`health.context`, `health.baseline`,
+> `health.probe.run`, `health.catalog`, `health.report_schema`,
+> `health.report.validate`). General-purpose prompt hosting stays
+> deferred. See
+> [`0018-mcp-prompts-agentic-health-check.md`](0018-mcp-prompts-agentic-health-check.md)
+> and [`../s19-mcp-health-prompt-spec.md`](../s19-mcp-health-prompt-spec.md).
 
 **Status:** accepted (2026-06-12). Implements ADR-0001's locked "MCP is
 a transport on the same Control API core" decision; extends ADR-0002
