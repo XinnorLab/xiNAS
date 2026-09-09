@@ -529,6 +529,55 @@ describe.sequential('e2e: S7 health/drift/support (fixture mode)', () => {
     writeFileSync(join(fixtureDir, 'probe-host-state.json'), JSON.stringify({ ops: [] }));
     const clean = await health('deep');
     expect(byId(clean).get('filesystem.io')?.status).toBe('ok');
+    // S19a: the report says how the probe sections were collected
+    const cleanReport = clean as HealthReport & {
+      coverage_status?: string;
+      collection?: { agent: string; sources: Record<string, string> };
+    };
+    expect(cleanReport.coverage_status).toBe('complete');
+    expect(cleanReport.collection?.agent).toBe('answered');
+    expect(cleanReport.collection?.sources.probes).toBe('success');
+  });
+
+  it('4b. S19a: POST /health/probe runs ONE fs_io probe through the same host (REST operator, no confirmation)', async () => {
+    writeFileSync(join(fixtureDir, 'probe-host-state.json'), JSON.stringify({ ops: [] }));
+    const res = await requestJson(apiSockPath, '/api/v1/health/probe', ADMIN_TOKEN, 'POST', {
+      probe: 'fs_io',
+      target: 'mnt-data.mount',
+      run_id: 'e2e-run-1',
+    });
+    expect(res.status).toBe(200);
+    const result = res.body.result as {
+      probe: string;
+      target: string;
+      path: string;
+      run_id: string | null;
+      ok: boolean;
+      cleanup: { status: string };
+      artifact: { kind: string; path: string } | null;
+      proves: string;
+    };
+    expect(result).toMatchObject({
+      probe: 'fs_io',
+      target: 'mnt-data.mount',
+      path: '/mnt/data',
+      run_id: 'e2e-run-1',
+      ok: true,
+      cleanup: { status: 'clean' },
+    });
+    expect(result.artifact?.path).toContain('e2e-run-1');
+    expect(result.proves).toContain('not client connectivity');
+    const state = JSON.parse(readFileSync(join(fixtureDir, 'probe-host-state.json'), 'utf8')) as {
+      ops: string[];
+    };
+    expect(state.ops).toEqual(['touch:/mnt/data']);
+
+    // an unknown target is a clean 404, and nothing ran
+    const missing = await requestJson(apiSockPath, '/api/v1/health/probe', ADMIN_TOKEN, 'POST', {
+      probe: 'fs_io',
+      target: 'no-such-fs',
+    });
+    expect(missing.status).toBe(404);
   });
 
   it('5. agent down: only probe-backed checks degrade; recovery restores', async () => {

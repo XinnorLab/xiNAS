@@ -266,6 +266,82 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
     expect(rows.some((r) => r.kind === 'mcp.confirmation.apply_task_created')).toBe(true);
   });
 
+  // ── S19a. a direct confirmable entry: health.probe.run ────────────────────
+
+  it('S19a: health.probe.run elicits a form bound to tool + arguments, runs on APPLY, consumes the record', async () => {
+    handle.state.kv.put('/xinas/v1/observed/Filesystem/fs-probe', {
+      kind: 'Filesystem',
+      id: 'fs-probe',
+      status: { mountpoint: '/mnt/probe', mounted: true, observed_at: '2026-09-09T10:00:00Z' },
+    });
+    let agentParams: unknown;
+    mockAgent.respondToRpc('health.probe.run', (params) => {
+      agentParams = params;
+      return {
+        result: {
+          probe: 'fs_io',
+          path: '/mnt/probe',
+          ok: true,
+          started_at: '2026-09-09T10:00:00.000Z',
+          completed_at: '2026-09-09T10:00:01.000Z',
+          artifact: { kind: 'file', path: '/mnt/probe/.xinas-health/probe-none-abcd' },
+          cleanup: { status: 'clean' },
+        },
+      };
+    });
+    const args = { probe: 'fs_io', target: 'fs-probe' };
+
+    await handle.state.drainer.drainNow();
+    const before = auditRows(dir).length;
+
+    const first = await call(port, 'tok-admin', nextId('call'), 'health.probe.run', args);
+    expect(first.status).toBe(200);
+    const r1 = toolResultOf(first);
+    expect(r1.resultType).toBe('input_required');
+    const confirm = r1.inputRequests?.confirm_apply;
+    expect(confirm?.params.mode).toBe('form');
+    expect(confirm?.params.message as string).toContain('health.probe.run');
+    expect(confirm?.params.message as string).toContain('fs-probe');
+    expect(agentParams).toBeUndefined(); // nothing ran yet
+
+    const second = await call(port, 'tok-admin', nextId('call'), 'health.probe.run', args, {
+      requestState: r1.requestState,
+      inputResponses: { confirm_apply: { action: 'accept', content: { decision: 'APPLY' } } },
+    });
+    const r2 = toolResultOf(second);
+    expect(r2.resultType).toBe('complete');
+    expect(r2.isError ?? false).toBe(false);
+    const result = payloadOf(second).result as {
+      ok?: boolean;
+      path?: string;
+      proves?: string;
+      confirmation_id?: string;
+    };
+    expect(result.ok).toBe(true);
+    expect(result.path).toBe('/mnt/probe');
+    expect(result.proves).toContain('4 KiB write');
+    expect(agentParams).toEqual({
+      probe: 'fs_io',
+      path: '/mnt/probe',
+      run_id: null,
+      timeout_ms: 20_000,
+    });
+
+    const record = handle.state.db
+      .prepare('SELECT * FROM mcp_confirmations WHERE confirmation_id = ?')
+      .get(result.confirmation_id) as Record<string, unknown> | undefined;
+    expect(record?.status).toBe('consumed');
+    expect(record?.tool_name).toBe('health.probe.run');
+    expect(String(record?.plan_id)).toMatch(/^direct:/);
+    expect(String(record?.consumed_task_id)).toMatch(/^probe:/);
+
+    await handle.state.drainer.drainNow();
+    const rows = auditRows(dir).slice(before);
+    expect(rows.some((r) => r.kind === 'http.POST./health/probe')).toBe(true);
+    expect(rows.some((r) => r.kind === 'mcp.confirmation.requested')).toBe(true);
+    expect(rows.some((r) => r.kind === 'mcp.confirmation.consumed')).toBe(true);
+  });
+
   // ── 2. identical replay (brief case 2) ────────────────────────────────────
 
   it('identical replay after success returns the same task_id and creates no new task', async () => {
