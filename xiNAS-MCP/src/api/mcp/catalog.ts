@@ -388,6 +388,41 @@ export const CATALOG: CatalogEntry[] = [
         'filesystem and a PID1 loopback NFS mount of the first desired export)',
     },
   },
+  // S19a (spec §9.1, ADR-0018 §4): ONE confirmed active probe. A direct
+  // entry — no plan document — that is operator-rank, apply-class over MCP
+  // and the first user of the S15 `confirmation: 'required'` hook: the
+  // confirmation binds tool + arguments and the route consumes it before
+  // the probe runs. REST operators need no confirmation.
+  {
+    name: 'health.probe.run',
+    description:
+      'Run ONE confirmed active health probe. fs_io writes, fsyncs, reads back and unlinks a ' +
+      '4 KiB file under <mountpoint>/.xinas-health of the given Filesystem; nfs_loopback ' +
+      'NFS-mounts the given Share from the node itself, lists it and unmounts. Proves only the ' +
+      'operation it performed — not client connectivity, not RDMA, not durability beyond fsync. ' +
+      'Requires the operator role; over MCP also mcp.allow_apply: true and a form confirmation.',
+    method: 'POST',
+    path: '/health/probe',
+    input_schema: {
+      type: 'object',
+      properties: {
+        probe: { type: 'string', enum: ['fs_io', 'nfs_loopback'] },
+        target: {
+          type: 'string',
+          description: 'Filesystem id for fs_io, Share id for nfs_loopback',
+        },
+        run_id: { type: 'string', description: 'optional S19 run id for audit correlation' },
+        timeout_s: { type: 'integer', minimum: 1, maximum: 60, description: 'default 20' },
+      },
+      required: ['probe', 'target'],
+      additionalProperties: false,
+    },
+    mutability: 'direct',
+    requires_mcp_apply: true,
+    min_role: 'operator',
+    status: 'live',
+    confirmation: 'required',
+  },
   read(
     'drift.report',
     'GET',

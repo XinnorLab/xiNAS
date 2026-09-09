@@ -77,6 +77,17 @@ describe('client catalog (S8 T2)', () => {
     expect(byName.get('pools.create')?.min_role).toBe('admin');
     expect(byName.get('pools.modify')?.min_role).toBe('operator');
     expect(byName.get('pools.delete')?.requires_mcp_apply).toBe(true);
+    // S19a: the confirmable active-probe tool (spec §9.1)
+    expect(byName.get('health.probe.run')).toMatchObject({
+      mutability: 'direct',
+      requires_mcp_apply: true,
+      min_role: 'operator',
+      confirmation: 'required',
+      method: 'POST',
+      path: '/health/probe',
+      status: 'live',
+    });
+    expect(byName.get('health.probe.run')?.returns_async_task).toBeUndefined();
     expect(ROLE_RANK.admin).toBeGreaterThan(ROLE_RANK.operator);
   });
 

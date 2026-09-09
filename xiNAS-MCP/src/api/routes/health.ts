@@ -26,6 +26,7 @@
  * shared facts gatherer.
  */
 
+import { randomUUID } from 'node:crypto';
 import { Router } from 'express';
 import { QUICK_CHECKS } from '../../lib/health/checks.js';
 import {
@@ -51,10 +52,19 @@ import {
   xiraidLicenseCheck,
   xiraidServiceCheck,
 } from '../../lib/health/standard.js';
-import type { ApiContext } from '../context.js';
+import { PROVES, type ProbeKind } from '../../lib/health/probe-types.js';
+import { AgentRpcError } from '../agent-client.js';
+import type { ApiContext, RequestContext } from '../context.js';
 import { ApiException } from '../errors.js';
 import { gatherHealthFacts } from '../handlers/health-facts.js';
-import { sendOk } from '../handlers/reads.js';
+import { getOrNull, sendOk } from '../handlers/reads.js';
+import { queueConfirmationEvent } from '../mcp/confirmation/audit.js';
+import { argumentsHash } from '../mcp/confirmation/policy.js';
+import type { ConfirmationRecord } from '../mcp/confirmation/types.js';
+
+const PROBE_TOOL = 'health.probe.run';
+const PROBE_DEFAULT_TIMEOUT_S = 20;
+const PROBE_MAX_TIMEOUT_S = 60;
 
 const ALLOWED_PROFILES = new Set(['quick', 'standard', 'deep']);
 const PROBE_TIMEOUT_MS = { standard: 5_000, deep: 20_000 } as const;
@@ -235,6 +245,168 @@ export function healthRouter(ctx: ApiContext): Router {
         coverage_status: coverage,
         collection,
         checks,
+      });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /**
+   * POST /health/probe (S19a T2, spec §9.2) — ONE confirmed active probe.
+   *
+   * Rank (operator) is the catalog's; `mcp.allow_apply` is the dispatch
+   * gate's. What this route enforces itself is the S15 analogue of the
+   * apply transaction's §8.3 step for a forwarded MCP call: a pending
+   * form confirmation bound to this principal, this tool and these exact
+   * arguments, verified and CONSUMED before the probe runs — so a second
+   * use, a stolen id or a different argument set never reaches the agent.
+   * REST callers carry no confirmation and need none.
+   */
+  r.post('/health/probe', async (req, res, next) => {
+    try {
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const probe = body.probe;
+      const target = body.target;
+      if (probe !== 'fs_io' && probe !== 'nfs_loopback') {
+        throw new ApiException('INVALID_ARGUMENT', "probe must be 'fs_io' or 'nfs_loopback'", {
+          probe,
+        });
+      }
+      if (typeof target !== 'string' || target.length === 0) {
+        throw new ApiException('INVALID_ARGUMENT', 'target (a Filesystem or Share id) is required');
+      }
+      const runId = typeof body.run_id === 'string' && body.run_id.length > 0 ? body.run_id : null;
+      const timeoutS = body.timeout_s === undefined ? PROBE_DEFAULT_TIMEOUT_S : body.timeout_s;
+      if (
+        typeof timeoutS !== 'number' ||
+        !Number.isInteger(timeoutS) ||
+        timeoutS < 1 ||
+        timeoutS > PROBE_MAX_TIMEOUT_S
+      ) {
+        throw new ApiException(
+          'INVALID_ARGUMENT',
+          `timeout_s must be an integer between 1 and ${PROBE_MAX_TIMEOUT_S}`,
+          { timeout_s: timeoutS },
+        );
+      }
+      const rc = req.context as RequestContext;
+      const kind: ProbeKind = probe;
+
+      // Resolve the target to the path the agent probes.
+      let path: string;
+      if (kind === 'fs_io') {
+        const fs = getOrNull<{ status?: { mountpoint?: string; mounted?: boolean } }>(
+          ctx.state,
+          `/xinas/v1/observed/Filesystem/${target}`,
+        );
+        if (fs === null) throw new ApiException('NOT_FOUND', `no filesystem ${target}`, { target });
+        const status = fs.value.status;
+        if (status?.mounted !== true || typeof status.mountpoint !== 'string') {
+          throw new ApiException('PRECONDITION_FAILED', `filesystem ${target} is not mounted`, {
+            reason: 'not_mounted',
+            target,
+          });
+        }
+        path = status.mountpoint;
+      } else {
+        const share = getOrNull<{ spec?: { path?: string } }>(
+          ctx.state,
+          `/xinas/v1/desired/Share/${target}`,
+        );
+        if (share === null || typeof share.value.spec?.path !== 'string') {
+          throw new ApiException('NOT_FOUND', `no share ${target}`, { target });
+        }
+        path = share.value.spec.path;
+      }
+
+      // S15 §8.3 analogue for a direct entry: verify, then consume BEFORE running.
+      let confirmation: ConfirmationRecord | undefined;
+      if (rc.client_type === 'mcp') {
+        const store = ctx.tasks?.confirmations;
+        if (store === undefined || rc.mcp_confirmation_id === undefined) {
+          throw new ApiException(
+            'PRECONDITION_FAILED',
+            'an MCP probe requires a verified confirmation',
+            { reason: 'confirmation_required' },
+            'Run health.probe.run through the MCP confirmation flow (input_required). REST and xinasctl need no confirmation.',
+          );
+        }
+        const record = store.get(rc.mcp_confirmation_id);
+        const now = Date.now();
+        if (
+          record === null ||
+          record.principal !== rc.principal ||
+          record.tool_name !== PROBE_TOOL ||
+          record.arguments_hash !== argumentsHash(PROBE_TOOL, body)
+        ) {
+          throw new ApiException(
+            'PRECONDITION_FAILED',
+            'the confirmation does not belong to this principal, tool and arguments',
+            { reason: 'confirmation_binding' },
+          );
+        }
+        if (record.status !== 'pending' || record.mode !== 'form' || record.expires_at <= now) {
+          throw new ApiException('PRECONDITION_FAILED', 'the confirmation is not pending', {
+            reason: 'confirmation_not_approved',
+            status:
+              record.expires_at <= now && record.status === 'pending' ? 'expired' : record.status,
+          });
+        }
+        const probeId = `probe:${randomUUID()}`;
+        const consumed = store.consume({
+          confirmation_id: record.confirmation_id,
+          task_id: probeId,
+          from: 'pending',
+          principal: rc.principal,
+          now,
+        });
+        if (!consumed) {
+          throw new ApiException(
+            'PRECONDITION_FAILED',
+            'the confirmation was consumed by a concurrent probe',
+            { reason: 'confirmation_not_approved', status: 'consumed' },
+          );
+        }
+        confirmation = store.get(record.confirmation_id) ?? record;
+        queueConfirmationEvent(ctx.state.audit, 'consumed', confirmation, { task_id: probeId });
+        rc.operation_id = probeId;
+      }
+
+      const client = ctx.tasks?.agentClient;
+      if (client === undefined) {
+        throw new ApiException('UNSUPPORTED', 'no agent RPC client configured');
+      }
+      let outcome: Record<string, unknown>;
+      try {
+        outcome = (await client.call(
+          PROBE_TOOL,
+          { probe: kind, path, run_id: runId, timeout_ms: timeoutS * 1000 },
+          timeoutS * 1000 + 5_000,
+        )) as Record<string, unknown>;
+      } catch (err) {
+        const code =
+          err instanceof AgentRpcError
+            ? (err.data as { code?: unknown } | undefined)?.code
+            : undefined;
+        if (code === 'PROBE_IN_PROGRESS') {
+          throw new ApiException(
+            'CONFLICT',
+            'a health probe is already in flight on this node',
+            { reason: 'PROBE_IN_PROGRESS' },
+            'Wait for the running probe to finish, then retry.',
+          );
+        }
+        throw err;
+      }
+      const { probe: _probe, path: _path, ...rest } = outcome;
+      sendOk(req, res, {
+        probe: kind,
+        target,
+        path,
+        run_id: runId,
+        ...rest,
+        proves: PROVES[kind],
+        ...(confirmation !== undefined ? { confirmation_id: confirmation.confirmation_id } : {}),
       });
     } catch (err) {
       next(err);
