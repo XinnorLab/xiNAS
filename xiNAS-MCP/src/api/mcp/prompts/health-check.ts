@@ -32,8 +32,8 @@ export { HEALTH_PROMPT_TEMPLATE };
 export const HEALTH_PROMPT_NAME = 'xinas_health_check';
 /** Bumped with the template text (spec §5.5). */
 export const HEALTH_PROMPT_VERSION = '1.0.0';
-/** The report schema of spec §11.1; the schema file itself lands in S19c. */
-export const REPORT_SCHEMA_VERSION = '1';
+/** The report schema version of spec §11.1 — one source, `lib/health/report-validate.ts`. */
+export { REPORT_SCHEMA_VERSION } from '../../../lib/health/report-validate.js';
 
 export const sha256Hex = (text: string): string =>
   createHash('sha256').update(text, 'utf8').digest('hex');

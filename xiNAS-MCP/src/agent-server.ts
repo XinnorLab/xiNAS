@@ -31,6 +31,8 @@ import {
   makeProbeHost,
 } from './agent/rpc/methods/health-probe.js';
 import { makeHealthProbeRunHandler } from './agent/rpc/methods/health-probe-run.js';
+import { makeBaselineHost } from './agent/health/baseline-host.js';
+import { makeHealthBaselineHandler } from './agent/rpc/methods/health-baseline.js';
 import { makeConfigDiffDeps, makeConfigDiffHandler } from './agent/rpc/methods/config-diff.js';
 import { STUB_METHODS } from './agent/rpc/methods/stubs.js';
 import { makeTaskHandlers } from './agent/rpc/methods/task.js';
@@ -127,6 +129,11 @@ async function main(): Promise<void> {
   );
   // health.probe.run (S19a T2, ADR-0018 §4): one confirmed active probe.
   const healthProbeRunHandler = makeHealthProbeRunHandler({ probeHost });
+  // health.baseline (S19c, ADR-0018 §5): the Python baseline engine as a
+  // capped, sandboxed, read-only subprocess (spec §8.3).
+  const healthBaselineHandler = makeHealthBaselineHandler({
+    host: makeBaselineHost(config.health_baseline),
+  });
 
   // config.diff (S9 T3, ADR-0011): on-demand snapshot diff via the
   // xinas_history bridge (fixture-backed in fixture mode).
@@ -137,6 +144,7 @@ async function main(): Promise<void> {
     'agent.version': versionHandler,
     'health.probe': healthProbeHandler,
     'health.probe.run': healthProbeRunHandler,
+    'health.baseline': healthBaselineHandler,
     'config.diff': configDiffHandler,
     ...STUB_METHODS,
     ...taskHandlers,

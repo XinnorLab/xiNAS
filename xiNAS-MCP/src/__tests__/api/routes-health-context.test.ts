@@ -108,7 +108,7 @@ describe('GET /api/v1/health/context (S19b)', () => {
     ]);
     expect(r.run.permitted).toEqual({
       deterministic: ['quick', 'standard'],
-      baseline: false,
+      baseline: true, // S19c: health.baseline is installed
       probe_run: 'denied',
       apply: false,
     });
@@ -173,6 +173,8 @@ describe('GET /api/v1/health/context (S19b)', () => {
     expect(r.freshness.NetworkInterface.rows).toBe(1);
 
     expect(r.baselines.dir).toBe('/opt/xiNAS/healthcheck_profiles');
+    // S19c: no baseline call has asked the engine yet, so the gap comes from the static list
+    expect(r.baselines.sections_source).toBe('static');
     expect(r.baselines.profiles.map((p: { name: string }) => p.name)).toContain('standard');
     expect(r.catalog).toEqual({ version: '1', tool: 'health.catalog' });
 
@@ -227,7 +229,7 @@ describe('GET /api/v1/health/context (S19b)', () => {
     const op = (await get(OPERATOR_TOKEN)).body.result;
     expect(op.run.permitted).toEqual({
       deterministic: ['quick', 'standard', 'deep'],
-      baseline: false,
+      baseline: true,
       probe_run: 'allowed',
       apply: false,
     });

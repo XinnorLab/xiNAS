@@ -938,29 +938,29 @@ additive UI and would have doubled the review surface of a security change.
 §9.3), refusing to approve without the phrase, and a pytest against the
 stub server for approve / decline / policy refusal rendering.
 
-## Health — `sections_without_checker` uses a static section list until S19c
+## Health — the static section list stays the fallback until the first baseline call
 
-*Deferred 2026-09-09, from S19b (`feat/s19b-prompt-context-catalog`);
-spec `s19-mcp-health-prompt-spec.md` §8.2, §8.5.*
+*Deferred 2026-09-09, from S19c (`feat/s19c-baseline-report-validator`);
+spec `s19-mcp-health-prompt-spec.md` §8.5.*
 
 **What is missing.** `health.context.baselines[].sections_without_checker`
-should come from the Python engine itself (`python3 -m xinas_menu.health
---sections`, S19c), so a section the engine gains or loses is reported
-without a TypeScript change.
+should come from the engine's `--sections` list from the api's first
+answer onward.
 
-**What the code does instead.** `api/health/profiles.ts` compares each
-profile's enabled sections against `KNOWN_ENGINE_SECTIONS`, a copy of the
-engine's `section_map` keys taken on 2026-09-09 (`kerberos` is the one
-enabled section without a checker today).
+**What the code does instead.** The api asks the agent for the list on
+the first `GET /health/baseline` of the process and keeps it; until then
+`api/health/profiles.ts` compares against `KNOWN_ENGINE_SECTIONS`, a copy
+of the engine's `section_map` keys, and `health.context` says which list
+is in force (`baselines.sections_source: static | engine`).
 
-**Why it was cut.** The `--sections` flag is S19c work (AC-06, G-03); the
-static list makes the G-03 gap visible now instead of hiding it until
-then.
+**Why it was cut.** `health.context` must never call the agent (§6.1) and
+the api cannot depend on the agent being up at startup; a lazy fetch was
+the smallest honest option.
 
-**What done looks like.** The agent's `health.baseline` handler runs
-`--sections` once at startup and the api reads the live list through it;
-`KNOWN_ENGINE_SECTIONS` is deleted and `tests/test_health_engine_sections.py`
-pins the flag's output.
+**What done looks like.** The agent publishes the list with its heartbeat
+(`agent.health` gains `engine_sections`), the tracker keeps it, the api
+reads it from the tracker snapshot, and `KNOWN_ENGINE_SECTIONS` is
+deleted.
 
 ## Health — `health.context` fields without an observed source
 

@@ -20,6 +20,8 @@ import sys
 import time
 from datetime import datetime
 
+from xinas_menu.version import XINAS_MENU_VERSION
+
 # ─────────────────────────────────────────────────────────────────────────────
 # YAML parser fallback (no PyYAML dependency)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2571,8 +2573,36 @@ def generate_json_report(results, metadata):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+# S19c (s19-mcp-health-prompt-spec.md §8.5): the sections this engine can
+# check. `python3 -m xinas_menu.health --sections` publishes the list so the
+# control path computes `sections_without_checker` from the engine itself
+# rather than from a copy of these keys; an enabled YAML section outside it
+# is reported as a SKIP `checker` row in main() (AC-06, G-03), never dropped.
+SUPPORTED_SECTIONS: tuple[str, ...] = (
+    "services",
+    "cpu",
+    "kernel",
+    "vm",
+    "network",
+    "rdma",
+    "storage",
+    "nvme_health",
+    "filesystem",
+    "perf_tuning",
+    "nfs",
+)
+
+
+def _checkers():
+    """The section → checker map, built from SUPPORTED_SECTIONS so the two cannot drift."""
+    return {name: globals()[f"check_{name}"] for name in SUPPORTED_SECTIONS}
+
+
 def main():
     args = sys.argv[1:]
+    if "--sections" in args:
+        print(json.dumps({"sections": list(SUPPORTED_SECTIONS), "version": XINAS_MENU_VERSION}))
+        return
     if len(args) < 2:
         print("Usage: <profile_file> <log_dir> [flags...]", file=sys.stderr)
         sys.exit(1)
@@ -2604,19 +2634,7 @@ def main():
 
     # Run checks
     all_results = []
-    section_map = {
-        "services": check_services,
-        "cpu": check_cpu,
-        "kernel": check_kernel,
-        "vm": check_vm,
-        "network": check_network,
-        "rdma": check_rdma,
-        "storage": check_storage,
-        "nvme_health": check_nvme_health,
-        "filesystem": check_filesystem,
-        "perf_tuning": check_perf_tuning,
-        "nfs": check_nfs,
-    }
+    section_map = _checkers()
 
     for section_name, checker in section_map.items():
         section_cfg = sections.get(section_name, {})
@@ -2639,6 +2657,25 @@ def main():
                     evidence=f"Section check failed: {e}",
                 )
             )
+
+    # S19c (AC-06, G-03): an enabled section this engine has no checker for
+    # is reported as a SKIP row, so a profile can never claim coverage the
+    # engine does not have.
+    for section_name, section_cfg in sections.items():
+        if section_name in section_map or not isinstance(section_cfg, dict):
+            continue
+        if not section_cfg.get("enabled", False) or not section_cfg.get("checks"):
+            continue
+        all_results.append(
+            CheckResult(
+                section_name,
+                "checker",
+                "SKIP",
+                "not supported by this engine",
+                "N/A",
+                evidence="section has no checker",
+            )
+        )
 
     duration = f"{time.time() - start_time:.1f}s"
 

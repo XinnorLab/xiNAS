@@ -19,6 +19,7 @@ import type { Warning } from '../envelope.js';
 import type { HeartbeatTracker } from '../heartbeat.js';
 import { CATALOG, type MinRole, ROLE_RANK, mcpVisible } from '../mcp/catalog.js';
 import { SERVER_INFO } from '../mcp/discover.js';
+import { sectionsWithoutChecker } from './baseline.js';
 import type { HealthPromptContext } from './prompt-context.js';
 import type { RunEntry } from './run-ledger.js';
 
@@ -294,7 +295,18 @@ export function buildHealthContext(deps: HealthContextDeps): Record<string, unkn
     topology: { arrays, filesystems, shares, interfaces, declared_absent },
     collectors: { heartbeat, last_probe: lastProbe },
     freshness,
-    baselines: healthPrompt.profiles,
+    // S19c §8.5: once a baseline call has asked the engine which sections it
+    // checks, the gap is computed from that list; before, from the static copy.
+    baselines: {
+      dir: healthPrompt.profiles.dir,
+      dir_present: healthPrompt.profiles.dir_present,
+      sections_source: healthPrompt.engineSections === null ? 'static' : 'engine',
+      engine_version: healthPrompt.engineSections?.version ?? null,
+      profiles: healthPrompt.profiles.profiles.map((p) => ({
+        ...p,
+        sections_without_checker: sectionsWithoutChecker(p, healthPrompt.engineSections),
+      })),
+    },
     catalog: { version: healthPrompt.versions.catalog, tool: 'health.catalog' },
     tools,
     targets: { resolved, unknown },

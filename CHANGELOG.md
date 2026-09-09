@@ -52,8 +52,40 @@ Requires-Rebuild: xinas_node_build
   (`xinasctl health catalog`, MCP `health.catalog`) serves the versioned
   HC-01..HC-12 rows: producers, outcome and severity maps, side effects,
   cost, and `no_source` rows that name what cannot be checked today.
+- **`health.baseline` — the Python baseline engine over the control path
+  (S19c).** `GET /health/baseline?profile=` (`xinasctl health baseline`,
+  MCP `health.baseline`) has the agent run
+  `python3 -m xinas_menu.health <profile> --json --no-save` as a capped,
+  sandboxed, read-only subprocess (the profile must live in the profiles
+  directory; own process group, SIGKILL at the per-profile cap of
+  60/180/300 s, sanitized environment, output caps) and returns the
+  engine's report verbatim, with `max_age_s` serving the last successful
+  result from an in-memory cache. Viewer rank; answers when the agent is
+  down. The agent config gains an optional `health_baseline` block
+  (interpreter, module root, log and profiles directories).
+- **The agentic report contract and its validator (S19c).**
+  `GET /health/report-schema` serves the JSON Schema an agentic health
+  report must follow, and `POST /health/report/validate` (`xinasctl health
+  report validate`, MCP `health.report.validate`) checks a report against
+  it, resolves its evidence and check references, computes the
+  deterministic verdict from the catalog's mandatory rows (the report's
+  own `health_status` / `coverage_status` must match), and verifies every
+  raw report against the run ledger — an edited or invented raw report is
+  a `mismatch`. Pure computation, nothing stored.
+- **The health engine names what it cannot check.** A profile section
+  that is enabled but has no checker (`kerberos` in `deep.yml`) now
+  produces a SKIP `checker` row instead of vanishing from the report, and
+  `python3 -m xinas_menu.health --sections` prints the supported sections
+  and the engine version; `health.context` and `health.baseline` compute
+  `sections_without_checker` from that list once a baseline call obtained
+  it.
 
 ### Fixed
+
+- **`js-yaml`, `ajv` and `ajv-formats` are runtime dependencies.** The
+  api has imported `js-yaml` since S19b (the profile catalog) and now
+  needs `ajv` for the report validator; both were listed under
+  devDependencies and only worked because `npm ci` installs those too.
 
 - **Deep-profile probe artifacts are hardened.** Probe files are per run
   (`probe-<run>-<random>`) under a checked `.xinas-health` directory

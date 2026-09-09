@@ -190,6 +190,30 @@ On a scratch node (or after `./uninstall.sh`):
 - [ ] `GET /health/catalog`: `version: "1"`, twenty rows, `HC-11.client-path`
   and the other `no_source: true` rows list no inputs; `xinasctl health
   catalog` and `xinasctl health context` render the same bodies.
+- [ ] S19c baseline: `GET /health/baseline?profile=quick` with a viewer
+  token runs the real engine on the node (`collection.status: success`,
+  `engine.version` equals `XINAS_MENU_VERSION`, `report.checks` carry the
+  engine's PASS/WARN/FAIL/SKIP rows, `duration_ms` under the 60 s cap) and
+  leaves nothing under `/var/log/xinas/healthcheck` (`--no-save`);
+  `?profile=deep` reports `sections_without_checker: ["kerberos"]` and
+  the engine report holds a `kerberos / checker / SKIP` row; a second
+  call with `max_age_s=600` is `from_cache: true`; `GET /health/context`
+  now says `baselines.sections_source: engine`. Point
+  `health_baseline.python` at a missing path, restart the agent: the
+  route answers `200` with `collection.status: not_supported`,
+  `error.code: ENOENT`. `ps` shows no leftover python after a run that
+  was cut by a 1 s cap (set `baseline.timeout_s.quick: 10` and a slow
+  profile to observe `timeout`).
+- [ ] S19c report: `GET /health/report-schema` returns the v1 schema; build
+  a report around `GET /health?profile=quick&run_id=<run>` and
+  `GET /health/baseline?profile=quick&run_id=<run>` raw reports,
+  `POST /health/report/validate` → `valid: true`, `integrity.status:
+  verified`, `checked: 2`; change one raw check's status → `mismatch`
+  with `reason: report_rehash_mismatch`; mark a mandatory row
+  `not_applicable` with a reason that cites nothing →
+  `rewritten_to_unknown` and `coverage_status: partial`. Over MCP from a
+  modern client, `health.report.validate` passes the gate without
+  `mcp.allow_apply` and without a confirmation.
 - [ ] Drift: edit `/etc/netplan/99-xinas.yaml` by hand → `drift.netplan`
   degraded in `GET /health` AND `GET /config-history/drift`; re-apply →
   clean. Remove an export via `exportfs -u` → `drift.nfs-exports`

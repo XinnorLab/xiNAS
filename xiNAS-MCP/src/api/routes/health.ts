@@ -61,7 +61,15 @@ import type { Warning } from '../envelope.js';
 import { ApiException } from '../errors.js';
 import { gatherHealthFacts } from '../handlers/health-facts.js';
 import { getOrNull, sendOk } from '../handlers/reads.js';
+import {
+  type AgenticReport,
+  REPORT_SCHEMA,
+  validateReportShape,
+} from '../../lib/health/report-validate.js';
+import { parseMaxAgeS, runBaseline } from '../health/baseline.js';
 import { buildHealthContext, runUnknownWarning } from '../health/context.js';
+import { type Integrity, UNVERIFIABLE, checkIntegrity } from '../health/report-integrity.js';
+import { digestOf } from '../health/run-ledger.js';
 import { SERVER_INFO } from '../mcp/discover.js';
 import { queueConfirmationEvent } from '../mcp/confirmation/audit.js';
 import { argumentsHash } from '../mcp/confirmation/policy.js';
@@ -337,6 +345,121 @@ export function healthRouter(ctx: ApiContext): Router {
         hostname: hostname(),
       });
       sendOk(req, res, body, [], warnings);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /**
+   * GET /health/baseline (S19c, spec §8.4) — the Python baseline engine for
+   * one profile, run on the agent as a read-only subprocess; cached per
+   * profile for `max_age_s`; the result digest lands in the run ledger.
+   * Never fails because the agent is down (SAFE-04).
+   */
+  r.get('/health/baseline', async (req, res, next) => {
+    try {
+      const hp = ctx.healthPrompt;
+      if (hp === undefined) {
+        throw new ApiException(
+          'UNSUPPORTED',
+          'the agentic health prompt is disabled on this node (mcp.health_prompt.enabled: false)',
+          { reason: 'health_prompt_disabled' },
+        );
+      }
+      const profileName = typeof req.query.profile === 'string' ? req.query.profile : 'standard';
+      const profile = hp.profiles.profiles.find((p) => p.name === profileName);
+      if (profile === undefined) {
+        throw new ApiException('INVALID_ARGUMENT', `unknown baseline profile '${profileName}'`, {
+          profile: profileName,
+          known: hp.profiles.profiles.map((p) => p.name).sort(),
+        });
+      }
+      const maxAgeS = parseMaxAgeS(req.query.max_age_s, hp.config.baseline.max_age_s_default);
+      const runId =
+        typeof req.query.run_id === 'string' && req.query.run_id.length > 0
+          ? req.query.run_id
+          : null;
+      const result = await runBaseline({
+        hp,
+        client: ctx.tasks?.agentClient,
+        profile,
+        maxAgeS,
+      });
+      result.run_id = runId;
+      const warnings: Warning[] = [];
+      if (
+        runId !== null &&
+        !hp.ledger.record(
+          runId,
+          'health.baseline',
+          { profile: profileName, max_age_s: maxAgeS },
+          result,
+          result.collection.collected_at,
+        )
+      ) {
+        warnings.push(runUnknownWarning(runId));
+      }
+      sendOk(req, res, result, [], warnings);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /** GET /health/report-schema (S19c, spec §11.1) — the report contract, verbatim. */
+  r.get('/health/report-schema', (req, res, next) => {
+    try {
+      sendOk(req, res, REPORT_SCHEMA);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /**
+   * POST /health/report/validate (S19c, spec §11.2–§11.4) — a pure
+   * computation over the report in the body: schema, references, the
+   * deterministic verdict, and raw-report integrity against the run ledger.
+   * Nothing is stored (DATA-06); the http audit row's result hash binds
+   * `valid`, the computed statuses and `report_digest`.
+   */
+  r.post('/health/report/validate', (req, res, next) => {
+    try {
+      const body: unknown = req.body;
+      if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+        throw new ApiException('INVALID_ARGUMENT', 'the body must be the report object');
+      }
+      const shape = validateReportShape(body, AGENTIC_CATALOG);
+      const warnings: Warning[] = [];
+      let runId: string | null = null;
+      let integrity: Integrity = UNVERIFIABLE;
+      if (shape.computed !== null) {
+        const report = body as AgenticReport;
+        runId = report.run.run_id;
+        const entry = ctx.healthPrompt?.ledger.get(runId) ?? null;
+        if (entry === null) warnings.push(runUnknownWarning(runId));
+        else integrity = checkIntegrity(entry, report.raw_reports);
+      }
+      const valid =
+        shape.schema_errors.length === 0 &&
+        shape.reference_errors.length === 0 &&
+        shape.status_errors.length === 0 &&
+        integrity.status !== 'mismatch';
+      sendOk(
+        req,
+        res,
+        {
+          valid,
+          run_id: runId,
+          schema_errors: shape.schema_errors,
+          reference_errors: shape.reference_errors,
+          integrity,
+          computed: shape.computed,
+          status_errors: shape.status_errors,
+          rewritten_to_unknown: shape.rewritten_to_unknown,
+          report_digest: digestOf(body),
+        },
+        [],
+        warnings,
+      );
     } catch (err) {
       next(err);
     }

@@ -72,6 +72,20 @@ describe('gateVerdict (S8 T6 — the WS12 exit criterion)', () => {
     expect(gateVerdict(entry('tasks.cancel'), { id: 't1' }, false).allowed).toBe(true);
   });
 
+  it('S19c: health.report.validate is a viewer direct POST with no side effects — no gate, no confirmation', () => {
+    const e = entry('health.report.validate');
+    expect(e.mutability).toBe('direct');
+    expect(e.min_role).toBe('viewer');
+    expect(e.requires_mcp_apply).toBe(false);
+    expect(e.confirmation).toBeUndefined();
+    expect(gateVerdict(e, { report_schema_version: '1' }, false).allowed).toBe(true);
+    expect(isConfirmable(e, {})).toBe(false);
+    for (const name of ['health.baseline', 'health.report_schema']) {
+      expect(entry(name).min_role).toBe('viewer');
+      expect(gateVerdict(entry(name), {}, false).allowed).toBe(true);
+    }
+  });
+
   it('every other plan_apply mutator is gated (no silent holes)', () => {
     for (const e of CATALOG.filter((c) => c.mutability === 'plan_apply')) {
       expect(gateVerdict(e, { mode: 'apply' }, false).allowed, `${e.name} must gate apply`).toBe(

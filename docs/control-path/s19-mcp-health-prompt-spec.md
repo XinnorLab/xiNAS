@@ -6,14 +6,22 @@ hardened probe host and `health.probe.run` (§9), the S15 direct-entry
 binding (§9.1); **S19b implemented 2026-09-09** — the `xinas_health_check`
 prompt on both eras with truthful discovery (§4, §5), `health.context`
 and the in-memory run ledger (§6), `probes_per_run` (§9.5), the check
-catalog and `health.catalog` (§10), `mcp.health_prompt` (§12.1). S19c
-(baseline adapter, report validator) and S19d (acceptance fixtures) are
-pending; their "MUST"s still describe the intended end state. Deviations
-found while implementing are recorded inline where they apply (S19a: §7.2
-quick-check evidence, §9.1 binding fields, §9.3 `openat`/`flock`
-substitutes; S19b: §5.3 symptom marker, §6.1 run ownership and the
-disabled case, §6.2 field sources, §6.3 sweep and bound, §8.2 static
-section list, §10.1 loader, §12.1 override file shape). Extends **ADR-0009**
+catalog and `health.catalog` (§10), `mcp.health_prompt` (§12.1);
+**S19c implemented 2026-09-09** — the `health.baseline` agent RPC and
+its sandboxed engine host (§8.3), `GET /health/baseline` with the
+per-profile cache and the engine's live section list (§8.2, §8.4), the
+Python engine's SKIP `checker` row and `--sections` (§8.5), the report
+schema, `health.report_schema` and `health.report.validate` with the
+deterministic verdict and run-ledger integrity (§11), `health_baseline`
+agent config (§12.2). S19d (acceptance fixtures) is pending; its "MUST"s
+still describe the intended end state. Deviations found while
+implementing are recorded inline where they apply (S19a: §7.2 quick-check
+evidence, §9.1 binding fields, §9.3 `openat`/`flock` substitutes; S19b:
+§5.3 symptom marker, §6.1 run ownership and the disabled case, §6.2 field
+sources, §6.3 sweep and bound, §10.1 loader, §12.1 override file shape;
+S19c: §8.1 defaults, §8.3 the `--sections` mode and error codes, §8.4
+cache age and the lazy engine list, §8.5 the static fallback, §11.2
+response fields, §11.5 the audit row, §12.2 validation). Extends **ADR-0009**
 (`health.probe`, the profile engine), **ADR-0010** / `s8-clients-spec.md`
 (the catalog, the gate, the `/mcp` transport), **S14**
 (`s14-mcp-modern-era-spec.md`, both protocol eras), **S15**
@@ -636,6 +644,15 @@ and needs root — which the agent has — so viewer rank is correct and no
 escalation applies. The description states the cap (§8.3) and that the
 profile's own `timeout_seconds` may be truncated by it.
 
+*Implemented (S19c, `routes/health.ts`, `api/health/baseline.ts`):*
+`profile` defaults to `standard` and must be a name from the startup
+catalog (`INVALID_ARGUMENT` with `details.known`); `max_age_s` must be an
+integer 0–3600 and defaults to `baseline.max_age_s_default`; a shipped
+name whose file is absent from the api's `profiles_dir` answers
+`collection.status: error`, `error.code: PROFILE_NOT_FOUND` without
+calling the agent. With `mcp.health_prompt.enabled: false` the route is
+`UNSUPPORTED`, like `health.context` (§6.1).
+
 ### 8.2 Profile catalog
 
 At startup the api lists `mcp.health_prompt.baseline.profiles_dir`
@@ -685,6 +702,27 @@ Timeouts (`mcp.health_prompt.baseline.timeout_s`): `quick` 60 s,
 `min(profile.timeout_seconds, cap)`. A truncated run is `timeout`; the
 api never presents a partial engine report as complete.
 
+*Implemented (S19c, `agent/health/baseline-host.ts`,
+`agent/rpc/methods/health-baseline.ts`):* the same RPC also answers the
+engine's section list — params `{ sections: true, timeout_s? }` (default
+30 s) run `-m xinas_menu.health --sections` and return `{ status,
+collected_at, sections: string[] | null, version: string | null,
+error? }`, cached in the agent after the first success; `engine.version`
+on run results comes from that answer (null until it is known). Beyond
+the codes above, `error.code` can be `OUTSIDE_PROFILES_DIR` (the realpath
+check refused the path before anything was spawned), `PROFILE_NOT_FOUND`,
+`PROFILES_DIR_MISSING`, `MODULE_ABSENT` (a non-zero exit whose stderr
+says `No module named` → `not_supported`), `KILLED` (a signal that was
+not the deadline) and `PARSE` (stdout not a JSON object, or beyond the 4
+MiB cap — the whole output is dropped, never truncated into a report).
+`timeout_s` is 1–900. The profile the engine receives is the canonical
+realpath. Concurrency is per profile: two callers of the same profile
+share one subprocess; a different profile waits for the running one
+(one engine subprocess per agent at any time). The environment is
+exactly `PATH`, `LANG=C.UTF-8`, `PYTHONPATH=<module_root>`; stdin is
+`/dev/null`; the child is its own process group and the group is
+SIGKILLed at the deadline.
+
 ### 8.4 Api route and cache
 
 `GET /health/baseline` returns
@@ -704,6 +742,19 @@ cached result with `from_cache: true` and the original `collected_at`
 runs. The cache is not written to KV (DATA-06) and does not survive a
 restart.
 
+*Implemented (S19c):* the response also carries `stderr_tail` (the
+engine's last 4 KiB of stderr) and `run_id`; `error` is `null` on
+success; `age_s` counts from the moment the api received the result
+(the agent shares the host clock, so this differs from `collected_at`
+by the RPC round trip only). Only a `success` result is cached, so a
+failed run is never served from cache. Before the first engine run of
+the process the route asks the agent for the `--sections` list
+(§8.5) once; the answer feeds `sections_without_checker` here and in
+`health.context`, whose `baselines` object gains `sections_source:
+'engine' | 'static'` and `engine_version`. A `run_id` records the
+response digest in the ledger under tool `health.baseline` with
+`args_digest` over `{ profile, max_age_s }` (§6.3).
+
 ### 8.5 Python-side changes (AC-06, G-03)
 
 - `engine.main()` appends, for every YAML section that is enabled but
@@ -716,6 +767,20 @@ restart.
   prints them as JSON; the api reads that once at startup to fill
   `sections_without_checker` (§8.2). Code-only Python change: no rebuild
   trailer.
+
+*Implemented (S19c, `xinas_menu/health/engine.py`,
+`tests/test_health_engine_sections.py`):* `--sections` prints one object,
+`{ "sections": [...], "version": "<XINAS_MENU_VERSION>" }`, and exits 0
+without needing the profile arguments; the checker map is derived from
+`SUPPORTED_SECTIONS` so the two cannot drift. The SKIP row is emitted
+only for an enabled section that lists checks (an enabled section with
+an empty `checks` list produces nothing, like a known section would).
+The api does not query the engine at startup — it cannot reach the agent
+before the heartbeat is up and must not block on it — it asks on the
+first `GET /health/baseline` of the process and keeps the answer;
+`api/health/profiles.ts` keeps `KNOWN_ENGINE_SECTIONS` as the fallback
+until then and `health.context` says which list is in force
+(`baselines.sections_source`, `docs/TODO.md`).
 
 ## 9. Active probes — `health.probe.run`
 
@@ -990,6 +1055,24 @@ report. Response:
 `integrity.status !== 'mismatch'`. `unverifiable` (unknown or expired
 `run_id`) does not invalidate — it is reported (SAFE-04, AC-18).
 
+*Implemented (S19c, `lib/health/report-validate.ts`,
+`api/health/report-integrity.ts`, `routes/health.ts`):* the response
+also carries `run_id` (the report's, or null when schema errors kept it
+unread), `rewritten_to_unknown` (the `not_applicable` rows step 3
+rewrote), `integrity.checked` (how many raw reports were checkable) and
+`report_digest` (`sha256:<hex>` over the canonical JSON of the body);
+each mismatch names its `reason` (`report_rehash_mismatch`,
+`not_in_ledger`, `digest_mismatch`). Schema errors are Ajv 2020-12
+instance paths; when the schema fails, `computed` is null and no
+reference or status check runs. References are checked in report order:
+`checks[].id` and `checks[].evidence_refs`, then
+`findings[].check_ids` (a check id present in the report or in the
+catalog) and `findings[].evidence_refs`, then `not_checked[].check_id`.
+A body that is not a JSON object is `INVALID_ARGUMENT`; a report that
+fails validation is still a 200 with `valid: false`. The body is
+subject to the api-wide 1 MB JSON limit. An unknown run also yields the
+`RUN_UNKNOWN` warning of §6.3.
+
 ### 11.3 Deterministic verdict (REPORT-03, D-12)
 
 Over `checks[]`, mandatory rows for the declared scope (from the
@@ -1024,6 +1107,12 @@ manifest. The validator's audit row records `run_id`, `valid`, the two
 computed statuses and the report's sha256 — enough to prove later what
 was validated without keeping the text.
 
+*Implemented (S19c):* there is no separate audit row — the one http row
+every catalog entry gets (§13) is it: its `parameters_hash` is the sha256
+of the canonical body (the report), and its `result_hash` covers the
+response, which carries `valid`, `computed` and `report_digest`. Nothing
+about the report is kept server-side.
+
 ## 12. Configuration
 
 ### 12.1 `mcp.health_prompt` (api `config.json`)
@@ -1057,6 +1146,13 @@ validator's algorithm; `template_path` changes text only.
 | `module_root` | `/opt/xiNAS` |
 | `log_dir` | `/var/log/xinas/healthcheck` (passed to the engine, unused with `--no-save`) |
 | `profiles_dir` | `/opt/xiNAS/healthcheck_profiles` (the realpath allow-list, §8.3) |
+
+*Implemented (S19c, `agent/config.ts`):* the block is optional in
+`/etc/xinas-agent/config.json` (the Ansible template does not render it;
+the defaults above apply); every key must be an absolute path and an
+unknown key is fatal at startup, naming the key. Tests point `python` at
+a stub script, which is how the e2e suite runs the adapter without a
+Python venv.
 
 ### 12.3 Deferred (CFG-03)
 
@@ -1124,13 +1220,14 @@ validate --file`) from the catalog without CLI code.
 | Unit — `standard.ts` | every `CollectionStatus` maps per §7.2; `not_supported` is the only `skipped`; `success` + empty keeps the old symptom with `collection.status: success` (AC-03) |
 | Unit — `routes-health` | `coverage_status` and `collection` per §7.3; a v1-shaped probe result maps to `LEGACY_AGENT`; `overall` semantics unchanged (REPORT-01) |
 | Unit — `probe-host` (fake fs via the existing file-backed fakes plus a real `tmpdir` case) | unique names, `EEXIST` retry, symlinked `.xinas-health` refused, foreign-device refused, cleanup failure surfaced, timeout stops the step, two concurrent loopbacks → one `PROBE_IN_PROGRESS` (AC-15) |
-| Unit — `health-baseline` (agent) | command line, env sanitization, realpath allow-list, `--sections` parsing, SIGKILL at timeout, concurrent callers share one run, stdout cap |
-| Unit — `report-validate` | the verdict table of §11.3 on fixtures (AC-01, AC-02, AC-19 edited FAIL → `mismatch`), reference errors, `unverifiable` on unknown run |
+| Unit — `agent/health/baseline-host.test.ts`, `agent/rpc/health-baseline.test.ts`, `agent/config-health-baseline.test.ts` (S19c) | against real stub interpreters: command line, cwd, env sanitization, realpath allow-list (path and symlink), SIGKILL of the process group at the timeout, `EXIT_<n>` / `MODULE_ABSENT` / `PARSE` / `ENOENT`, the stdout cap, concurrent callers share one run and a different profile is serialized, `--sections` parsing and caching; the RPC's parameter validation; the config block's defaults and validation |
+| Unit — `api/routes-health-baseline.test.ts` (S19c) | the capped timeout per profile, the live section list, the per-profile cache (`from_cache`, `age_s`, a failed run never cached), profile and `max_age_s` validation, the ledger digest under a `run_id`, `RUN_UNKNOWN`, `EXECUTOR_UNAVAILABLE` without an agent |
+| Unit — `lib/health/report-validate.test.ts`, `api/routes-health-report.test.ts` (S19c) | the schema on a minimal valid report and each error path; the verdict table of §11.3 row by row (AC-01, AC-02, REPORT-02 rewrite, AC-08 service_path); reference errors with paths; status errors; over the route: `verified`, an edited raw FAIL → `mismatch` (AC-19), an invented report → `not_in_ledger`, non-ledger tools skipped, `unverifiable` on an unknown run, a malformed body |
 | Contract — `mcp-wire.test.ts` (S19b) | `prompts/list` and `prompts/get` responses validate against the pinned `2026-07-28` schema on the modern era (`ListPromptsResult`, `Prompt`, `GetPromptResult`, `JSONRPCErrorResponse`); `mcp-integration.test.ts` drives the legacy shapes over the wire (no `resultType`, `initialize` advertises `prompts`) and the audit row. The stdio adapter forwards every method unchanged, so it is covered by the HTTP contract (AC-16) |
 | Integration — `rbac.test.ts`, `mcp-dispatch.test.ts`, `mcp-integration.test.ts` | the §13 matrix per entry; viewer `health.probe.run` denied on REST and MCP; operator with `allow_apply` on a legacy client → `MCP_CONFIRMATION_UNSUPPORTED`; modern → confirmation flow, consumed once (AC-14) |
-| e2e — `health-support.test.ts` extension | deep through the hardened host: artifact names differ per call, none left behind; `health.baseline` against a fixture engine (`python3` stub printing a canned report) with `not_supported` for a missing interpreter; `health.context` while the agent is stopped answers with `heartbeat: offline` (AC-18) |
+| e2e — `health-support.test.ts` extension | deep through the hardened host: artifact names differ per call, none left behind; *(S19c, cases 4c/4d/5)* `health.baseline` against a stub engine (`health_baseline.python` → a shell script printing a canned report and a `--sections` list) through the agent's real sandboxed subprocess, the cache on `max_age_s`, `sections_source: engine` in `health.context`; the report schema served and a report over the run's raw quick report `verified` while an edited raw report is a `mismatch`; `health.context` while the agent is SIGSTOPped still answers with a non-healthy heartbeat (AC-18). The missing-interpreter case (`not_supported`/`ENOENT`) is a unit test |
 | Fixtures — `src/__tests__/fixtures/agentic/` | the anonymized incident set of requirements §10 (one directory per AC with the raw reports, the expected outcomes and the forbidden calls); a fixture runner asserts validator results, not prompt text |
-| Python — `tests/test_health_engine_sections.py` | `kerberos` enabled → a SKIP `checker` row; `--sections` prints the map |
+| Python — `tests/test_health_engine_sections.py` (S19c) | `kerberos` enabled → exactly one SKIP `checker` row and `summary.skip: 1`; a disabled or check-less unknown section → no row; `--sections` prints `{ sections, version }` and exits 0; `SUPPORTED_SECTIONS` names real checkers |
 
 ## 16. Acceptance criteria coverage
 
@@ -1141,7 +1238,7 @@ validate --file`) from the catalog without CLI code.
 | AC-03 | §7.1/§7.2 status enum and mapping |
 | AC-04 | §6.2 `declared_absent` derivation, §11.3 step 3 |
 | AC-05 | §8 (baseline profiles) vs §9 (probes) are different tools; the prompt forbids deep under observe_only; `health.context.permitted` lists `deep` only when reachable |
-| AC-06 | §8.5 |
+| AC-06 | §8.5 (S19c: the SKIP `checker` row and `--sections`; `sections_without_checker` from the live list) |
 | AC-07 | §10 `expected_source` order; overrides live in `config.json` (survive updates) — provenance in `evidence_manifest.source` |
 | AC-08 | §9.2 `proves` text; HC-11 `no_source` row keeps `service_path` partial |
 | AC-09 | HC-03/HC-09 rows in §10.2 |
