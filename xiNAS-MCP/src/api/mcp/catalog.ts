@@ -427,6 +427,36 @@ export const CATALOG: CatalogEntry[] = [
     'The versioned agentic check catalog (HC-01..HC-12): per check its producers, outcome ' +
       'and severity maps, side effects, cost and which rows have no producer today. Static data.',
   ),
+  // S19c (spec §8, ADR-0018 §5): the Python baseline engine, read-only.
+  {
+    ...read(
+      'health.baseline',
+      'GET',
+      '/health/baseline',
+      'Run the Python baseline engine for one profile (quick, standard, deep, or a custom ' +
+        'profile from the profiles directory) on the agent as a read-only subprocess and return ' +
+        'its report verbatim. The engine timeout is capped per profile by ' +
+        'mcp.health_prompt.baseline.timeout_s (60/180/300 s); the profile’s own ' +
+        'timeout_seconds may be truncated. max_age_s > 0 serves the last successful result of ' +
+        'that profile if it is younger (from_cache: true, original collected_at). Answers when ' +
+        'the agent is down, with collection.status saying so. Coverage differs from health.check; ' +
+        'do not substitute one for the other.',
+    ),
+    input_schema: {
+      type: 'object',
+      properties: {
+        profile: { type: 'string', description: 'profile name (default standard)' },
+        max_age_s: {
+          type: 'integer',
+          minimum: 0,
+          maximum: 3600,
+          description: 'accept a cached result up to this old; 0 (default) always runs',
+        },
+        run_id: { type: 'string', description: 'optional S19 run id (records the result digest)' },
+      },
+      additionalProperties: false,
+    },
+  },
   // S19a (spec §9.1, ADR-0018 §4): ONE confirmed active probe. A direct
   // entry — no plan document — that is operator-rank, apply-class over MCP
   // and the first user of the S15 `confirmation: 'required'` hook: the

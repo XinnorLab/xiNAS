@@ -111,10 +111,12 @@ describe('buildHealthPromptContext', () => {
     const block = JSON.parse(
       text.slice(text.indexOf('---\n{') + 4, text.indexOf('\n<user_symptom>')),
     ) as { available: Record<string, boolean> };
-    // S19a shipped health.probe.run; health.context / health.catalog land in
-    // this slice (T5/T6) and health.baseline / report_schema / validate in S19c.
+    // S19a shipped health.probe.run, S19b health.context / health.catalog,
+    // S19c health.baseline; report_schema / validate land with S19c T6.
     expect(block.available.probe_run).toBe(true);
-    expect(block.available.baseline).toBe(false);
+    expect(block.available.context).toBe(true);
+    expect(block.available.catalog).toBe(true);
+    expect(block.available.baseline).toBe(true);
     expect(block.available.report_schema).toBe(false);
     expect(block.available.validate).toBe(false);
   });

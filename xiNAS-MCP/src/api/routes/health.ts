@@ -61,6 +61,7 @@ import type { Warning } from '../envelope.js';
 import { ApiException } from '../errors.js';
 import { gatherHealthFacts } from '../handlers/health-facts.js';
 import { getOrNull, sendOk } from '../handlers/reads.js';
+import { parseMaxAgeS, runBaseline } from '../health/baseline.js';
 import { buildHealthContext, runUnknownWarning } from '../health/context.js';
 import { SERVER_INFO } from '../mcp/discover.js';
 import { queueConfirmationEvent } from '../mcp/confirmation/audit.js';
@@ -337,6 +338,61 @@ export function healthRouter(ctx: ApiContext): Router {
         hostname: hostname(),
       });
       sendOk(req, res, body, [], warnings);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /**
+   * GET /health/baseline (S19c, spec §8.4) — the Python baseline engine for
+   * one profile, run on the agent as a read-only subprocess; cached per
+   * profile for `max_age_s`; the result digest lands in the run ledger.
+   * Never fails because the agent is down (SAFE-04).
+   */
+  r.get('/health/baseline', async (req, res, next) => {
+    try {
+      const hp = ctx.healthPrompt;
+      if (hp === undefined) {
+        throw new ApiException(
+          'UNSUPPORTED',
+          'the agentic health prompt is disabled on this node (mcp.health_prompt.enabled: false)',
+          { reason: 'health_prompt_disabled' },
+        );
+      }
+      const profileName = typeof req.query.profile === 'string' ? req.query.profile : 'standard';
+      const profile = hp.profiles.profiles.find((p) => p.name === profileName);
+      if (profile === undefined) {
+        throw new ApiException('INVALID_ARGUMENT', `unknown baseline profile '${profileName}'`, {
+          profile: profileName,
+          known: hp.profiles.profiles.map((p) => p.name).sort(),
+        });
+      }
+      const maxAgeS = parseMaxAgeS(req.query.max_age_s, hp.config.baseline.max_age_s_default);
+      const runId =
+        typeof req.query.run_id === 'string' && req.query.run_id.length > 0
+          ? req.query.run_id
+          : null;
+      const result = await runBaseline({
+        hp,
+        client: ctx.tasks?.agentClient,
+        profile,
+        maxAgeS,
+      });
+      result.run_id = runId;
+      const warnings: Warning[] = [];
+      if (
+        runId !== null &&
+        !hp.ledger.record(
+          runId,
+          'health.baseline',
+          { profile: profileName, max_age_s: maxAgeS },
+          result,
+          result.collection.collected_at,
+        )
+      ) {
+        warnings.push(runUnknownWarning(runId));
+      }
+      sendOk(req, res, result, [], warnings);
     } catch (err) {
       next(err);
     }

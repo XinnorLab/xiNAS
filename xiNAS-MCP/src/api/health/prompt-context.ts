@@ -25,6 +25,7 @@ import {
   createHealthPromptProvider,
   sha256Hex,
 } from '../mcp/prompts/health-check.js';
+import type { BaselineCacheEntry, EngineSections } from './baseline.js';
 import { type ProfileCatalog, loadProfileCatalog } from './profiles.js';
 import { RunLedger } from './run-ledger.js';
 
@@ -55,6 +56,10 @@ export interface HealthPromptContext {
   ledger: RunLedger;
   /** Written by `GET /health` whenever the agent answered a standard/deep probe. */
   lastProbe: LastProbe | null;
+  /** S19c §8.4: the last successful baseline result per profile name. */
+  baselineCache: Map<string, BaselineCacheEntry>;
+  /** S19c §8.5: the engine's `--sections` answer once a baseline call obtained it; null = static list. */
+  engineSections: EngineSections | null;
 }
 
 export interface HealthPromptDeps {
@@ -163,5 +168,7 @@ export function buildHealthPromptContext(
       ttlMs: resolved.limits.run_ttl_seconds * 1000,
     }),
     lastProbe: null,
+    baselineCache: new Map(),
+    engineSections: null,
   };
 }
