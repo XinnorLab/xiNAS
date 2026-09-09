@@ -72,6 +72,45 @@ function installed(name: string): boolean {
   return CATALOG.some((e) => e.name === name);
 }
 
+export const TEMPLATE_MARKER = '## Prompt body';
+export const TEMPLATE_MAX_BYTES = 64 * 1024;
+
+/**
+ * §12.1 `template_path`: the operator's file has the docs template's shape
+ * (a markdown document whose `## Prompt body` section is the body), so an
+ * operator copies `s19-mcp-health-prompt-template.md` and edits it. Read
+ * once at startup; every defect aborts startup with the key named — a
+ * silently ignored override would serve a prompt the operator did not
+ * write.
+ */
+export function readTemplateOverride(
+  path: string,
+  read: (p: string) => string = (p) => readFileSync(p, 'utf8'),
+): string {
+  const key = 'mcp.health_prompt.template_path';
+  let text: string;
+  try {
+    text = read(path);
+  } catch (err) {
+    throw new Error(
+      `${key}: cannot read ${path}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  if (Buffer.byteLength(text, 'utf8') > TEMPLATE_MAX_BYTES) {
+    throw new Error(`${key}: ${path} exceeds ${TEMPLATE_MAX_BYTES} bytes`);
+  }
+  if (text.includes(String.fromCharCode(0))) throw new Error(`${key}: ${path} contains a NUL byte`);
+  const lines = text.split('\n');
+  const at = lines.findIndex((l) => l.trimEnd() === TEMPLATE_MARKER);
+  if (at === -1) throw new Error(`${key}: ${path} has no "${TEMPLATE_MARKER}" marker line`);
+  const body = lines
+    .slice(at + 1)
+    .join('\n')
+    .trim();
+  if (body.length === 0) throw new Error(`${key}: ${path} is empty after the marker`);
+  return `${body}\n`;
+}
+
 export function buildHealthPromptContext(
   config: ApiConfig,
   deps: HealthPromptDeps = {},
@@ -81,25 +120,15 @@ export function buildHealthPromptContext(
 
   let body = HEALTH_PROMPT_TEMPLATE;
   if (resolved.template_path !== null) {
-    const read = deps.readTemplate ?? ((p: string) => readFileSync(p, 'utf8'));
-    try {
-      body = read(resolved.template_path);
-    } catch (err) {
-      throw new Error(
-        `mcp.health_prompt.template_path: cannot read ${resolved.template_path}: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      );
-    }
-    if (body.trim().length === 0) {
-      throw new Error(`mcp.health_prompt.template_path: ${resolved.template_path} is empty`);
-    }
+    body = readTemplateOverride(resolved.template_path, deps.readTemplate);
   }
   const templateSha256 = sha256Hex(body);
   const profiles = (deps.loadProfiles ?? loadProfileCatalog)(resolved.baseline.profiles_dir);
   const profileNames = profiles.profiles.map((p) => p.name);
   const versions = {
-    prompt: HEALTH_PROMPT_VERSION,
+    // §12.1: an operator override is the shipped version plus `+local`.
+    prompt:
+      resolved.template_path === null ? HEALTH_PROMPT_VERSION : `${HEALTH_PROMPT_VERSION}+local`,
     policy: resolved.policy_version,
     catalog: AGENTIC_CATALOG_VERSION,
     report_schema: REPORT_SCHEMA_VERSION,

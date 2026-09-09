@@ -66,36 +66,42 @@ describe('buildHealthPromptContext', () => {
       }),
       {
         loadProfiles: () => catalog(['standard']),
-        readTemplate: (p) => `Site body from ${p}\n`,
+        readTemplate: (p) =>
+          `# Site prompt\n\n> notes\n\n## Prompt body\n\nSite body from ${p}\n\nSecond paragraph.\n`,
       },
     );
-    expect(hp?.body).toBe('Site body from /etc/xinas/health-prompt.md\n');
-    expect(hp?.templateSha256).toBe(sha256Hex('Site body from /etc/xinas/health-prompt.md\n'));
+    expect(hp?.body).toBe('Site body from /etc/xinas/health-prompt.md\n\nSecond paragraph.\n');
+    expect(hp?.templateSha256).toBe(sha256Hex(hp?.body ?? ''));
     expect(hp?.versions.policy).toBe('site-2');
+    expect(hp?.versions.prompt).toBe('1.0.0+local');
     const text =
       hp?.prompts.providers[0]?.get('xinas_health_check', { probe_policy: 'bounded_active' }, ctx)
         .messages[0]?.content.text ?? '';
     expect(text.startsWith('Site body from')).toBe(true);
     expect(text).toContain('"effective": "bounded_active"');
     expect(text).toContain('"policy_version": "site-2"');
+    expect(text).toContain('"prompt_version": "1.0.0+local"');
   });
 
-  it('fails startup loudly on an unreadable or empty override', () => {
-    const base = { loadProfiles: () => catalog(['standard']) };
+  it.each([
+    [
+      'unreadable',
+      () => {
+        throw new Error('ENOENT');
+      },
+      /template_path: cannot read \/etc\/xinas\/x.md: ENOENT/,
+    ],
+    ['marker-less', () => 'Just a body without the section marker\n', /no "## Prompt body" marker/],
+    ['empty after the marker', () => '# t\n## Prompt body\n  \n', /is empty after the marker/],
+    ['NUL-bearing', () => `## Prompt body\nbody${String.fromCharCode(0)}\n`, /NUL byte/],
+    ['oversized', () => `## Prompt body\n${'x'.repeat(64 * 1024)}\n`, /exceeds 65536 bytes/],
+  ])('fails startup loudly on an %s override', (_label, readTemplate, message) => {
     expect(() =>
-      buildHealthPromptContext(config({ template_path: '/etc/xinas/missing.md' }), {
-        ...base,
-        readTemplate: () => {
-          throw new Error('ENOENT');
-        },
+      buildHealthPromptContext(config({ template_path: '/etc/xinas/x.md' }), {
+        loadProfiles: () => catalog(['standard']),
+        readTemplate,
       }),
-    ).toThrow(/template_path: cannot read \/etc\/xinas\/missing.md: ENOENT/);
-    expect(() =>
-      buildHealthPromptContext(config({ template_path: '/etc/xinas/empty.md' }), {
-        ...base,
-        readTemplate: () => '  \n',
-      }),
-    ).toThrow(/is empty/);
+    ).toThrow(message);
   });
 
   it('available.* reflects the catalog entries that exist today', () => {
