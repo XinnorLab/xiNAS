@@ -588,6 +588,19 @@ agent are rebuilt and restarted together by `xinas_node_build`; a v1
 result (no `schema`) is mapped to every section `status: 'error',
 code: 'LEGACY_AGENT'` so the mismatch is visible, not silent.
 
+> **Implemented (2026-09-10, validation F04).** Three production paths
+> had collapsed failures into an empty success: `rdma link show -j`
+> returned `''` on ANY non-zero exit (a permission refusal became "no
+> links"), a JSON payload that was not an array became `[]`, and a failed
+> managed-filesystem inventory became `fs_io: []`. Now: only exit 127 /
+> `ENOENT` is `not_supported`; "Operation not permitted" / "Permission
+> denied" in the tool output is `permission_denied` (`EPERM`); any other
+> non-zero exit is `error` (`EXIT_<n>`); a payload that is not a JSON
+> array is `error` (`PARSE`); and an inventory failure rejects the whole
+> `probes` section with `error` (`INVENTORY_UNAVAILABLE`) — both deep
+> checks then report "collection failed" instead of "no filesystems".
+> A `success` + `[]` section still means "asked and found none".
+
 ### 7.2 Mapping to checks (D-05)
 
 `lib/health/standard.ts` builders take a `Section<T>`:

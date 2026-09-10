@@ -105,7 +105,7 @@ describe('health.probe.run handler', () => {
 });
 
 describe('makeDeepProbeRunner over the new host', () => {
-  it('probes every mounted fs with runId null; loopback only with an export; listing failure → empty', async () => {
+  it('probes every mounted fs with runId null; loopback only with an export; listing failure rejects (F04b)', async () => {
     const seen: string[] = [];
     const host: ProbeHost = {
       fsIo: async (m, o) => {
@@ -143,6 +143,9 @@ describe('makeDeepProbeRunner over the new host', () => {
         throw new Error('mountinfo unreadable');
       },
     });
-    expect((await broken(null)).fs_io).toEqual([]);
+    await expect(broken(null)).rejects.toMatchObject({
+      code: 'INVENTORY_UNAVAILABLE',
+      status: 'error',
+    });
   });
 });

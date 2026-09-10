@@ -38,9 +38,9 @@ describe('createRealNetHost command goldens', () => {
     ]);
   });
 
-  it('rdmaLinkShow degrades to "" when the tool is missing (exit 127)', async () => {
-    const host = createRealNetHost({ runCommand: async () => ({ stdout: 'boom', code: 127 }) });
-    expect(await host.rdmaLinkShow()).toBe('');
+  it('rdmaLinkShow rejects on a non-zero exit that is not 127', async () => {
+    const host = createRealNetHost({ runCommand: async () => ({ stdout: 'boom', code: 2 }) });
+    await expect(host.rdmaLinkShow()).rejects.toMatchObject({ code: 'EXIT_2' });
   });
 
   it('netplan generate failure throws with output', async () => {
