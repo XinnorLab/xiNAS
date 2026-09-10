@@ -18,10 +18,18 @@
  * passes while it waits its turn is `timeout` and is never spawned. Runs
  * coalesce on the profile's realpath across the WHOLE queue, so a caller
  * of a queued or running profile joins that one subprocess (SAFE-04
- * "duplicate requests are merged") while keeping its own deadline. At most
- * `maxQueued` (default 4) distinct profiles are queued or running at once;
- * a further profile is refused `QUEUE_FULL` instead of growing a backlog.
- * `sections()` queues under the same deadline rules.
+ * "duplicate requests are merged") while keeping its own deadline; the
+ * job itself runs against the LONGEST deadline of its participants, so an
+ * initiator that gave up never cancels a run a joiner still wants. At most
+ * `maxQueued` (default 4) distinct jobs are queued or running at once; a
+ * further one is refused `QUEUE_FULL` instead of growing a backlog.
+ * `sections()` is one more such job (key `--sections`): it coalesces and
+ * counts against the same bound under the same deadline rules.
+ *
+ * The engine's own budget is the time left before that deadline less
+ * {@link ENGINE_GRACE_MS}, so its kill timer fires first and the caller
+ * sees the engine's typed `timeout` — with `duration_ms` and the stderr
+ * tail — instead of the queue's bare deadline answer.
  *
  * A truncated, failed or unparseable run is a typed failure — never a
  * partial report presented as complete.
@@ -37,6 +45,13 @@ export const BASELINE_ENGINE_MODULE = 'xinas_menu.health.engine';
 export const STDOUT_CAP = 4 * 1024 * 1024;
 export const STDERR_CAP = 64 * 1024;
 export const STDERR_TAIL = 4 * 1024;
+/**
+ * How much of a caller's budget is reserved for the answer to travel back
+ * (validation F09): the engine is killed at `deadline - ENGINE_GRACE_MS`,
+ * so its own typed `timeout` result wins the race against the caller's
+ * absolute deadline instead of being shadowed by it.
+ */
+export const ENGINE_GRACE_MS = 250;
 
 export type BaselineStatus = 'success' | 'error' | 'timeout' | 'not_supported';
 
@@ -74,12 +89,23 @@ export interface BaselineHostDeps {
   stdoutCap?: number;
   stderrCap?: number;
   /**
-   * How many distinct profiles may be queued or running at once (default
-   * 4). A caller of a profile that is already pending joins that run and
-   * never counts against the bound; a caller beyond it is refused
-   * `QUEUE_FULL` rather than queued behind an unbounded backlog.
+   * How many distinct jobs may be queued or running at once (default 4) —
+   * distinct profiles plus the `--sections` call, which counts like any
+   * profile. A caller of a job that is already pending joins it and never
+   * counts against the bound; a caller beyond it is refused `QUEUE_FULL`
+   * rather than queued behind an unbounded backlog.
    */
   maxQueued?: number;
+}
+
+/** A queued or running engine job, shared by every caller that joined it. */
+interface PendingJob<T> {
+  /**
+   * The LONGEST deadline among the participants. The job runs while any of
+   * them still has budget; each of them still leaves on its own deadline.
+   */
+  deadline: number;
+  promise: Promise<T>;
 }
 
 interface Exec {
@@ -94,6 +120,8 @@ interface Exec {
 const DEFAULT_PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
 const QUEUE_DEADLINE_MESSAGE = 'the engine queue exceeded the caller deadline';
 const SHARED_FAILURE_MESSAGE = 'the shared run failed';
+/** The coalescing key of the `--sections` job — no realpath can collide with it. */
+const SECTIONS_KEY = '--sections';
 
 function runEngine(
   config: HealthBaselineConfig,
@@ -252,7 +280,11 @@ export function makeBaselineHost(
   let version: string | null = null;
   let sectionsCache: BaselineSections | null = null;
   /** Queued or running runs by resolved profile path — the coalescing key. */
-  const pending = new Map<string, Promise<BaselineRunResult>>();
+  const pendingRuns = new Map<string, PendingJob<BaselineRunResult>>();
+  /** The queued or running `--sections` job, under {@link SECTIONS_KEY}. */
+  const pendingSections = new Map<string, PendingJob<BaselineSections>>();
+  /** Runs and the `--sections` call share one `maxQueued` bound. */
+  const queueSize = () => pendingRuns.size + pendingSections.size;
   // One engine subprocess at a time: every run and sections() call queues behind the previous one.
   let chain: Promise<unknown> = Promise.resolve();
   const enqueue = <T>(fn: () => Promise<T>): Promise<T> => {
@@ -286,6 +318,41 @@ export function makeBaselineHost(
         },
       );
     });
+
+  /**
+   * Joins the pending job for `key`, or starts one under the shared
+   * `maxQueued` bound.
+   *
+   * Joining raises the job's deadline to the longest of its participants,
+   * so an initiator whose own deadline expired never cancels a run a
+   * joiner still has budget for; every caller nevertheless waits only for
+   * its own deadline (`withDeadline`). `body` receives the engine budget:
+   * what is left before that longest deadline, less {@link ENGINE_GRACE_MS}
+   * — nothing is spawned once that is gone.
+   */
+  const coalesce = <T>(
+    jobs: Map<string, PendingJob<T>>,
+    key: string,
+    deadline: number,
+    answers: { onDeadline: () => T; onFailure: () => T; onFull: () => T },
+    body: (budgetMs: number) => Promise<T>,
+  ): Promise<T> => {
+    const joined = jobs.get(key);
+    if (joined !== undefined) {
+      joined.deadline = Math.max(joined.deadline, deadline);
+      return withDeadline(joined.promise, deadline, answers.onDeadline, answers.onFailure);
+    }
+    if (queueSize() >= maxQueued) return Promise.resolve(answers.onFull());
+    const promise = enqueue(async () => {
+      const budget = (jobs.get(key)?.deadline ?? deadline) - now() - ENGINE_GRACE_MS;
+      if (budget <= 0) return answers.onDeadline();
+      return body(budget);
+    }).finally(() => {
+      if (jobs.get(key)?.promise === promise) jobs.delete(key);
+    });
+    jobs.set(key, { deadline, promise });
+    return withDeadline(promise, deadline, answers.onDeadline, answers.onFailure);
+  };
 
   /** The realpath allow-list of spec §8.3; a rejected path never reaches spawn. */
   const resolveProfile = (profilePath: string): { path: string } | { error: BaselineError } => {
@@ -356,6 +423,21 @@ export function makeBaselineHost(
     failedRun({ code: 'ERROR', message: SHARED_FAILURE_MESSAGE });
   const sharedSectionsFailed = (): BaselineSections =>
     failedSections('error', { code: 'ERROR', message: SHARED_FAILURE_MESSAGE });
+  /** The bound is full: refused outright rather than queued behind a backlog. */
+  const queueFull = (): BaselineError => ({
+    code: 'QUEUE_FULL',
+    message: `${maxQueued} baseline runs are already queued`,
+  });
+  const runAnswers = {
+    onDeadline: timedOut,
+    onFailure: sharedFailed,
+    onFull: (): BaselineRunResult => failedRun(queueFull()),
+  };
+  const sectionsAnswers = {
+    onDeadline: sectionsTimedOut,
+    onFailure: sharedSectionsFailed,
+    onFull: (): BaselineSections => failedSections('error', queueFull()),
+  };
 
   const runOnce = async (real: string, timeoutMs: number): Promise<BaselineRunResult> => {
     const exec = await runEngine(
@@ -384,80 +466,63 @@ export function makeBaselineHost(
     return { ...base, status: 'success', report: parsed.value };
   };
 
+  const sectionsOnce = async (timeoutMs: number): Promise<BaselineSections> => {
+    // Another caller may have filled the cache while this job waited its turn.
+    if (sectionsCache !== null) return sectionsCache;
+    const exec = await runEngine(
+      config,
+      ['-m', BASELINE_MODULE, '--sections'],
+      timeoutMs,
+      caps,
+      now,
+    );
+    const collected_at = stamp();
+    if (exec.status !== 'success') {
+      return {
+        status: exec.status,
+        collected_at,
+        sections: null,
+        version: null,
+        ...(exec.error !== undefined ? { error: exec.error } : {}),
+      };
+    }
+    const parsed = parseObject(exec, caps.stdout);
+    if ('error' in parsed) {
+      return { status: 'error', collected_at, sections: null, version: null, error: parsed.error };
+    }
+    const list = parsed.value.sections;
+    if (!Array.isArray(list) || !list.every((s) => typeof s === 'string')) {
+      return {
+        status: 'error',
+        collected_at,
+        sections: null,
+        version: null,
+        error: { code: 'PARSE', message: '--sections output has no string array `sections`' },
+      };
+    }
+    version = typeof parsed.value.version === 'string' ? parsed.value.version : null;
+    sectionsCache = { status: 'success', collected_at, sections: list as string[], version };
+    return sectionsCache;
+  };
+
   return {
     run(profilePath, timeoutMs) {
       const resolved = resolveProfile(profilePath);
       if ('error' in resolved) return Promise.resolve(failedRun(resolved.error));
-      const deadline = now() + timeoutMs;
-      const joined = pending.get(resolved.path);
-      if (joined !== undefined) return withDeadline(joined, deadline, timedOut, sharedFailed);
-      if (pending.size >= maxQueued) {
-        return Promise.resolve(
-          failedRun({
-            code: 'QUEUE_FULL',
-            message: `${maxQueued} baseline profiles are already queued`,
-          }),
-        );
-      }
-      const promise = enqueue(async () => {
-        const left = deadline - now();
-        if (left <= 0) return timedOut();
-        return runOnce(resolved.path, left);
-      }).finally(() => {
-        if (pending.get(resolved.path) === promise) pending.delete(resolved.path);
-      });
-      pending.set(resolved.path, promise);
-      return withDeadline(promise, deadline, timedOut, sharedFailed);
+      return coalesce(pendingRuns, resolved.path, now() + timeoutMs, runAnswers, (budget) =>
+        runOnce(resolved.path, budget),
+      );
     },
 
-    async sections(timeoutMs) {
-      if (sectionsCache !== null) return sectionsCache;
-      const deadline = now() + timeoutMs;
-      const queued = enqueue(async (): Promise<BaselineSections> => {
-        const left = deadline - now();
-        if (left <= 0) return sectionsTimedOut();
-        const exec = await runEngine(
-          config,
-          ['-m', BASELINE_MODULE, '--sections'],
-          left,
-          caps,
-          now,
-        );
-        const collected_at = stamp();
-        if (exec.status !== 'success') {
-          return {
-            status: exec.status,
-            collected_at,
-            sections: null,
-            version: null,
-            ...(exec.error !== undefined ? { error: exec.error } : {}),
-          };
-        }
-        const parsed = parseObject(exec, caps.stdout);
-        if ('error' in parsed) {
-          return {
-            status: 'error',
-            collected_at,
-            sections: null,
-            version: null,
-            error: parsed.error,
-          };
-        }
-        const list = parsed.value.sections;
-        if (!Array.isArray(list) || !list.every((s) => typeof s === 'string')) {
-          return {
-            status: 'error',
-            collected_at,
-            sections: null,
-            version: null,
-            error: { code: 'PARSE', message: '--sections output has no string array `sections`' },
-          };
-        }
-        version = typeof parsed.value.version === 'string' ? parsed.value.version : null;
-        sectionsCache = { status: 'success', collected_at, sections: list as string[], version };
-        return sectionsCache;
-      });
-      return withDeadline(queued, deadline, sectionsTimedOut, sharedSectionsFailed);
+    sections(timeoutMs) {
+      if (sectionsCache !== null) return Promise.resolve(sectionsCache);
+      return coalesce(
+        pendingSections,
+        SECTIONS_KEY,
+        now() + timeoutMs,
+        sectionsAnswers,
+        sectionsOnce,
+      );
     },
   };
 }
