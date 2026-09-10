@@ -174,10 +174,16 @@ export interface HealthProbeWiring {
   probeHost?: ProbeHost;
 }
 
-/** The process-wide ProbeHost: file-backed in fixture mode, real otherwise. */
+/**
+ * The process-wide ProbeHost: file-backed in fixture mode, real
+ * otherwise. Production runs `fs_io` in a PID1 transient unit
+ * (`fsIoMode: 'pid1'`), because the agent's own `ProtectSystem=strict`
+ * namespace has every pre-existing filesystem read-only (validation B01,
+ * spec §9.3 "Execution boundary").
+ */
 export function makeProbeHost(fixture?: string | null): ProbeHost {
   const fdir = fixture !== undefined ? fixture : fixtureDir();
-  return fdir !== null ? createFakeProbeHost(fdir) : createRealProbeHost();
+  return fdir !== null ? createFakeProbeHost(fdir) : createRealProbeHost({ fsIoMode: 'pid1' });
 }
 
 /**

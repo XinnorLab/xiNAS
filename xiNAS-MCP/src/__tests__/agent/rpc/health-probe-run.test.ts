@@ -19,6 +19,7 @@ const gatedHost = (gate: Promise<void>): ProbeHost => ({
     return outcome(true);
   },
   nfsLoopback: async () => outcome(true),
+  busy: () => null,
 });
 
 /** S19a T2 — spec §9.2/§9.5: one probe at a time per node, validated params. */
@@ -74,6 +75,7 @@ describe('health.probe.run handler', () => {
         seen.push(o);
         return outcome(true);
       },
+      busy: () => null,
     };
     const h = makeHealthProbeRunHandler({ probeHost: host });
     await h({ probe: 'fs_io', path: '/mnt/a' });
@@ -97,6 +99,41 @@ describe('health.probe.run handler', () => {
     await expect(
       handler({ probe: 'fs_io', path: '/mnt/x', run_id: 'smoke-1', timeout_ms: 1000 }),
     ).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+  });
+
+  it('F08: a probe held by the host (deep path) refuses a direct probe with PROBE_IN_PROGRESS', async () => {
+    const host: ProbeHost = {
+      ...gatedHost(Promise.resolve()),
+      busy: () => ({ probe: 'fs_io', path: '/mnt/data' }),
+    };
+    const handler = makeHealthProbeRunHandler({ probeHost: host });
+    await expect(
+      handler({ probe: 'nfs_loopback', path: '/export', timeout_ms: 1000 }),
+    ).rejects.toMatchObject({
+      code: 'PROBE_IN_PROGRESS',
+      details: { probe: 'fs_io', path: '/mnt/data' },
+    });
+  });
+
+  it('F08: a host that refuses between busy() and the call is still an RPC error', async () => {
+    // The gate closed after busy() answered null — the verb's own refusal
+    // outcome must not be returned as a successful probe result.
+    const host: ProbeHost = {
+      ...gatedHost(Promise.resolve()),
+      fsIo: async () =>
+        outcome(false, {
+          error: {
+            code: 'PROBE_IN_PROGRESS',
+            message: 'a nfs_loopback probe is in flight on /export',
+            stage: 'lock',
+          },
+          cleanup: { status: 'not_needed' },
+        }),
+    };
+    const handler = makeHealthProbeRunHandler({ probeHost: host });
+    await expect(handler({ probe: 'fs_io', path: '/mnt/data' })).rejects.toMatchObject({
+      code: 'PROBE_IN_PROGRESS',
+    });
   });
 
   it('over the dispatcher: PROBE_IN_PROGRESS travels as -32000 data.code', async () => {
@@ -137,6 +174,7 @@ describe('makeDeepProbeRunner over the new host', () => {
         seen.push(`loop:${e}:${o.runId}`);
         return outcome(true, { cleanup: { status: 'failed', detail: 'systemd-umount: busy' } });
       },
+      busy: () => null,
     };
     const runner = makeDeepProbeRunner({
       probeHost: host,

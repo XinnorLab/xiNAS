@@ -9,6 +9,12 @@
  * `PROBE_IN_PROGRESS`, carried as `-32000` `data.code` by the
  * dispatcher) and returns the probe's outcome. A failed probe is a
  * result, not an RPC error.
+ *
+ * The ProbeHost itself is the admission point (validation F08): a probe
+ * the legacy deep path (`health.check profile=deep`) is running refuses
+ * this one too, so the handler asks `busy()` before the verb — and turns
+ * the host's own refusal into the same RPC error — while keeping its own
+ * in-flight flag as a second, fast guard.
  */
 
 import { RUN_ID_RE, type ProbeKind, type ProbeOutcome } from '../../../lib/health/probe-types.js';
@@ -26,6 +32,13 @@ export type HealthProbeRunResult = ProbeOutcome & { probe: ProbeKind; path: stri
 
 const invalid = (msg: string): Error =>
   Object.assign(new Error(`health.probe.run: ${msg}`), { code: 'INVALID_PARAMS' });
+
+/** `-32000` `data.code: PROBE_IN_PROGRESS` over the dispatcher; `409` at the api. */
+const inProgress = (details: Record<string, unknown>): Error =>
+  Object.assign(new Error('a health probe is already in flight on this node'), {
+    code: 'PROBE_IN_PROGRESS',
+    details,
+  });
 
 export function makeHealthProbeRunHandler(deps: HealthProbeRunDeps) {
   const defaultTimeout = deps.defaultTimeoutMs ?? 20_000;
@@ -58,18 +71,23 @@ export function makeHealthProbeRunHandler(deps: HealthProbeRunDeps) {
     ) {
       throw invalid(`params.timeout_ms must be an integer between 1000 and ${maxTimeout}`);
     }
-    if (inFlight !== null) {
-      throw Object.assign(new Error('a health probe is already in flight on this node'), {
-        code: 'PROBE_IN_PROGRESS',
-        details: { ...inFlight },
-      });
-    }
+    if (inFlight !== null) throw inProgress({ ...inFlight });
+    // The host is the real admission point (F08): a probe the deep path
+    // started is invisible to this handler's own guard.
+    const held = deps.probeHost.busy();
+    if (held !== null) throw inProgress({ ...held });
     inFlight = { probe: p.probe, path: p.path };
     try {
       const outcome =
         p.probe === 'fs_io'
           ? await deps.probeHost.fsIo(p.path, { runId, timeoutMs })
           : await deps.probeHost.nfsLoopback(p.path, { runId, timeoutMs });
+      // The host refused between busy() and the call: that is the RPC
+      // error the api maps to 409, not a probe result.
+      if (outcome.error?.code === 'PROBE_IN_PROGRESS') {
+        const nowHeld = deps.probeHost.busy();
+        throw inProgress(nowHeld !== null ? { ...nowHeld } : { message: outcome.error.message });
+      }
       return { probe: p.probe, path: p.path, ...outcome };
     } finally {
       inFlight = null;

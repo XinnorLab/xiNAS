@@ -176,6 +176,23 @@ describe('createRealProbeHost.nfsLoopback (spec §9.3)', () => {
     expect((await host.nfsLoopback('/srv/a', opts)).ok).toBe(true);
   });
 
+  it('a lock held by a live process (a second agent) is refused, and that lock is left alone', async () => {
+    // The in-process gate (F08) covers this host's own verbs; the lock
+    // file is what still serializes a SECOND agent process.
+    const root = fresh('loop-foreign-lock');
+    const lock = join(root, '.lock');
+    writeFileSync(lock, `${process.pid}\n`);
+    const host = createRealProbeHost({ root, exec: async () => {} });
+    const r = await host.nfsLoopback('/srv/a', opts);
+    expect(r).toMatchObject({
+      ok: false,
+      artifact: null,
+      error: { code: 'PROBE_IN_PROGRESS', stage: 'lock' },
+      cleanup: { status: 'not_needed' },
+    });
+    expect(existsSync(lock)).toBe(true);
+  });
+
   it('a failed umount command alone does not block cleanup once the device check finds nothing mounted (F05)', async () => {
     // The old behavior trusted the umount command's own exit status; F05
     // replaces that with a real `st_dev` check, so a command-level "busy"
@@ -389,5 +406,177 @@ describe('validation F05/F06/F07 regressions', () => {
     expect(r.cleanup).toEqual({ status: 'failed', detail: 'mountpoint still mounted' });
     expect(existsSync(mnt)).toBe(true);
     expect(existsSync(dir)).toBe(true);
+  });
+});
+
+/** F08 — spec §9.5: the host, not the RPC handler, is the admission point. */
+describe('F08: one active probe per node, any entry point', () => {
+  it('refuses a loopback while an fs_io is in flight, and admits the next one after it ends', async () => {
+    const mnt = fresh('gate-a');
+    const host = createRealProbeHost({
+      root: fresh('gate-root'),
+      exec: async () => undefined,
+    });
+    let release!: () => void;
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
+    const first = host.fsIo(mnt, opts, { beforeFsync: () => held });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(host.busy()).toEqual({ probe: 'fs_io', path: mnt });
+    const second = await host.nfsLoopback('/export', { runId: 'run-1', timeoutMs: 1000 });
+    expect(second.ok).toBe(false);
+    expect(second.error).toMatchObject({ code: 'PROBE_IN_PROGRESS', stage: 'lock' });
+    expect(second).toMatchObject({ artifact: null, cleanup: { status: 'not_needed' } });
+    release();
+    expect((await first).ok).toBe(true);
+    expect(host.busy()).toBeNull();
+    const third = await host.fsIo(mnt, opts);
+    expect(third.ok).toBe(true);
+  });
+
+  it('refuses an fs_io while a loopback is in flight', async () => {
+    const root = fresh('gate-loop');
+    let release!: () => void;
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
+    const host = createRealProbeHost({
+      root,
+      exec: async (file) => {
+        if (file === 'systemd-mount') await held;
+      },
+    });
+    const first = host.nfsLoopback('/export', opts);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(host.busy()).toEqual({ probe: 'nfs_loopback', path: '/export' });
+    const mnt = fresh('gate-loop-mnt');
+    const second = await host.fsIo(mnt, opts);
+    expect(second.ok).toBe(false);
+    expect(second.error).toMatchObject({ code: 'PROBE_IN_PROGRESS', stage: 'lock' });
+    // Refused at the door: nothing was created under the mountpoint.
+    expect(existsSync(join(mnt, PROBE_DIR_NAME))).toBe(false);
+    release();
+    expect((await first).ok).toBe(true);
+    expect(host.busy()).toBeNull();
+  });
+});
+
+/** B01 — spec §9.3 "Execution boundary": the write leaves the agent's namespace. */
+describe('B01: fs_io delegated to a PID1 transient unit', () => {
+  const outcome = {
+    ok: true,
+    started_at: '2026-09-10T00:00:00.000Z',
+    completed_at: '2026-09-10T00:00:01.000Z',
+    artifact: { kind: 'file', path: '/mnt/data/.xinas-health/probe-none-abc' },
+    cleanup: { status: 'clean' },
+  };
+
+  it('spawns systemd-run with one writable path and returns the child outcome', async () => {
+    const calls: Array<{ file: string; args: string[]; timeoutMs: number }> = [];
+    const host = createRealProbeHost({
+      fsIoMode: 'pid1',
+      random: () => 'cafebabecafebabe',
+      execCapture: async (file, args, timeoutMs) => {
+        calls.push({ file, args, timeoutMs });
+        return { stdout: `${JSON.stringify(outcome)}\n`, stderr: '', code: 0 };
+      },
+    });
+    const r = await host.fsIo('/mnt/data', { runId: null, timeoutMs: 20_000 });
+    expect(r).toEqual(outcome);
+    expect(calls).toHaveLength(1);
+    const { file, args, timeoutMs } = calls[0]!;
+    expect(file).toBe('systemd-run');
+    expect(args.slice(0, 5)).toEqual(['--wait', '--pipe', '--collect', '--quiet', '--unit']);
+    expect(args[5]).toBe('xinas-health-fsio-cafebabecafebabe');
+    expect(args).toContain('ReadWritePaths=/mnt/data');
+    expect(args).toContain('ProtectSystem=strict');
+    expect(args).toContain('PrivateTmp=true');
+    expect(args).toContain('ProtectHome=true');
+    expect(args).toContain('NoNewPrivileges=true');
+    expect(args).toContain('RuntimeMaxSec=25');
+    // …, node, fsio-child, <mountpoint> <run_id|none> <timeout_ms>
+    expect(args.at(-5)).toBe(process.execPath);
+    expect(args.at(-4)).toMatch(/agent\/health\/fsio-child\.(js|ts)$/);
+    expect(args.at(-3)).toBe('/mnt/data');
+    expect(args.slice(-2)).toEqual(['none', '20000']);
+    expect(timeoutMs).toBe(20_000);
+  });
+
+  it('the run id reaches the helper verbatim', async () => {
+    let seen: string[] = [];
+    const host = createRealProbeHost({
+      fsIoMode: 'pid1',
+      execCapture: async (_file, args) => {
+        seen = args;
+        return { stdout: JSON.stringify(outcome), stderr: '', code: 0 };
+      },
+    });
+    await host.fsIo('/mnt/data', { runId: 'run-1', timeoutMs: 5_000 });
+    expect(seen.slice(-2)).toEqual(['run-1', '5000']);
+    expect(seen).toContain('RuntimeMaxSec=10');
+  });
+
+  it('a helper that exits non-zero is a failed probe with unknown cleanup', async () => {
+    const host = createRealProbeHost({
+      fsIoMode: 'pid1',
+      execCapture: async () => ({
+        stdout: '',
+        stderr: 'Failed to start transient service unit',
+        code: 1,
+      }),
+    });
+    const r = await host.fsIo('/mnt/data', { runId: null, timeoutMs: 5_000 });
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatchObject({ code: 'FSIO_HELPER_FAILED', stage: 'open' });
+    expect(r.error?.message).toContain('Failed to start');
+    expect(r.cleanup).toEqual({
+      status: 'failed',
+      detail: 'artifact state unknown: helper exited 1',
+    });
+  });
+
+  it('a helper that prints no usable outcome is a failed probe with unknown cleanup', async () => {
+    const host = createRealProbeHost({
+      fsIoMode: 'pid1',
+      execCapture: async () => ({ stdout: 'not json\n', stderr: '', code: 0 }),
+    });
+    const r = await host.fsIo('/mnt/data', { runId: null, timeoutMs: 5_000 });
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatchObject({ code: 'FSIO_HELPER_FAILED', stage: 'open' });
+    expect(r.cleanup).toEqual({ status: 'failed', detail: 'artifact state unknown: no outcome' });
+  });
+
+  it('a spawn that throws is a failed probe, not a rejection', async () => {
+    const host = createRealProbeHost({
+      fsIoMode: 'pid1',
+      execCapture: async () => {
+        throw new Error('spawn ENOENT');
+      },
+    });
+    const r = await host.fsIo('/mnt/data', { runId: null, timeoutMs: 5_000 });
+    expect(r.ok).toBe(false);
+    expect(r.error?.message).toContain('spawn ENOENT');
+    expect(r.cleanup).toEqual({
+      status: 'failed',
+      detail: 'artifact state unknown: helper did not run',
+    });
+    expect(host.busy()).toBeNull();
+  });
+
+  it("the default mode is in_process: no helper is spawned and the mountpoint's own file is written", async () => {
+    const mnt = fresh('default-mode');
+    let spawned = 0;
+    const host = createRealProbeHost({
+      random: () => 'add0add0add0add0',
+      execCapture: async () => {
+        spawned += 1;
+        return { stdout: '', stderr: '', code: 0 };
+      },
+    });
+    const r = await host.fsIo(mnt, opts);
+    expect(r.ok).toBe(true);
+    expect(spawned).toBe(0);
+    expect(r.artifact?.path).toBe(join(mnt, PROBE_DIR_NAME, 'probe-run-1-add0add0add0add0'));
   });
 });

@@ -101,6 +101,11 @@ serialized by a lock, cleanup failure reported as a finding, and a
 timeout enforced on the agent. `health.check profile=deep` keeps the
 escalation from PR #387, runs through the same host, and is marked
 deprecated in favour of the new tool; its enum value is not removed.
+The `fs_io` write runs in a PID1 transient unit with
+`ReadWritePaths=<mountpoint>` because the agent's own
+`ProtectSystem=strict` namespace mounts every pre-existing filesystem
+read-only (2026-09-10 amendment, validation B01); the agent's unit file
+is unchanged.
 
 ### 5. The Python engine is reached through a read-only agent subprocess
 
@@ -176,6 +181,9 @@ deferred.
   pinned by the discovery test on both eras.
 - ADR-0002's enumerated method set gains `health.baseline` and
   `health.probe.run`; the probe host loses its fixed-name paths.
+- The agent delegates the `fs_io` probe to `systemd-run`;
+  `dist/agent/health/fsio-child.js` is a second entry point built by the
+  same `tsc` run.
 - S15's confirmation service learns a second binding kind (`{ tool,
   args }`) for confirmable direct entries.
 - Every code slice is TypeScript under `xiNAS-MCP/src/` plus a Python

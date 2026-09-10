@@ -30,9 +30,22 @@
  *    differing device means something is still mounted and the
  *    directory is left in place; otherwise `rmdir` removes the two
  *    per-run directories — never a recursive delete (F05). Loopback
- *    probes are serialized by an in-process flag plus an O_EXCL lock
- *    file whose pid is checked for staleness; a held lock is
- *    `PROBE_IN_PROGRESS`.
+ *    probes are additionally serialized against a SECOND agent process
+ *    by an O_EXCL lock file whose pid is checked for staleness; a held
+ *    lock is `PROBE_IN_PROGRESS`.
+ *
+ * The HOST is the admission point for every active probe (F08): both
+ * verbs share one in-flight record, so `health.probe.run` and the legacy
+ * deep path (`health.check profile=deep`) can never overlap. A refused
+ * probe is a RESULT with `error.code: 'PROBE_IN_PROGRESS'`, `stage:
+ * 'lock'`; `busy()` says what is in flight.
+ *
+ * `fsIoMode: 'pid1'` — the production wiring (`makeProbeHost`) — runs
+ * the SAME hardened fs_io inside a `systemd-run` transient unit with
+ * exactly one writable path, because the agent's own
+ * `ProtectSystem=strict` namespace mounts every filesystem that existed
+ * before it started read-only (validation B01, spec §9.3 "Execution
+ * boundary"). Tests and fixture mode keep `'in_process'`.
  *
  * Every step is bounded by the run's `timeoutMs` ON THE AGENT: a step
  * that overruns ends the probe with `TIMEOUT` and cleanup is still
@@ -55,11 +68,13 @@ import {
   unlink,
 } from 'node:fs/promises';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   ARTIFACT_RUN_RE,
   PROBE_DIR_NAME,
   PROBE_PAYLOAD_BYTES,
   type ProbeCleanup,
+  type ProbeKind,
   type ProbeOutcome,
   type ProbeRunOptions,
   type ProbeStage,
@@ -87,6 +102,14 @@ export interface FsIoHooks {
 export interface ProbeHost {
   fsIo(mountpoint: string, opts: ProbeRunOptions, hooks?: FsIoHooks): Promise<ProbeOutcome>;
   nfsLoopback(exportPath: string, opts: ProbeRunOptions): Promise<ProbeOutcome>;
+  /** The probe in flight on this host (any kind, any entry point), or null. */
+  busy(): { probe: ProbeKind; path: string } | null;
+}
+
+export interface ExecCaptureResult {
+  stdout: string;
+  stderr: string;
+  code: number;
 }
 
 export interface RealProbeHostDeps {
@@ -98,10 +121,17 @@ export interface RealProbeHostDeps {
   random?: () => string;
   /** systemd-mount / systemd-umount runner; default execFile with a SIGKILL timeout. */
   exec?: (file: string, args: string[], timeoutMs: number) => Promise<void>;
+  /** Captures stdout for the fs_io helper; default execFile (a non-zero exit resolves with its code). */
+  execCapture?: (file: string, args: string[], timeoutMs: number) => Promise<ExecCaptureResult>;
+  /** `pid1` (production): fs_io runs in a systemd-run transient unit; `in_process` (default): here. */
+  fsIoMode?: 'in_process' | 'pid1';
   clock?: () => number;
   /** Is `path` a mountpoint (its device differs from its parent's)? Default: the real check below. */
   isMountpoint?: (path: string) => Promise<boolean>;
 }
+
+/** The helper the `pid1` mode runs inside the transient unit (B01). */
+export const FSIO_CHILD = new URL('./fsio-child.js', import.meta.url);
 
 class StageError extends Error {
   constructor(
@@ -173,6 +203,60 @@ const defaultExec = (file: string, args: string[], timeoutMs: number): Promise<v
     });
   });
 
+/**
+ * The fs_io helper's runner: unlike {@link defaultExec} a non-zero exit
+ * is DATA (the caller turns it into `FSIO_HELPER_FAILED` with an unknown
+ * artifact state), never a rejection.
+ */
+const defaultExecCapture = (
+  file: string,
+  args: string[],
+  timeoutMs: number,
+): Promise<ExecCaptureResult> =>
+  new Promise((resolve) => {
+    execFile(
+      file,
+      args,
+      { timeout: timeoutMs + 5_000, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024 },
+      (err, stdout, stderr) => {
+        const code = err === null ? 0 : typeof err.code === 'number' ? err.code : 127;
+        resolve({ stdout: String(stdout ?? ''), stderr: String(stderr ?? ''), code });
+      },
+    );
+  });
+
+/**
+ * The helper's last non-empty stdout line as a {@link ProbeOutcome}, or
+ * null when it printed nothing usable — a helper that did not report is
+ * never assumed to have cleaned up (B01).
+ */
+function parseOutcome(text: string): ProbeOutcome | null {
+  const line = text
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0)
+    .at(-1);
+  if (line === undefined) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== 'object' || parsed === null) return null;
+  const outcome = parsed as Partial<ProbeOutcome>;
+  const status = outcome.cleanup?.status;
+  if (
+    typeof outcome.ok !== 'boolean' ||
+    typeof outcome.started_at !== 'string' ||
+    typeof outcome.completed_at !== 'string' ||
+    (status !== 'clean' && status !== 'failed' && status !== 'not_needed')
+  ) {
+    return null;
+  }
+  return parsed as ProbeOutcome;
+}
+
 const isAlive = (pid: number): boolean => {
   try {
     process.kill(pid, 0);
@@ -197,10 +281,13 @@ export function createRealProbeHost(deps: RealProbeHostDeps = {}): ProbeHost {
   const uid = deps.uid ?? process.getuid?.() ?? 0;
   const random = deps.random ?? (() => randomBytes(8).toString('hex'));
   const exec = deps.exec ?? defaultExec;
+  const execCapture = deps.execCapture ?? defaultExecCapture;
+  const fsIoMode = deps.fsIoMode ?? 'in_process';
   const clock = deps.clock ?? Date.now;
   const isMountpoint = deps.isMountpoint ?? defaultIsMountpoint;
   const { O_RDONLY, O_WRONLY, O_CREAT, O_EXCL, O_NOFOLLOW, O_DIRECTORY } = constants;
-  let loopbackBusy = false;
+  /** The one probe in flight on this host, whatever entry point started it (F08). */
+  let inFlight: { probe: ProbeKind; path: string } | null = null;
 
   async function acquireLock(lockPath: string): Promise<void> {
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -225,267 +312,373 @@ export function createRealProbeHost(deps: RealProbeHostDeps = {}): ProbeHost {
     }
   }
 
-  return {
-    async fsIo(mountpoint, opts, hooks): Promise<ProbeOutcome> {
-      const startedAt = new Date(clock()).toISOString();
-      const step = makeStepper(clock() + opts.timeoutMs, clock);
-      let artifact: ProbeOutcome['artifact'] = null;
-      let cleanup: ProbeCleanup = { status: 'not_needed' };
-      let error: ProbeOutcome['error'];
-      let mntFh: FileHandle | undefined;
-      let dirFh: FileHandle | undefined;
-      let fh: FileHandle | undefined;
-      let filePath: string | undefined;
-      let createdIno: { ino: number; dev: number } | undefined;
-      try {
-        const bad = runIdInvalid(opts.runId, 'dir');
-        if (bad !== null) throw bad;
-
-        // 1. The mountpoint itself, never through a symlink.
-        mntFh = await step('open', () => open(mountpoint, O_RDONLY | O_DIRECTORY | O_NOFOLLOW));
-        const mntHandle = mntFh;
-        const mntStat = await step('open', () => mntHandle.stat());
-
-        // 2. The probe directory: created 0700 if absent, then opened with
-        //    O_NOFOLLOW and checked to be a plain directory on the same
-        //    device, owned by us.
-        const dirPath = join(mountpoint, PROBE_DIR_NAME);
-        await step('dir', async () => {
-          try {
-            await mkdir(dirPath, { mode: 0o700 });
-          } catch (err) {
-            if (errCode(err) !== 'EEXIST') throw err;
-          }
-        });
-        dirFh = await step('dir', async () => {
-          try {
-            return await open(dirPath, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
-          } catch (err) {
-            const code = errCode(err);
-            if (code === 'ELOOP' || code === 'ENOTDIR') {
-              throw new StageError(
-                'dir',
-                'probe_dir_untrusted',
-                `${PROBE_DIR_NAME} is not a plain directory (${code})`,
-              );
-            }
-            throw err;
-          }
-        });
-        const dirHandle = dirFh;
-        const dirStat = await step('dir', () => dirHandle.stat());
-        if (
-          !dirStat.isDirectory() ||
-          dirStat.dev !== mntStat.dev ||
-          dirStat.uid !== uid ||
-          (dirStat.mode & 0o022) !== 0
-        ) {
-          throw new StageError(
-            'dir',
-            'probe_dir_untrusted',
-            `${PROBE_DIR_NAME} must be a directory on the mountpoint's device, owned by uid ${uid}, not group/world-writable`,
-          );
-        }
-
-        // 3. Create the per-run file exclusively; a colliding name retries.
-        const created = await step('create', async () => {
-          for (let attempt = 0; attempt < CREATE_ATTEMPTS; attempt++) {
-            const candidate = join(dirPath, `probe-${opts.runId ?? 'none'}-${random()}`);
-            try {
-              const handle = await open(candidate, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600);
-              return { handle, path: candidate };
-            } catch (err) {
-              if (errCode(err) !== 'EEXIST' || attempt === CREATE_ATTEMPTS - 1) throw err;
-            }
-          }
-          throw new StageError('create', 'EEXIST', 'could not find a free probe file name');
-        });
-        fh = created.handle;
-        filePath = created.path;
-        artifact = { kind: 'file', path: created.path };
-        const fileStat = await step('create', () => created.handle.stat());
-        if (!fileStat.isFile() || fileStat.nlink !== 1 || fileStat.dev !== mntStat.dev) {
-          throw new StageError(
-            'create',
-            'probe_dir_untrusted',
-            'the created probe file is not a plain file on the mountpoint device',
-          );
-        }
-        createdIno = { ino: fileStat.ino, dev: fileStat.dev };
-
-        // 4. Write, fsync, close.
-        await step('write', () => created.handle.write(PAYLOAD, 0, PAYLOAD.length, 0));
-        await step('fsync', async () => {
-          await hooks?.beforeFsync?.();
-          await created.handle.sync();
-        });
-        await step('fsync', () => created.handle.close());
-        fh = undefined;
-
-        // 5. Read it back through a fresh open of the same inode.
-        await step('read', async () => {
-          const rfh = await open(created.path, O_RDONLY | O_NOFOLLOW);
-          try {
-            const st = await rfh.stat();
-            if (st.ino !== fileStat.ino) {
-              throw new StageError(
-                'read',
-                'READ_BACK_MISMATCH',
-                'the probe file was replaced between write and read',
-              );
-            }
-            const buf = Buffer.alloc(PAYLOAD.length);
-            const { bytesRead } = await rfh.read(buf, 0, buf.length, 0);
-            if (bytesRead !== PAYLOAD.length || !buf.equals(PAYLOAD)) {
-              throw new StageError(
-                'read',
-                'READ_BACK_MISMATCH',
-                'read-back differs from the written payload',
-              );
-            }
-          } finally {
-            await rfh.close();
-          }
-        });
-      } catch (err) {
-        error = toError(err, 'open');
-      } finally {
-        if (fh !== undefined) await fh.close().catch(() => undefined);
-        // 6. Only the file this run created is ever unlinked: an lstat of the
-        //    name must still show the inode/device this run's `create` step
-        //    saw, or the name was swapped underneath us (validation F07).
-        if (filePath !== undefined) {
-          const path = filePath;
-          try {
-            await hooks?.beforeUnlink?.();
-            const now = await lstat(path);
-            if (createdIno === undefined) {
-              // The create step's own fstat never finished (a timeout, or
-              // the nlink guard rejected first): the file exists but its
-              // identity was never recorded, so it is left rather than
-              // unlinked on the strength of the name alone (F07).
-              cleanup = { status: 'failed', detail: 'probe file identity unknown; not removed' };
-            } else if (!now.isFile() || now.ino !== createdIno.ino || now.dev !== createdIno.dev) {
-              cleanup = { status: 'failed', detail: 'probe file was replaced; not removed' };
-            } else {
-              await unlink(path);
-              cleanup = { status: 'clean' };
-            }
-          } catch (err) {
-            cleanup = { status: 'failed', detail: `${errCode(err)}: ${errMessage(err)}` };
-          }
-        }
-        if (dirFh !== undefined) await dirFh.close().catch(() => undefined);
-        if (mntFh !== undefined) await mntFh.close().catch(() => undefined);
-      }
+  /**
+   * The admission point (F08): one probe in flight per host, whichever
+   * verb and whichever entry point asked. A refusal is an outcome, not a
+   * throw — `health.probe.run` turns it into the RPC error.
+   */
+  const admitted = async (
+    probe: ProbeKind,
+    path: string,
+    run: () => Promise<ProbeOutcome>,
+  ): Promise<ProbeOutcome> => {
+    if (inFlight !== null) {
+      const now = new Date(clock()).toISOString();
       return {
-        ok: error === undefined,
-        started_at: startedAt,
-        completed_at: new Date(clock()).toISOString(),
-        artifact,
-        ...(error !== undefined ? { error } : {}),
-        cleanup,
-      };
-    },
-
-    async nfsLoopback(exportPath, opts): Promise<ProbeOutcome> {
-      const startedAt = new Date(clock()).toISOString();
-      const deadline = clock() + opts.timeoutMs;
-      const step = makeStepper(deadline, clock);
-      const refused = (outcomeError: NonNullable<ProbeOutcome['error']>): ProbeOutcome => ({
         ok: false,
-        started_at: startedAt,
-        completed_at: new Date(clock()).toISOString(),
+        started_at: now,
+        completed_at: now,
         artifact: null,
-        error: outcomeError,
-        cleanup: { status: 'not_needed' },
-      });
-      const bad = runIdInvalid(opts.runId, 'lock');
-      if (bad !== null) return refused(toError(bad, 'lock'));
-      if (loopbackBusy) {
-        return refused({
+        error: {
           code: 'PROBE_IN_PROGRESS',
-          message: 'another loopback probe is in flight on this node',
+          message: `a ${inFlight.probe} probe is in flight on ${inFlight.path}`,
           stage: 'lock',
-        });
-      }
-      loopbackBusy = true;
-      const lockPath = join(root, LOCK_NAME);
-      let lockHeld = false;
-      let artifact: ProbeOutcome['artifact'] = null;
-      let cleanup: ProbeCleanup = { status: 'not_needed' };
-      let error: ProbeOutcome['error'];
-      try {
-        await mkdir(root, { recursive: true, mode: 0o700 });
-        try {
-          await acquireLock(lockPath);
-          lockHeld = true;
-        } catch (err) {
-          return refused({ code: 'PROBE_IN_PROGRESS', message: errMessage(err), stage: 'lock' });
-        }
-        const dir = join(root, `${opts.runId ?? 'none'}-${random()}`);
-        const mnt = join(dir, 'mnt');
-        await mkdir(mnt, { recursive: true, mode: 0o700 });
-        artifact = { kind: 'mountpoint', path: mnt };
-        try {
-          await step('mount', () =>
-            exec(
-              'systemd-mount',
-              ['--collect', `localhost:${exportPath}`, mnt],
-              Math.max(1, deadline - clock()),
-            ),
-          );
-          await step('readdir', () => readdir(mnt));
-        } catch (err) {
-          error = toError(err, 'mount');
-        } finally {
-          // The client's death does not prove PID1 did not mount: always
-          // umount, then look at real state (validation F05) — never rely
-          // on the command's own exit status, and never delete recursively.
-          // Bounded by whatever remains of the run's own deadline plus a
-          // short grace, so this cleanup step can never itself push the
-          // agent's answer past the api's `timeout_s + 5 s` wait (spec
-          // §9.3 loopback step 3/4).
-          let umountError: string | null = null;
-          try {
-            await exec(
-              'systemd-umount',
-              [mnt],
-              Math.max(1_000, Math.min(UMOUNT_TIMEOUT_MS, deadline + CLEANUP_GRACE_MS - clock())),
-            );
-          } catch (err) {
-            umountError = errMessage(err);
-          }
-          const stillMounted = await isMountpoint(mnt);
-          if (stillMounted) {
-            cleanup = {
-              status: 'failed',
-              detail: `mountpoint still mounted${umountError !== null ? ` (systemd-umount: ${umountError})` : ''}`,
-            };
-          } else {
-            try {
-              await rmdir(mnt);
-              await rmdir(dir);
-              cleanup = { status: 'clean' };
-            } catch (err) {
-              cleanup = { status: 'failed', detail: `rmdir: ${errCode(err)}: ${errMessage(err)}` };
-            }
-          }
-        }
-      } catch (err) {
-        error = toError(err, 'lock');
-      } finally {
-        if (lockHeld) await unlink(lockPath).catch(() => undefined);
-        loopbackBusy = false;
-      }
-      return {
-        ok: error === undefined,
-        started_at: startedAt,
-        completed_at: new Date(clock()).toISOString(),
-        artifact,
-        ...(error !== undefined ? { error } : {}),
-        cleanup,
+        },
+        cleanup: { status: 'not_needed' },
       };
-    },
+    }
+    inFlight = { probe, path };
+    try {
+      return await run();
+    } finally {
+      inFlight = null;
+    }
+  };
+
+  /**
+   * fs_io through a PID1 transient unit (B01): the same hardened probe,
+   * run by `fsio-child.js` as root with exactly one writable path. The
+   * helper's outcome is reported verbatim; a helper that fails to run,
+   * exits non-zero or prints no outcome leaves the artifact state
+   * UNKNOWN — never `clean`.
+   */
+  async function fsIoViaPid1(mountpoint: string, opts: ProbeRunOptions): Promise<ProbeOutcome> {
+    const startedAt = new Date(clock()).toISOString();
+    const unit = `xinas-health-fsio-${random()}`;
+    const args = [
+      '--wait',
+      '--pipe',
+      '--collect',
+      '--quiet',
+      '--unit',
+      unit,
+      '-p',
+      'ProtectSystem=strict',
+      '-p',
+      `ReadWritePaths=${mountpoint}`,
+      '-p',
+      'PrivateTmp=true',
+      '-p',
+      'ProtectHome=true',
+      '-p',
+      'NoNewPrivileges=true',
+      '-p',
+      `RuntimeMaxSec=${Math.ceil(opts.timeoutMs / 1000) + 5}`,
+      process.execPath,
+      fileURLToPath(FSIO_CHILD),
+      mountpoint,
+      opts.runId ?? 'none',
+      String(opts.timeoutMs),
+    ];
+    const failed = (message: string, detail: string): ProbeOutcome => ({
+      ok: false,
+      started_at: startedAt,
+      completed_at: new Date(clock()).toISOString(),
+      artifact: null,
+      error: { code: 'FSIO_HELPER_FAILED', message, stage: 'open' },
+      cleanup: { status: 'failed', detail },
+    });
+    let res: ExecCaptureResult;
+    try {
+      res = await execCapture('systemd-run', args, opts.timeoutMs);
+    } catch (err) {
+      return failed(
+        `systemd-run: ${errMessage(err)}`,
+        'artifact state unknown: helper did not run',
+      );
+    }
+    if (res.code !== 0) {
+      return failed(
+        `systemd-run exited ${res.code}: ${res.stderr.trim() || res.stdout.trim()}`,
+        `artifact state unknown: helper exited ${res.code}`,
+      );
+    }
+    const parsed = parseOutcome(res.stdout);
+    if (parsed === null) {
+      return failed('the fs_io helper printed no outcome', 'artifact state unknown: no outcome');
+    }
+    return parsed;
+  }
+
+  async function fsIoInProcess(
+    mountpoint: string,
+    opts: ProbeRunOptions,
+    hooks: FsIoHooks | undefined,
+  ): Promise<ProbeOutcome> {
+    const startedAt = new Date(clock()).toISOString();
+    const step = makeStepper(clock() + opts.timeoutMs, clock);
+    let artifact: ProbeOutcome['artifact'] = null;
+    let cleanup: ProbeCleanup = { status: 'not_needed' };
+    let error: ProbeOutcome['error'];
+    let mntFh: FileHandle | undefined;
+    let dirFh: FileHandle | undefined;
+    let fh: FileHandle | undefined;
+    let filePath: string | undefined;
+    let createdIno: { ino: number; dev: number } | undefined;
+    try {
+      const bad = runIdInvalid(opts.runId, 'dir');
+      if (bad !== null) throw bad;
+
+      // 1. The mountpoint itself, never through a symlink.
+      mntFh = await step('open', () => open(mountpoint, O_RDONLY | O_DIRECTORY | O_NOFOLLOW));
+      const mntHandle = mntFh;
+      const mntStat = await step('open', () => mntHandle.stat());
+
+      // 2. The probe directory: created 0700 if absent, then opened with
+      //    O_NOFOLLOW and checked to be a plain directory on the same
+      //    device, owned by us.
+      const dirPath = join(mountpoint, PROBE_DIR_NAME);
+      await step('dir', async () => {
+        try {
+          await mkdir(dirPath, { mode: 0o700 });
+        } catch (err) {
+          if (errCode(err) !== 'EEXIST') throw err;
+        }
+      });
+      dirFh = await step('dir', async () => {
+        try {
+          return await open(dirPath, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+        } catch (err) {
+          const code = errCode(err);
+          if (code === 'ELOOP' || code === 'ENOTDIR') {
+            throw new StageError(
+              'dir',
+              'probe_dir_untrusted',
+              `${PROBE_DIR_NAME} is not a plain directory (${code})`,
+            );
+          }
+          throw err;
+        }
+      });
+      const dirHandle = dirFh;
+      const dirStat = await step('dir', () => dirHandle.stat());
+      if (
+        !dirStat.isDirectory() ||
+        dirStat.dev !== mntStat.dev ||
+        dirStat.uid !== uid ||
+        (dirStat.mode & 0o022) !== 0
+      ) {
+        throw new StageError(
+          'dir',
+          'probe_dir_untrusted',
+          `${PROBE_DIR_NAME} must be a directory on the mountpoint's device, owned by uid ${uid}, not group/world-writable`,
+        );
+      }
+
+      // 3. Create the per-run file exclusively; a colliding name retries.
+      const created = await step('create', async () => {
+        for (let attempt = 0; attempt < CREATE_ATTEMPTS; attempt++) {
+          const candidate = join(dirPath, `probe-${opts.runId ?? 'none'}-${random()}`);
+          try {
+            const handle = await open(candidate, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600);
+            return { handle, path: candidate };
+          } catch (err) {
+            if (errCode(err) !== 'EEXIST' || attempt === CREATE_ATTEMPTS - 1) throw err;
+          }
+        }
+        throw new StageError('create', 'EEXIST', 'could not find a free probe file name');
+      });
+      fh = created.handle;
+      filePath = created.path;
+      artifact = { kind: 'file', path: created.path };
+      const fileStat = await step('create', () => created.handle.stat());
+      if (!fileStat.isFile() || fileStat.nlink !== 1 || fileStat.dev !== mntStat.dev) {
+        throw new StageError(
+          'create',
+          'probe_dir_untrusted',
+          'the created probe file is not a plain file on the mountpoint device',
+        );
+      }
+      createdIno = { ino: fileStat.ino, dev: fileStat.dev };
+
+      // 4. Write, fsync, close.
+      await step('write', () => created.handle.write(PAYLOAD, 0, PAYLOAD.length, 0));
+      await step('fsync', async () => {
+        await hooks?.beforeFsync?.();
+        await created.handle.sync();
+      });
+      await step('fsync', () => created.handle.close());
+      fh = undefined;
+
+      // 5. Read it back through a fresh open of the same inode.
+      await step('read', async () => {
+        const rfh = await open(created.path, O_RDONLY | O_NOFOLLOW);
+        try {
+          const st = await rfh.stat();
+          if (st.ino !== fileStat.ino) {
+            throw new StageError(
+              'read',
+              'READ_BACK_MISMATCH',
+              'the probe file was replaced between write and read',
+            );
+          }
+          const buf = Buffer.alloc(PAYLOAD.length);
+          const { bytesRead } = await rfh.read(buf, 0, buf.length, 0);
+          if (bytesRead !== PAYLOAD.length || !buf.equals(PAYLOAD)) {
+            throw new StageError(
+              'read',
+              'READ_BACK_MISMATCH',
+              'read-back differs from the written payload',
+            );
+          }
+        } finally {
+          await rfh.close();
+        }
+      });
+    } catch (err) {
+      error = toError(err, 'open');
+    } finally {
+      if (fh !== undefined) await fh.close().catch(() => undefined);
+      // 6. Only the file this run created is ever unlinked: an lstat of the
+      //    name must still show the inode/device this run's `create` step
+      //    saw, or the name was swapped underneath us (validation F07).
+      if (filePath !== undefined) {
+        const path = filePath;
+        try {
+          await hooks?.beforeUnlink?.();
+          const now = await lstat(path);
+          if (createdIno === undefined) {
+            // The create step's own fstat never finished (a timeout, or
+            // the nlink guard rejected first): the file exists but its
+            // identity was never recorded, so it is left rather than
+            // unlinked on the strength of the name alone (F07).
+            cleanup = { status: 'failed', detail: 'probe file identity unknown; not removed' };
+          } else if (!now.isFile() || now.ino !== createdIno.ino || now.dev !== createdIno.dev) {
+            cleanup = { status: 'failed', detail: 'probe file was replaced; not removed' };
+          } else {
+            await unlink(path);
+            cleanup = { status: 'clean' };
+          }
+        } catch (err) {
+          cleanup = { status: 'failed', detail: `${errCode(err)}: ${errMessage(err)}` };
+        }
+      }
+      if (dirFh !== undefined) await dirFh.close().catch(() => undefined);
+      if (mntFh !== undefined) await mntFh.close().catch(() => undefined);
+    }
+    return {
+      ok: error === undefined,
+      started_at: startedAt,
+      completed_at: new Date(clock()).toISOString(),
+      artifact,
+      ...(error !== undefined ? { error } : {}),
+      cleanup,
+    };
+  }
+
+  async function nfsLoopbackInner(
+    exportPath: string,
+    opts: ProbeRunOptions,
+  ): Promise<ProbeOutcome> {
+    const startedAt = new Date(clock()).toISOString();
+    const deadline = clock() + opts.timeoutMs;
+    const step = makeStepper(deadline, clock);
+    const refused = (outcomeError: NonNullable<ProbeOutcome['error']>): ProbeOutcome => ({
+      ok: false,
+      started_at: startedAt,
+      completed_at: new Date(clock()).toISOString(),
+      artifact: null,
+      error: outcomeError,
+      cleanup: { status: 'not_needed' },
+    });
+    const bad = runIdInvalid(opts.runId, 'lock');
+    if (bad !== null) return refused(toError(bad, 'lock'));
+    const lockPath = join(root, LOCK_NAME);
+    let lockHeld = false;
+    let artifact: ProbeOutcome['artifact'] = null;
+    let cleanup: ProbeCleanup = { status: 'not_needed' };
+    let error: ProbeOutcome['error'];
+    try {
+      await mkdir(root, { recursive: true, mode: 0o700 });
+      try {
+        await acquireLock(lockPath);
+        lockHeld = true;
+      } catch (err) {
+        return refused({ code: 'PROBE_IN_PROGRESS', message: errMessage(err), stage: 'lock' });
+      }
+      const dir = join(root, `${opts.runId ?? 'none'}-${random()}`);
+      const mnt = join(dir, 'mnt');
+      await mkdir(mnt, { recursive: true, mode: 0o700 });
+      artifact = { kind: 'mountpoint', path: mnt };
+      try {
+        await step('mount', () =>
+          exec(
+            'systemd-mount',
+            ['--collect', `localhost:${exportPath}`, mnt],
+            Math.max(1, deadline - clock()),
+          ),
+        );
+        await step('readdir', () => readdir(mnt));
+      } catch (err) {
+        error = toError(err, 'mount');
+      } finally {
+        // The client's death does not prove PID1 did not mount: always
+        // umount, then look at real state (validation F05) — never rely
+        // on the command's own exit status, and never delete recursively.
+        // Bounded by whatever remains of the run's own deadline plus a
+        // short grace, so this cleanup step can never itself push the
+        // agent's answer past the api's `timeout_s + 5 s` wait (spec
+        // §9.3 loopback step 3/4).
+        let umountError: string | null = null;
+        try {
+          await exec(
+            'systemd-umount',
+            [mnt],
+            Math.max(1_000, Math.min(UMOUNT_TIMEOUT_MS, deadline + CLEANUP_GRACE_MS - clock())),
+          );
+        } catch (err) {
+          umountError = errMessage(err);
+        }
+        const stillMounted = await isMountpoint(mnt);
+        if (stillMounted) {
+          cleanup = {
+            status: 'failed',
+            detail: `mountpoint still mounted${umountError !== null ? ` (systemd-umount: ${umountError})` : ''}`,
+          };
+        } else {
+          try {
+            await rmdir(mnt);
+            await rmdir(dir);
+            cleanup = { status: 'clean' };
+          } catch (err) {
+            cleanup = { status: 'failed', detail: `rmdir: ${errCode(err)}: ${errMessage(err)}` };
+          }
+        }
+      }
+    } catch (err) {
+      error = toError(err, 'lock');
+    } finally {
+      if (lockHeld) await unlink(lockPath).catch(() => undefined);
+    }
+    return {
+      ok: error === undefined,
+      started_at: startedAt,
+      completed_at: new Date(clock()).toISOString(),
+      artifact,
+      ...(error !== undefined ? { error } : {}),
+      cleanup,
+    };
+  }
+
+  return {
+    fsIo: (mountpoint, opts, hooks) =>
+      admitted('fs_io', mountpoint, () =>
+        fsIoMode === 'pid1'
+          ? fsIoViaPid1(mountpoint, opts)
+          : fsIoInProcess(mountpoint, opts, hooks),
+      ),
+    nfsLoopback: (exportPath, opts) =>
+      admitted('nfs_loopback', exportPath, () => nfsLoopbackInner(exportPath, opts)),
+    busy: () => (inFlight === null ? null : { ...inFlight }),
   };
 }

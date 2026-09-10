@@ -935,6 +935,27 @@ removed, not kept as a fallback.
 > unhandled rejection. The unlink is attempted whenever the file was
 > created — after a timeout too — and its failure is `cleanup.status:
 > 'failed'` with the errno.
+>
+> **Execution boundary (2026-09-10, validation B01).** `xinas-agent.service`
+> runs under `ProtectSystem=strict`; every filesystem mounted before the
+> agent started is read-only inside its mount namespace (observed on
+> xinas-box: `nsenter -t <agent pid> -m findmnt /mnt/data` → `ro` while
+> the host has `rw`), so an in-process `fs_io` fails with `EROFS` on every
+> installed node. The write therefore runs OUTSIDE the agent's namespace,
+> the way the loopback mount already does: the host spawns
+> `systemd-run --wait --pipe --collect --quiet --unit xinas-health-fsio-<random>
+> -p ProtectSystem=strict -p ReadWritePaths=<mountpoint> -p PrivateTmp=true
+> -p ProtectHome=true -p NoNewPrivileges=true -p RuntimeMaxSec=<timeout_s + 5>
+> /usr/bin/node <dist>/agent/health/fsio-child.js <mountpoint> <run_id|none> <timeout_ms>`.
+> The transient unit runs the SAME hardened `fs_io` (steps 1–6 above) as
+> root with exactly one writable path and prints the `ProbeOutcome` as
+> JSON on stdout; the agent parses it. A helper that exits non-zero or
+> prints no outcome is `ok: false`, `error.code: FSIO_HELPER_FAILED`,
+> `cleanup: failed` ("artifact state unknown") — never `clean`. Tests and
+> fixture mode run the in-process implementation (`fsIoMode: 'in_process'`);
+> production wiring (`makeProbeHost`) selects `'pid1'`. Verified on
+> systemd 255: `ReadWritePaths=<mountpoint>` under `ProtectSystem=strict`
+> re-binds an existing submount read-write (`hardware-smoke-runbook.md`).
 
 **`nfs_loopback`**
 
@@ -987,9 +1008,12 @@ prompt text already forbids it.
 
 - `active_probes_per_node` (default 1): one probe in flight per agent,
   any kind; a second concurrent request is `CONFLICT`
-  (`PROBE_IN_PROGRESS`). *Implemented (S19a):* the `health.probe.run`
-  RPC handler's in-flight guard, plus the loopback lock shared with the
-  deep profile; the api maps the agent's `PROBE_IN_PROGRESS` to `409`.
+  (`PROBE_IN_PROGRESS`). *Implemented (S19a; amended 2026-09-10,
+  validation F08):* the `ProbeHost` itself is the admission point — both
+  verbs share one in-flight record, so the legacy deep path
+  (`health.check profile=deep`) and `health.probe.run` can never overlap;
+  the RPC handler asks `busy()` first and maps a refusal to `-32000`
+  `PROBE_IN_PROGRESS`; the api maps that to `409`.
 - `probes_per_run` (default 4): counted in the run ledger per `run_id`;
   exceeded → `PRECONDITION_FAILED` (`probe_budget_exhausted`).
   *Implemented (S19b):* the route counts the probe against the run
