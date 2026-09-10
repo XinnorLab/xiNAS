@@ -622,6 +622,35 @@ describe('health report schema and validation (S19c)', () => {
     expect(res.body.warnings.map((w: { code: string }) => w.code)).toEqual(['RUN_UNKNOWN']);
   });
 
+  it('final review 2: a report that carries no evidence is unverifiable, never verified', async () => {
+    // A minted run, not one tool call, `raw_reports: []` and every mandatory
+    // row `pass`. Nothing was checked against the ledger, so `verified` would
+    // be a claim about a check that never happened (§11.4). `unverifiable`
+    // never invalidates on its own (SAFE-04).
+    const ctx = await get('/api/v1/health/context');
+    const run = ctx.body.result.run as {
+      run_id: string;
+      principal: string;
+      versions: Record<string, unknown>;
+    };
+    const identity = { principal: run.principal, versions: run.versions };
+    const report = buildReport(run.run_id, { items: [] }, { raw_reports: [] }, identity);
+    const res = await validate(report);
+    expect(res.status).toBe(200);
+    expect(res.body.result.integrity).toEqual({
+      status: 'unverifiable',
+      checked: 0,
+      mismatches: [],
+      omitted: [],
+    });
+    expect(res.body.result.computed).toEqual({
+      health_status: 'ok',
+      coverage_status: 'complete',
+    });
+    expect(res.body.result.status_errors).toEqual([]);
+    expect(res.body.result.valid).toBe(true);
+  });
+
   it('F03: claimed versions and principal must match the ledger', async () => {
     const { runId, raw, identity } = await runAndReport();
     const tampered = structuredClone(honestReport(runId, raw, identity));

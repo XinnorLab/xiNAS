@@ -986,14 +986,20 @@ removed, not kept as a fallback.
 > the way the loopback mount already does: the host spawns
 > `systemd-run --wait --pipe --collect --quiet --unit xinas-health-fsio-<random>
 > -p ProtectSystem=strict -p ReadWritePaths=<mountpoint> -p PrivateTmp=true
-> -p ProtectHome=true -p NoNewPrivileges=true -p RuntimeMaxSec=<timeout_s + 5>
+> -p ProtectHome=true -p NoNewPrivileges=true -p RuntimeMaxSec=<timeout_s + 3>
 > /usr/bin/node <dist>/agent/health/fsio-child.js <mountpoint> <run_id|none> <timeout_ms>`.
 > The transient unit runs the SAME hardened `fs_io` (steps 1–6 above) as
 > root with exactly one writable path and prints the `ProbeOutcome` as
-> JSON on stdout; the agent parses it. A mountpoint path containing
-> whitespace is refused before the unit is ever spawned
-> (`error.code: MOUNTPOINT_UNSUPPORTED`), because `systemd-run`'s
-> `ReadWritePaths=` splits its value on whitespace and such a path could
+> JSON on stdout; the agent parses it. The helper's outer bounds sit
+> inside the api's `timeout_s + 5 s` wait — systemd stops the unit at
+> `timeout_s + 3 s` and the agent's own `execFile` kills it at
+> `timeout_s + CLEANUP_GRACE_MS` (4 s) — so a wedged helper is reported as
+> `FSIO_HELPER_FAILED` with `cleanup: failed`, never as an api timeout
+> (amended 2026-09-10, final review). A mountpoint path that is not
+> absolute, or that contains whitespace, is refused before the unit is
+> ever spawned (`error.code: MOUNTPOINT_UNSUPPORTED`): `systemd-run`'s
+> `ReadWritePaths=` splits its value on whitespace, reads a leading `-` as
+> "optional" and a leading `+` as root-relative, so such a path could
 > never be granted safely. A helper that exits non-zero or prints no
 > outcome is `ok: false`, `error.code: FSIO_HELPER_FAILED`,
 > `cleanup: failed` ("artifact state unknown") — never `clean`. Tests and
@@ -1025,9 +1031,10 @@ removed, not kept as a fallback.
 3. After the mount step ends in ANY way other than success (timeout,
    error, killed client) the host still runs `systemd-umount <mnt>`,
    bounded by whatever remains of the run's own deadline plus a 4 s
-   grace (`CLEANUP_GRACE_MS`) — never more than `UMOUNT_TIMEOUT_MS`
-   (20 s) — so this cleanup step cannot itself push the agent's answer
-   past the api's wait; the client's death does not prove PID1 did not
+   grace (`CLEANUP_GRACE_MS`) — never less than 1 s and never more than
+   `UMOUNT_TIMEOUT_MS` (20 s) — so this cleanup step cannot itself push
+   the agent's answer past the api's wait; the client's death does not
+   prove PID1 did not
    mount. An umount that still exceeds that bound is `cleanup: failed`
    with `detail: 'mountpoint still mounted (systemd-umount: …)'` and the
    directory is left for the operator (the next probe uses a new
@@ -1307,6 +1314,17 @@ digest must appear in `raw_reports`; a missing one is listed under
 that hides a result xiNAS produced is invalid (REPORT-06; validation
 F01b). Earlier rows of the same `(tool, args)` are superseded and need
 not appear.
+
+**Nothing to check is not `verified`** (amended 2026-09-10, final
+review). A report that carries no raw report from a ledger-writing tool
+(`integrity.checked === 0`) verified nothing, so its status is
+`unverifiable`, not `verified` — `verified` is a claim about a check that
+was actually performed. `unverifiable` never invalidates on its own
+(SAFE-04), so a run with no evidence still answers `valid: true` unless
+the verdict finds a status error; what it must not do is present an
+unchecked report as checked. The completeness rule above still comes
+first: when the ledger holds a row the report left out, the status is
+`mismatch` whatever `checked` says.
 
 ### 11.5 Storage
 

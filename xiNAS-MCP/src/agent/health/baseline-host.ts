@@ -435,7 +435,7 @@ export function makeBaselineHost(
   /** The bound is full: refused outright rather than queued behind a backlog. */
   const queueFull = (): BaselineError => ({
     code: 'QUEUE_FULL',
-    message: `${maxQueued} baseline runs are already queued`,
+    message: `${maxQueued} baseline profiles (the --sections call counts as one) are already queued`,
   });
   const runAnswers = {
     onDeadline: timedOut,

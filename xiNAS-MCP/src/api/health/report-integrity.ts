@@ -9,7 +9,9 @@
  * Reports from tools that do not write the ledger (`arrays.list`,
  * `system.logs`, …) cannot be checked and do not count. An unknown or
  * expired run is `unverifiable` — reported, never treated as invalid
- * (SAFE-04, AC-18).
+ * (SAFE-04, AC-18); so is a report that carries nothing checkable at all
+ * (`checked === 0`), because `verified` would claim a check that never
+ * happened (final review, §11.4).
  *
  * Completeness is the other half: the LATEST result of every `(tool,
  * args)` the ledger holds must appear in `raw_reports`. One that does not
@@ -153,12 +155,18 @@ export function checkIntegrity(entry: RunEntry, rawReports: RawReport[]): Integr
     }
   }
 
-  return {
-    status: mismatches.length > 0 || omitted.length > 0 ? 'mismatch' : 'verified',
-    checked,
-    mismatches,
-    omitted,
-  };
+  // `verified` is a claim about a check that was actually performed. A
+  // report that carries no raw report from a ledger-writing tool verified
+  // nothing, so it is `unverifiable` — which never invalidates on its own
+  // (SAFE-04). Completeness still comes first: a ledger row the report left
+  // out is a `mismatch` whatever `checked` says (§11.4).
+  const status: Integrity['status'] =
+    mismatches.length > 0 || omitted.length > 0
+      ? 'mismatch'
+      : checked === 0
+        ? 'unverifiable'
+        : 'verified';
+  return { status, checked, mismatches, omitted };
 }
 
 /**

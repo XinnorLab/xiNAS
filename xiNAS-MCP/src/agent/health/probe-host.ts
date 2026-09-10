@@ -45,7 +45,11 @@
  * exactly one writable path, because the agent's own
  * `ProtectSystem=strict` namespace mounts every filesystem that existed
  * before it started read-only (validation B01, spec §9.3 "Execution
- * boundary"). Tests and fixture mode keep `'in_process'`.
+ * boundary"). Both of that mode's outer bounds — the unit's
+ * `RuntimeMaxSec=` and the agent's own `execFile` timeout — sit INSIDE the
+ * api's `timeout_s + 5 s` wait and fire in that order, so a wedged helper
+ * is `FSIO_HELPER_FAILED` with `cleanup: failed` rather than a generic api
+ * timeout. Tests and fixture mode keep `'in_process'`.
  *
  * Every step is bounded by the run's `timeoutMs` ON THE AGENT: a step
  * that overruns ends the probe with `TIMEOUT` and cleanup is still
@@ -92,6 +96,24 @@ const UMOUNT_TIMEOUT_MS = 20_000;
  * loopback step 3/4).
  */
 export const CLEANUP_GRACE_MS = 4_000;
+/**
+ * Seconds added to the run's own timeout for the transient unit's
+ * `RuntimeMaxSec=`. Deliberately SHORTER than {@link CLEANUP_GRACE_MS} so
+ * the three timers fire in order: systemd stops the unit first, the
+ * agent's `execFile` kills it second, and the api's `timeout_s + 5 s` wait
+ * is still running when the agent answers (spec §9.3 "Execution
+ * boundary"). Equal bounds would let the api time out first and turn a
+ * wedged helper into a generic api timeout instead of
+ * `FSIO_HELPER_FAILED` + `cleanup: failed`.
+ */
+const RUNTIME_MAX_GRACE_S = 3;
+
+/**
+ * The outer bound the agent puts on the fs_io helper: the run's own
+ * timeout plus the cleanup grace, which keeps it inside the api's
+ * `timeout_s + 5 s` wait (spec §9.3 "Execution boundary").
+ */
+export const execCaptureTimeoutMs = (timeoutMs: number): number => timeoutMs + CLEANUP_GRACE_MS;
 
 /** Test-only seams: let a test slow or sabotage a single step. */
 export interface FsIoHooks {
@@ -236,7 +258,7 @@ export const defaultExecCapture = (
   timeoutMs: number,
 ): Promise<ExecCaptureResult> =>
   new Promise((resolve) => {
-    const captureTimeoutMs = timeoutMs + 5_000;
+    const captureTimeoutMs = execCaptureTimeoutMs(timeoutMs);
     execFile(
       file,
       args,
@@ -397,12 +419,14 @@ export function createRealProbeHost(deps: RealProbeHostDeps = {}): ProbeHost {
     // needs a process to answer, and both must never reach `execCapture`.
     const badRunId = runIdInvalid(opts.runId, 'dir');
     if (badRunId !== null) return refused(toError(badRunId, 'dir'));
-    if (/\s/.test(mountpoint)) {
+    if (/\s/.test(mountpoint) || !mountpoint.startsWith('/')) {
       // `systemd-run -p ReadWritePaths=<mountpoint>` splits its value on
-      // whitespace, so a path containing any is unsafe to grant.
+      // whitespace, reads a leading `-` as "the path is optional" and a
+      // leading `+` as root-relative — so only an absolute, whitespace-free
+      // path can be granted safely.
       return refused({
         code: 'MOUNTPOINT_UNSUPPORTED',
-        message: 'mountpoint paths with whitespace are not supported by the PID1 fs_io boundary',
+        message: 'the PID1 fs_io boundary needs an absolute mountpoint path without whitespace',
         stage: 'open',
       });
     }
@@ -425,7 +449,7 @@ export function createRealProbeHost(deps: RealProbeHostDeps = {}): ProbeHost {
       '-p',
       'NoNewPrivileges=true',
       '-p',
-      `RuntimeMaxSec=${Math.ceil(opts.timeoutMs / 1000) + 5}`,
+      `RuntimeMaxSec=${Math.ceil(opts.timeoutMs / 1000) + RUNTIME_MAX_GRACE_S}`,
       process.execPath,
       fileURLToPath(FSIO_CHILD),
       mountpoint,

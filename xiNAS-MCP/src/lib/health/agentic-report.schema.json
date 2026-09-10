@@ -118,7 +118,7 @@
         },
         "declared_absent": {
           "type": "array",
-          "description": "From health.context.topology.declared_absent; a not_applicable check must cite one of these or a scope exclusion.",
+          "description": "From health.context.topology.declared_absent, as the run's ledger recorded it; a not_applicable check must cite one of these, and a scope-exclusion phrase satisfies a non-mandatory check only.",
           "items": { "type": "string" }
         }
       }

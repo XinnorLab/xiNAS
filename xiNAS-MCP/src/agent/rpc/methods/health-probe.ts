@@ -84,7 +84,10 @@ interface ProbeParams {
 
 const errMessage = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
-/** `rdma link show -j` text → rows; '' is an empty list; anything that is not a JSON array is PARSE. */
+/**
+ * `rdma link show -j` text → rows; '' is an empty list; anything that is not
+ * a JSON array is PARSE; non-object array elements are dropped.
+ */
 export function parseRdmaLinks(raw: string): RdmaLink[] {
   if (raw.trim().length === 0) return [];
   let parsed: unknown;

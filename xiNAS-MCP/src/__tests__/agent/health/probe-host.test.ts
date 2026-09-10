@@ -19,6 +19,7 @@ import {
   createRealProbeHost,
   defaultExecCapture,
   execCaptureCode,
+  execCaptureTimeoutMs,
 } from '../../../agent/health/probe-host.js';
 import { PROBE_DIR_NAME } from '../../../lib/health/probe-types.js';
 
@@ -523,7 +524,7 @@ describe('B01: fs_io delegated to a PID1 transient unit', () => {
     expect(args).toContain('PrivateTmp=true');
     expect(args).toContain('ProtectHome=true');
     expect(args).toContain('NoNewPrivileges=true');
-    expect(args).toContain('RuntimeMaxSec=25');
+    expect(args).toContain('RuntimeMaxSec=23');
     // …, node, fsio-child, <mountpoint> <run_id|none> <timeout_ms>
     expect(args.at(-5)).toBe(process.execPath);
     expect(args.at(-4)).toMatch(/agent\/health\/fsio-child\.(js|ts)$/);
@@ -543,7 +544,30 @@ describe('B01: fs_io delegated to a PID1 transient unit', () => {
     });
     await host.fsIo('/mnt/data', { runId: 'run-1', timeoutMs: 5_000 });
     expect(seen.slice(-2)).toEqual(['run-1', '5000']);
-    expect(seen).toContain('RuntimeMaxSec=10');
+    expect(seen).toContain('RuntimeMaxSec=8');
+  });
+
+  it("final review 1: both helper bounds sit inside the api's timeout_s + 5 s wait", async () => {
+    // The api waits `timeout_s * 1000 + 5_000` for the RPC (routes/health.ts).
+    // systemd must kill the unit first and `execFile` second, so a wedged
+    // helper comes back as FSIO_HELPER_FAILED + cleanup: failed, never as a
+    // generic api timeout (§9.3 "Execution boundary", PROBE-03).
+    const timeoutMs = 20_000;
+    expect(execCaptureTimeoutMs(timeoutMs)).toBe(timeoutMs + CLEANUP_GRACE_MS);
+    expect(execCaptureTimeoutMs(timeoutMs)).toBeLessThan(timeoutMs + 5_000);
+    let seen: string[] = [];
+    let passed = 0;
+    const host = createRealProbeHost({
+      fsIoMode: 'pid1',
+      execCapture: async (_file, args, ms) => {
+        seen = args;
+        passed = ms;
+        return { stdout: JSON.stringify(outcome), stderr: '', code: 0 };
+      },
+    });
+    await host.fsIo('/mnt/data', { runId: null, timeoutMs });
+    expect(seen).toContain(`RuntimeMaxSec=${Math.ceil(timeoutMs / 1000) + 3}`);
+    expect(execCaptureTimeoutMs(passed)).toBeLessThan(timeoutMs + 5_000);
   });
 
   it('a helper that exits non-zero is a failed probe with unknown cleanup', async () => {
@@ -609,9 +633,10 @@ describe('B01: fs_io delegated to a PID1 transient unit', () => {
     expect(spawned).toBe(0);
   });
 
-  it('review fix 3b: a mountpoint containing whitespace is refused before the transient unit is spawned', async () => {
-    // systemd-run's `ReadWritePaths=` splits its value on whitespace, so
-    // a path with a space can never be granted safely.
+  it('review fix 3b: a mountpoint that is not an absolute path without whitespace is refused before the transient unit is spawned', async () => {
+    // `ReadWritePaths=` splits its value on whitespace, and reads a leading
+    // `-` as "optional" and a leading `+` as root-relative — so only an
+    // absolute, whitespace-free path can be granted safely.
     let spawned = 0;
     const host = createRealProbeHost({
       fsIoMode: 'pid1',
@@ -620,14 +645,16 @@ describe('B01: fs_io delegated to a PID1 transient unit', () => {
         return { stdout: JSON.stringify(outcome), stderr: '', code: 0 };
       },
     });
-    const r = await host.fsIo('/mnt/my data', { runId: null, timeoutMs: 5_000 });
-    expect(r.ok).toBe(false);
-    expect(r.error).toEqual({
-      code: 'MOUNTPOINT_UNSUPPORTED',
-      message: 'mountpoint paths with whitespace are not supported by the PID1 fs_io boundary',
-      stage: 'open',
-    });
-    expect(r.cleanup).toEqual({ status: 'not_needed' });
+    for (const bad of ['/mnt/my data', '-mnt', '+mnt/data', 'mnt/data']) {
+      const r = await host.fsIo(bad, { runId: null, timeoutMs: 5_000 });
+      expect(r.ok, bad).toBe(false);
+      expect(r.error, bad).toEqual({
+        code: 'MOUNTPOINT_UNSUPPORTED',
+        message: 'the PID1 fs_io boundary needs an absolute mountpoint path without whitespace',
+        stage: 'open',
+      });
+      expect(r.cleanup, bad).toEqual({ status: 'not_needed' });
+    }
     expect(spawned).toBe(0);
   });
 

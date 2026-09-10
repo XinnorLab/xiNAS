@@ -480,3 +480,55 @@ describe('isReportValid (spec §11.2)', () => {
     expect(isReportValid({ ...clean, status_errors: ['x'] }, 'verified')).toBe(false);
   });
 });
+
+/**
+ * Final review 2(a) — spec §11.4: `verified` is a claim that something was
+ * checked. A report that carries no raw report from a ledger-writing tool
+ * checked nothing, so it is `unverifiable` (which never invalidates —
+ * SAFE-04), not `verified`. The completeness rule still wins: a ledger row
+ * the report left out is a `mismatch` whatever `checked` says.
+ */
+describe('checkIntegrity with no checkable evidence (spec §11.4)', () => {
+  const mint = (): { ledger: RunLedger; entry: RunEntry } => {
+    const ledger = new RunLedger({ now: () => NOW_MS, ttlMs: 900_000 });
+    const entry = ledger.mint({
+      principal: 'op:alice',
+      role: 'operator',
+      versions: VERSIONS,
+      limits: LIMITS,
+    });
+    return { ledger, entry };
+  };
+
+  it('an empty ledger and no raw reports is unverifiable, not verified', () => {
+    const { entry } = mint();
+    expect(checkIntegrity(entry, [])).toEqual({
+      status: 'unverifiable',
+      checked: 0,
+      mismatches: [],
+      omitted: [],
+    });
+  });
+
+  it('raw reports from non-ledger tools alone are unverifiable', () => {
+    const { entry } = mint();
+    const report = { items: [] };
+    const integrity = checkIntegrity(entry, [
+      { tool: 'arrays.list', args: {}, collected_at: T0, digest: digestOf(report), report },
+    ]);
+    expect(integrity.status).toBe('unverifiable');
+    expect(integrity.checked).toBe(0);
+  });
+
+  it('a ledger row the report does not carry is still a mismatch, checked or not', () => {
+    const { ledger, entry } = mint();
+    const raw = { status: 'critical' };
+    ledger.record(entry.run_id, 'health.check', { profile: 'quick' }, raw, T0);
+    const withRow = ledger.get(entry.run_id, 'op:alice');
+    expect(withRow).not.toBeNull();
+    const integrity = checkIntegrity(withRow as RunEntry, []);
+    expect(integrity.status).toBe('mismatch');
+    expect(integrity.checked).toBe(0);
+    expect(integrity.omitted).toHaveLength(1);
+  });
+});

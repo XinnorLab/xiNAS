@@ -354,9 +354,14 @@ export function healthRouter(ctx: ApiContext): Router {
         hostname: hostname(),
       });
       // §6.3: record what this call proved absent, for Task 7's verdict.
+      // Read defensively rather than through a cast: the ledger record is
+      // the verdict's only proof for a `not_applicable` row, so a shape
+      // that is not a list of strings must record nothing proven, never
+      // whatever `buildHealthContext` happened to return.
+      const absent = (body.topology as { declared_absent?: unknown } | undefined)?.declared_absent;
       hp.ledger.setDeclaredAbsent(
         run.run_id,
-        (body.topology as { declared_absent: string[] }).declared_absent,
+        Array.isArray(absent) ? absent.filter((s): s is string => typeof s === 'string') : [],
       );
       sendOk(req, res, body, [], warnings);
     } catch (err) {
