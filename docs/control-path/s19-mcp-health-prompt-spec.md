@@ -405,9 +405,13 @@ Rules:
   `catalog_version` comes from the catalog file (§10);
   `report_schema_version` from the schema file (§11).
 - All five values are echoed by `health.context` and stamped into the run
-  ledger, so a run keeps the versions it started with even if the process
-  is later restarted with a new template (AC-17: the ledger entry, not
-  the live constant, is what the validator compares against).
+  ledger. For the run's TTL the validator compares the report's
+  `run.versions` (and `run.principal`) with the ledger entry — a report
+  that claims other versions or another identity is invalid (AC-17,
+  validation F03). The ledger is in-memory (§6.3, O-4): after an api
+  restart the run is unknown and the report is `unverifiable`, never
+  invalid — what survives a restart is the report the client stored,
+  which carries the versions it ran with (validation D02).
 
 ### 5.6 Legacy era
 
@@ -542,6 +546,14 @@ the returned `result`) to the ledger. That digest is what
 `health.report.validate` compares raw reports against (§11.4). An
 unknown or expired `run_id` is accepted with `warnings:
 [RUN_UNKNOWN]` — a run must not fail because the api restarted (SAFE-04).
+
+Every ledger read and write is bound to the principal that minted the
+run: `health.check`, `health.baseline`, `health.probe.run` and
+`health.report.validate` treat a run another principal started exactly
+like an unknown run (`RUN_UNKNOWN`, `unverifiable`) — no cross-principal
+append, no cross-principal integrity proof (validation F03). The entry
+also records `declared_absent`, the components the inventory proved
+absent when `health.context` last served the run (§11.3 consumes it).
 
 *Implemented (S19b, `api/health/run-ledger.ts`):* the ledger sweeps
 expired entries lazily on every mint (and `get` drops an expired entry
@@ -1172,9 +1184,10 @@ report. Response:
 }
 ```
 
-`valid` is true iff there are no schema, reference or status errors and
-`integrity.status !== 'mismatch'`. `unverifiable` (unknown or expired
-`run_id`) does not invalidate — it is reported (SAFE-04, AC-18).
+`valid` is true iff there are no schema, reference, status or
+run-identity errors and `integrity.status !== 'mismatch'`. `unverifiable`
+(unknown or expired `run_id`) does not invalidate — it is reported
+(SAFE-04, AC-18).
 
 *Implemented (S19c, `lib/health/report-validate.ts`,
 `api/health/report-integrity.ts`, `routes/health.ts`):* the response
@@ -1192,7 +1205,11 @@ catalog) and `findings[].evidence_refs`, then `not_checked[].check_id`.
 A body that is not a JSON object is `INVALID_ARGUMENT`; a report that
 fails validation is still a 200 with `valid: false`. The body is
 subject to the api-wide 1 MB JSON limit. An unknown run also yields the
-`RUN_UNKNOWN` warning of §6.3.
+`RUN_UNKNOWN` warning of §6.3. A report whose `run.principal` or
+`run.versions` do not match the ledger entry lists that mismatch under
+`status_errors` (§11.4, validation F03); a run this principal did not
+mint is unknown to it (§6.3), so no identity error is possible there —
+the mismatch can only be reported against the caller's own run.
 
 ### 11.3 Deterministic verdict (REPORT-03, D-12)
 
@@ -1219,7 +1236,9 @@ For every `raw_reports[i]` with a `run_id` known to the ledger (§6.3):
 digest; `report` re-hashed MUST equal `digest`. A model that edits a raw
 FAIL, or invents a report, produces `mismatch`. Reports from tools that
 do not write the ledger (`arrays.list`, `system.logs`, …) are
-`unverifiable` individually and do not affect `valid`.
+`unverifiable` individually and do not affect `valid`. The report's
+`run.principal` and `run.versions` MUST equal the ledger entry's (status
+errors otherwise).
 
 ### 11.5 Storage
 

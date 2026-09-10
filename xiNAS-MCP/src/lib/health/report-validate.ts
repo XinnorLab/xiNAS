@@ -59,7 +59,7 @@ export interface RawReport {
 /** The parts of a schema-valid report the validator reads. */
 export interface AgenticReport {
   report_schema_version: string;
-  run: { run_id: string };
+  run: { run_id: string; principal: string; versions: Record<string, unknown> };
   scope: { kind: Scope; declared_absent?: string[] };
   run_status: RunStatus;
   health_status: HealthStatus;

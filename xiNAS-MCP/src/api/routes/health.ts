@@ -69,7 +69,12 @@ import {
 } from '../../lib/health/report-validate.js';
 import { parseMaxAgeS, runBaseline } from '../health/baseline.js';
 import { buildHealthContext, runUnknownWarning } from '../health/context.js';
-import { type Integrity, UNVERIFIABLE, checkIntegrity } from '../health/report-integrity.js';
+import {
+  type Integrity,
+  UNVERIFIABLE,
+  checkIntegrity,
+  runIdentityErrors,
+} from '../health/report-integrity.js';
 import { digestOf } from '../health/run-ledger.js';
 import { SERVER_INFO } from '../mcp/discover.js';
 import { queueConfirmationEvent } from '../mcp/confirmation/audit.js';
@@ -170,6 +175,7 @@ export function healthRouter(ctx: ApiContext): Router {
 
   r.get('/health', async (req, res, next) => {
     try {
+      const rc = req.context as RequestContext;
       const profile = (req.query.profile as string | undefined) ?? 'quick';
       if (!ALLOWED_PROFILES.has(profile)) {
         throw new ApiException(
@@ -282,7 +288,14 @@ export function healthRouter(ctx: ApiContext): Router {
       if (
         runId !== null &&
         (ctx.healthPrompt === undefined ||
-          !ctx.healthPrompt.ledger.record(runId, 'health.check', { profile }, result, completedAt))
+          !ctx.healthPrompt.ledger.record(
+            runId,
+            'health.check',
+            { profile },
+            result,
+            completedAt,
+            rc.principal,
+          ))
       ) {
         warnings.push(runUnknownWarning(runId));
       }
@@ -316,8 +329,7 @@ export function healthRouter(ctx: ApiContext): Router {
           : null;
       const targets = parseTargetsQuery(req.query.targets);
       const warnings: Warning[] = [];
-      let run = requested === null ? null : hp.ledger.get(requested);
-      if (run !== null && run.principal !== rc.principal) run = null;
+      let run = requested === null ? null : hp.ledger.get(requested, rc.principal);
       if (run === null) {
         if (requested !== null) warnings.push(runUnknownWarning(requested));
         run = hp.ledger.mint({
@@ -345,6 +357,11 @@ export function healthRouter(ctx: ApiContext): Router {
         targets,
         hostname: hostname(),
       });
+      // §6.3: record what this call proved absent, for Task 7's verdict.
+      hp.ledger.setDeclaredAbsent(
+        run.run_id,
+        (body.topology as { declared_absent: string[] }).declared_absent,
+      );
       sendOk(req, res, body, [], warnings);
     } catch (err) {
       next(err);
@@ -367,6 +384,7 @@ export function healthRouter(ctx: ApiContext): Router {
           { reason: 'health_prompt_disabled' },
         );
       }
+      const rc = req.context as RequestContext;
       const profileName = typeof req.query.profile === 'string' ? req.query.profile : 'standard';
       const profile = hp.profiles.profiles.find((p) => p.name === profileName);
       if (profile === undefined) {
@@ -396,6 +414,7 @@ export function healthRouter(ctx: ApiContext): Router {
           { profile: profileName, max_age_s: maxAgeS },
           result,
           result.collection.collected_at,
+          rc.principal,
         )
       ) {
         warnings.push(runUnknownWarning(runId));
@@ -424,6 +443,7 @@ export function healthRouter(ctx: ApiContext): Router {
    */
   r.post('/health/report/validate', (req, res, next) => {
     try {
+      const rc = req.context as RequestContext;
       const body: unknown = req.body;
       if (body === null || typeof body !== 'object' || Array.isArray(body)) {
         throw new ApiException('INVALID_ARGUMENT', 'the body must be the report object');
@@ -432,14 +452,22 @@ export function healthRouter(ctx: ApiContext): Router {
       const warnings: Warning[] = [];
       let runId: string | null = null;
       let integrity: Integrity = UNVERIFIABLE;
+      let status_errors = shape.status_errors;
       if (shape.computed !== null) {
         const report = body as AgenticReport;
         runId = report.run.run_id;
-        const entry = ctx.healthPrompt?.ledger.get(runId) ?? null;
-        if (entry === null) warnings.push(runUnknownWarning(runId));
-        else integrity = checkIntegrity(entry, report.raw_reports);
+        const entry = ctx.healthPrompt?.ledger.get(runId, rc.principal) ?? null;
+        if (entry === null) {
+          warnings.push(runUnknownWarning(runId));
+        } else {
+          integrity = checkIntegrity(entry, report.raw_reports);
+          // F03: a run this principal did not mint is RUN_UNKNOWN above and
+          // never reaches here, so identity is only ever checked against the
+          // caller's own run.
+          status_errors = [...shape.status_errors, ...runIdentityErrors(entry, report.run)];
+        }
       }
-      const valid = isReportValid(shape, integrity.status);
+      const valid = isReportValid({ ...shape, status_errors }, integrity.status);
       sendOk(
         req,
         res,
@@ -450,7 +478,7 @@ export function healthRouter(ctx: ApiContext): Router {
           reference_errors: shape.reference_errors,
           integrity,
           computed: shape.computed,
-          status_errors: shape.status_errors,
+          status_errors,
           rewritten_to_unknown: shape.rewritten_to_unknown,
           report_digest: digestOf(body),
         },
@@ -553,7 +581,8 @@ export function healthRouter(ctx: ApiContext): Router {
       const hp = ctx.healthPrompt;
       if (runId !== null) {
         const max = hp?.config.limits.probes_per_run ?? 0;
-        const verdict = hp === undefined ? 'unknown' : hp.ledger.startProbe(runId, max);
+        const verdict =
+          hp === undefined ? 'unknown' : hp.ledger.startProbe(runId, max, rc.principal);
         if (verdict === 'exhausted') {
           throw new ApiException(
             'PRECONDITION_FAILED',
@@ -661,6 +690,7 @@ export function healthRouter(ctx: ApiContext): Router {
           { probe: kind, target, timeout_s: timeoutS },
           result,
           typeof rest.completed_at === 'string' ? rest.completed_at : new Date().toISOString(),
+          rc.principal,
         );
       }
       sendOk(req, res, result, [], warnings);

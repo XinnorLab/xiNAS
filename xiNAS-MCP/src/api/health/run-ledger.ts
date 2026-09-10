@@ -13,6 +13,12 @@
  * evicted. Nothing here is durable — an api restart forgets every run, and
  * the routes accept an unknown id with a `RUN_UNKNOWN` warning rather than
  * failing the run (SAFE-04).
+ *
+ * F03: every read and write besides `mint` takes an optional `principal`;
+ * when given and it does not match the entry's, the run is unknown to the
+ * caller — no cross-principal append, no cross-principal probe count, no
+ * cross-principal integrity proof. Callers that omit it (tests, and
+ * `mint`'s own bookkeeping) get the pre-F03 behaviour.
  */
 
 import { createHash, randomUUID } from 'node:crypto';
@@ -47,6 +53,12 @@ export interface RunEntry {
   limits: HealthPromptLimits;
   probes_started: number;
   reports: RunReport[];
+  /**
+   * The components the inventory proved absent the last time `health.context`
+   * served this run (§6.2 `declaredAbsent`); `null` until then. Task 7
+   * consumes this for the deterministic verdict (§11.3).
+   */
+  declared_absent: string[] | null;
 }
 
 export interface RunLedgerDeps {
@@ -104,31 +116,40 @@ export class RunLedger {
       limits: { ...input.limits },
       probes_started: 0,
       reports: [],
+      declared_absent: null,
     };
     this.#entries.set(entry.run_id, entry);
     return entry;
   }
 
-  /** null when unknown or expired (an expired entry is dropped on the spot). */
-  get(runId: string): RunEntry | null {
+  /**
+   * null when unknown or expired (an expired entry is dropped on the spot).
+   * F03: when `principal` is given and does not match the entry's, the run
+   * is treated as unknown — no cross-principal read, so no cross-principal
+   * write or integrity proof either, since every other method routes
+   * through this one.
+   */
+  get(runId: string, principal?: string): RunEntry | null {
     const entry = this.#entries.get(runId);
     if (entry === undefined) return null;
     if (entry.expires_at <= this.#now()) {
       this.#entries.delete(runId);
       return null;
     }
+    if (principal !== undefined && entry.principal !== principal) return null;
     return entry;
   }
 
-  /** Append a report digest; false when the run is unknown or expired. */
+  /** Append a report digest; false when the run is unknown, expired or another principal's. */
   record(
     runId: string,
     tool: string,
     args: unknown,
     result: unknown,
     collectedAt: string,
+    principal?: string,
   ): boolean {
-    const entry = this.get(runId);
+    const entry = this.get(runId, principal);
     if (entry === null) return false;
     entry.reports.push({
       tool,
@@ -140,12 +161,24 @@ export class RunLedger {
   }
 
   /** Count one probe against `max`; the counter moves only on 'ok'. */
-  startProbe(runId: string, max: number): 'ok' | 'exhausted' | 'unknown' {
-    const entry = this.get(runId);
+  startProbe(runId: string, max: number, principal?: string): 'ok' | 'exhausted' | 'unknown' {
+    const entry = this.get(runId, principal);
     if (entry === null) return 'unknown';
     if (entry.probes_started >= max) return 'exhausted';
     entry.probes_started += 1;
     return 'ok';
+  }
+
+  /**
+   * What `health.context` last proved absent from the inventory for this
+   * run (§6.2 `declaredAbsent`); false when the run is unknown, expired or
+   * another principal's.
+   */
+  setDeclaredAbsent(runId: string, list: readonly string[], principal?: string): boolean {
+    const entry = this.get(runId, principal);
+    if (entry === null) return false;
+    entry.declared_absent = [...list];
+    return true;
   }
 
   /** Drop every expired run; returns how many were dropped. */

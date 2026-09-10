@@ -95,6 +95,36 @@ describe('RunLedger', () => {
     expect(l.get(zero.run_id)?.probes_started).toBe(0);
   });
 
+  it('F03: reads and writes are bound to the minting principal', () => {
+    const { l } = ledger();
+    const run = mint(l, 'op:alice');
+    expect(l.get(run.run_id, 'op:bob')).toBeNull();
+    expect(l.get(run.run_id, 'op:alice')).toBe(run);
+    expect(
+      l.record(
+        run.run_id,
+        'health.check',
+        { profile: 'quick' },
+        {},
+        '2026-09-09T10:00:00Z',
+        'op:bob',
+      ),
+    ).toBe(false);
+    expect(l.startProbe(run.run_id, 4, 'op:bob')).toBe('unknown');
+    expect(
+      l.record(
+        run.run_id,
+        'health.check',
+        { profile: 'quick' },
+        {},
+        '2026-09-09T10:00:00Z',
+        'op:alice',
+      ),
+    ).toBe(true);
+    expect(l.setDeclaredAbsent(run.run_id, ['raid'])).toBe(true);
+    expect(run.declared_absent).toEqual(['raid']);
+  });
+
   it('is bounded: past maxEntries the oldest live run is evicted, expired ones first', () => {
     const { l, tick } = ledger({ ttlMs: 10_000, maxEntries: 2 });
     const a = mint(l);

@@ -1644,7 +1644,7 @@ components:
             role: { type: string }
             versions:
               type: object
-              description: The versions the run started with; the ledger keeps them even if the api is later restarted with a new template (AC-17).
+              description: The versions the run started with, as stamped into the in-memory ledger; the validator compares a report's `run.versions` against them for the run's TTL (AC-17). After an api restart the run is unknown and reports are `unverifiable`.
               properties:
                 prompt: { type: string }
                 template_sha256: { type: string }
@@ -3319,7 +3319,8 @@ paths:
         `run_id` from `GET /health/context` the report's digest is recorded
         in that run's ledger and `run_id` is echoed in the result; an
         unknown or expired run is accepted with a `RUN_UNKNOWN` warning
-        (S19 §6.3).
+        (S19 §6.3) — a run another principal started is treated as
+        unknown.
       parameters:
         - in: query
           name: profile
@@ -3432,7 +3433,8 @@ paths:
         `collection.status` and `error.code` (`EXECUTOR_UNAVAILABLE`,
         `TIMEOUT`, `EXIT_<n>`, `PARSE`, `MODULE_ABSENT`, `ENOENT`, …) say
         what happened and `report` is null. A `run_id` records the result
-        digest in the run ledger (`RUN_UNKNOWN` warning otherwise).
+        digest in the run ledger (`RUN_UNKNOWN` warning otherwise; a run
+        another principal started is treated as unknown).
         Viewer rank. `UNSUPPORTED` when `mcp.health_prompt.enabled` is
         false. Coverage differs from `GET /health`; neither substitutes
         for the other.
@@ -3564,7 +3566,8 @@ paths:
         consumed and before the agent is asked (`PRECONDITION_FAILED`,
         `reason: probe_budget_exhausted`) — and its result digest is
         recorded in the run ledger; an unknown or expired run is accepted
-        with a `RUN_UNKNOWN` warning (S19 §6.3, §9.5).
+        with a `RUN_UNKNOWN` warning (S19 §6.3, §9.5) — a run another
+        principal started is treated as unknown.
       requestBody:
         required: true
         content:

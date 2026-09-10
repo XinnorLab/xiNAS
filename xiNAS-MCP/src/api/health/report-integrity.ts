@@ -10,6 +10,11 @@
  * `system.logs`, …) cannot be checked and do not count. An unknown or
  * expired run is `unverifiable` — reported, never treated as invalid
  * (SAFE-04, AC-18).
+ *
+ * `runIdentityErrors` is the companion §11.4 check: the report's
+ * `run.principal` / `run.versions` must equal the ledger entry's. Since the
+ * ledger itself refuses a cross-principal read (`RunLedger.get`, F03), the
+ * caller only ever reaches this with its own run's entry.
  */
 
 import type { RawReport } from '../../lib/health/report-validate.js';
@@ -37,6 +42,37 @@ export interface Integrity {
 }
 
 export const UNVERIFIABLE: Integrity = { status: 'unverifiable', checked: 0, mismatches: [] };
+
+/** The `RunVersions` keys the report's `run.versions` is compared against (`server` excluded — spec §11.4). */
+const VERSION_KEYS = ['prompt', 'template_sha256', 'policy', 'catalog', 'report_schema'] as const;
+
+/**
+ * §11.4 identity: the report's `run` block must be the ledger's (F03). One
+ * string per mismatch; called only when `entry` is this caller's own run —
+ * a foreign or unknown run never reaches here (§6.3: it is `RUN_UNKNOWN`
+ * and `unverifiable` before identity is ever checked).
+ */
+export function runIdentityErrors(
+  entry: RunEntry,
+  run: { principal: string; versions: Record<string, unknown> },
+): string[] {
+  const errors: string[] = [];
+  if (run.principal !== entry.principal) {
+    errors.push(
+      `run.principal '${run.principal}' does not match the ledger ('${entry.principal}')`,
+    );
+  }
+  for (const key of VERSION_KEYS) {
+    const claimed = run.versions[key];
+    const stamped = entry.versions[key];
+    if (claimed !== stamped) {
+      errors.push(
+        `run.versions.${key} '${String(claimed)}' does not match the ledger ('${stamped}')`,
+      );
+    }
+  }
+  return errors;
+}
 
 export function checkIntegrity(entry: RunEntry, rawReports: RawReport[]): Integrity {
   let checked = 0;
