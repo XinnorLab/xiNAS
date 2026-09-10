@@ -2084,7 +2084,7 @@ export function evaluateReport(
 ```
 
   `report-integrity.ts`: `checkIntegrity` additionally computes `omitted`
-  (group `entry.reports` by `${tool} ${args_digest}`, take the LAST
+  (group `entry.reports` by `${tool} ${args_digest}`, take the LAST
   row of each group, keep it when no raw report has `tool === row.tool &&
   digestOf(raw.args) === row.args_digest && raw.digest === row.report_digest`)
   and sets `status: 'mismatch'` when `mismatches.length > 0 || omitted.length > 0`;
