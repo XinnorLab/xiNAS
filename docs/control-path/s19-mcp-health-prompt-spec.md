@@ -1178,8 +1178,12 @@ report. Response:
   "valid": false,
   "schema_errors": [ { "path": "/checks/3/outcome", "message": "…" } ],
   "reference_errors": [ { "path": "/findings/0/evidence_refs/1", "ref": "ev-17", "message": "unknown evidence id" } ],
-  "integrity": { "status": "verified" | "mismatch" | "unverifiable", "mismatches": [ { "raw_report_index": 1, "expected_digest": "…", "actual_digest": "…" } ] },
+  "integrity": { "status": "verified" | "mismatch" | "unverifiable",
+                 "mismatches": [ { "raw_report_index": 1, "expected_digest": "…", "actual_digest": "…" } ],
+                 "omitted": [ { "tool": "health.check", "args_digest": "sha256:…", "collected_at": "…" } ] },
   "computed": { "health_status": "degraded", "coverage_status": "partial" },
+  "adjustments": [ { "id": "HC-03.arrays", "from": "pass", "to": "fail", "severity": "critical",
+                     "reason": "floor", "detail": "health.check xiraid.arrays: critical" } ],
   "status_errors": [ "health_status 'ok' does not match computed 'degraded'" ]
 }
 ```
@@ -1192,9 +1196,15 @@ run-identity errors and `integrity.status !== 'mismatch'`. `unverifiable`
 *Implemented (S19c, `lib/health/report-validate.ts`,
 `api/health/report-integrity.ts`, `routes/health.ts`):* the response
 also carries `run_id` (the report's, or null when schema errors kept it
-unread), `rewritten_to_unknown` (the `not_applicable` rows step 3
-rewrote), `integrity.checked` (how many raw reports were checkable) and
-`report_digest` (`sha256:<hex>` over the canonical JSON of the body);
+unread), `adjustments` (every row the verdict raised or rewrote — §11.3
+steps 3, 5–8 — each with the outcome it came from, the outcome it was
+given, the reason and a detail naming the evidence), and
+`rewritten_to_unknown` (the ids of the rows whose *effective* outcome
+became `unknown` from some other outcome, whatever the reason: an
+uncited `not_applicable`, a `no_source` row, stale evidence or an
+`unknown` floor), `integrity.checked` (how many raw reports were
+checkable) and `report_digest` (`sha256:<hex>` over the canonical JSON
+of the body);
 each mismatch names its `reason` (`report_rehash_mismatch`,
 `not_in_ledger`, `digest_mismatch`). Schema errors are Ajv 2020-12
 instance paths; when the schema fails, `computed` is null and no
@@ -1222,12 +1232,55 @@ catalog, not from the report's own `mandatory` flag, which must agree):
 2. `health_status`: `critical` if any `fail` with severity `critical`;
    else `degraded` if any `fail`; else `warning` if any `warn`; else `ok`
    iff `coverage_status === 'complete'`; else `unknown`.
-3. A `not_applicable` outcome MUST cite a `declared_absent` component or
-   a scope exclusion in `reason`; otherwise it is rewritten to `unknown`
-   before step 1 (REPORT-02).
+3. A `not_applicable` outcome on a MANDATORY row MUST cite, in `reason`,
+   a component the run's ledger proved absent (`health.context.topology.
+   declared_absent`, recorded in the ledger entry — §6.3); the report's own
+   `scope.declared_absent` is checked against that record and a component
+   it lists without proof is a status error. A scope-exclusion phrase
+   satisfies a non-mandatory row only. Anything else is rewritten to
+   `unknown` before step 1 (REPORT-02, AC-04; validation F02). A run with
+   no ledger entry — an unknown, expired or restarted run — proves
+   nothing either way, so the report's own `scope.declared_absent` is
+   taken as is (SAFE-04: a restart must not invalidate a report).
 4. `run_status` `failed` or `cancelled` cannot coexist with
    `health_status: ok` (the client must have completed the mandatory
    set): a status error.
+5. **Evidence floor** (REPORT-03, AC-01, AC-19; validation F01). For every
+   check row, each catalog input that appears in a raw report the report
+   carries and that integrity did not reject contributes a floor:
+   `mcp:health.check` — the raw check row with that id, mapped through
+   the catalog's `outcome_map`/`severity_map` (`ok` → none, `warning` →
+   warn, `degraded`/`critical` → fail with the mapped severity, `skipped`
+   → unknown), except that a raw row whose `evidence.collection.status`
+   is `error`, `timeout` or `permission_denied` contributes `unknown`
+   (AC-03: a collection failure is never a finding by itself); `baseline`
+   — the engine row with that section and check (`PASS` → none, `WARN` →
+   warn, `FAIL` → fail/critical, `SKIP` → unknown; a baseline whose
+   `collection.status` is not `success` contributes `unknown` to every
+   baseline input); `probe:health.probe.run` — the probe result of that
+   kind (`ok` + clean → none, `ok` + cleanup failed → warn, not ok →
+   fail/degraded). Inputs absent from every raw report contribute
+   nothing. The row's floor is the most severe contribution; the row's
+   effective outcome is the more severe of the model's outcome and the
+   floor (ordering `pass`/`not_applicable` < `unknown` < `warn` <
+   `fail`/warning < `fail`/degraded < `fail`/critical). A row raised by
+   the floor is listed under `adjustments` (`reason: floor`) and is a
+   status error. A validly cited `not_applicable` row (step 3) waives an
+   `unknown` floor — absence explains a skipped input — but not a `warn`
+   or `fail` floor.
+6. **Compromised sources** (validation F01b). A ledger tool whose latest
+   row is missing from `raw_reports` (`integrity.omitted`) or present but
+   tampered (`mismatch`) makes every input of that tool contribute
+   `unknown`: a check fed by evidence the model hid or edited cannot be
+   `pass` or `not_applicable`.
+7. **No source** (CHECK-01; validation F02). A catalog row with
+   `no_source: true` may only be `unknown` or `not_applicable`; `pass`,
+   `warn` or `fail` is rewritten to `unknown` (`reason: no_source`, a
+   status error) — the release must not claim a measurement it cannot
+   make.
+8. **Stale evidence** (REPORT-02). A row whose `evidence_refs` cite any
+   manifest entry with `stale: true` cannot be `pass`: it floors to
+   `unknown` (`reason: stale_evidence`).
 
 ### 11.4 Integrity (AC-19)
 
@@ -1239,6 +1292,13 @@ do not write the ledger (`arrays.list`, `system.logs`, …) are
 `unverifiable` individually and do not affect `valid`. The report's
 `run.principal` and `run.versions` MUST equal the ledger entry's (status
 errors otherwise).
+
+**Completeness.** For every `(tool, args)` the ledger holds, its LATEST
+digest must appear in `raw_reports`; a missing one is listed under
+`integrity.omitted` and makes `integrity.status` `mismatch` — a report
+that hides a result xiNAS produced is invalid (REPORT-06; validation
+F01b). Earlier rows of the same `(tool, args)` are superseded and need
+not appear.
 
 ### 11.5 Storage
 
@@ -1362,7 +1422,7 @@ validate --file`) from the catalog without CLI code.
 | Unit — `probe-host` (fake fs via the existing file-backed fakes plus a real `tmpdir` case) | unique names, `EEXIST` retry, symlinked `.xinas-health` refused, foreign-device refused, cleanup failure surfaced, timeout stops the step, two concurrent loopbacks → one `PROBE_IN_PROGRESS` (AC-15) |
 | Unit — `agent/health/baseline-host.test.ts`, `agent/rpc/health-baseline.test.ts`, `agent/config-health-baseline.test.ts` (S19c) | against real stub interpreters: command line, cwd, env sanitization, realpath allow-list (path and symlink), SIGKILL of the process group at the timeout, `EXIT_<n>` / `MODULE_ABSENT` / `PARSE` / `ENOENT`, the stdout cap, concurrent callers share one run and a different profile is serialized, `--sections` parsing and caching; the F09 queue rules (a queued caller times out on its own deadline without a spawn, A-B-A spawns A once, a joiner keeps its own deadline, a joiner with a LONGER deadline keeps the shared run alive, a sequential second call spawns again, `QUEUE_FULL` past the bound, `sections()` times out on the caller deadline without a spawn and concurrent `sections()` callers share one run), the engine's own typed timeout (its `duration_ms`, its stderr tail and its message) reaching the caller instead of the queue's deadline answer; the RPC's parameter validation; the config block's defaults and validation |
 | Unit — `api/routes-health-baseline.test.ts` (S19c) | the capped timeout per profile, the live section list, the per-profile cache (`from_cache`, `age_s`, a failed run never cached), profile and `max_age_s` validation, the ledger digest under a `run_id`, `RUN_UNKNOWN`, `EXECUTOR_UNAVAILABLE` without an agent |
-| Unit — `lib/health/report-validate.test.ts`, `api/routes-health-report.test.ts` (S19c) | the schema on a minimal valid report and each error path; the verdict table of §11.3 row by row (AC-01, AC-02, REPORT-02 rewrite, AC-08 service_path); reference errors with paths; status errors; over the route: `verified`, an edited raw FAIL → `mismatch` (AC-19), an invented report → `not_in_ledger`, non-ledger tools skipped, `unverifiable` on an unknown run, a malformed body |
+| Unit — `lib/health/report-validate.test.ts`, `lib/health/report-floor.test.ts`, `api/routes-health-report.test.ts` (S19c) | the schema on a minimal valid report and each error path; the verdict table of §11.3 row by row (AC-01, AC-02, REPORT-02 rewrite, AC-08 service_path); the evidence floor per input family and per compromised tool (steps 5–6), `no_source` and stale rows (steps 7–8); reference errors with paths; status errors; over the route: `verified`, an edited raw FAIL → `mismatch` (AC-19), an invented report → `not_in_ledger` plus the omitted ledger row, non-ledger tools skipped, `unverifiable` on an unknown run, a malformed body |
 | Contract — `mcp-wire.test.ts` (S19b) | `prompts/list` and `prompts/get` responses validate against the pinned `2026-07-28` schema on the modern era (`ListPromptsResult`, `Prompt`, `GetPromptResult`, `JSONRPCErrorResponse`); `mcp-integration.test.ts` drives the legacy shapes over the wire (no `resultType`, `initialize` advertises `prompts`) and the audit row. The stdio adapter forwards every method unchanged, so it is covered by the HTTP contract (AC-16) |
 | Integration — `rbac.test.ts`, `mcp-dispatch.test.ts`, `mcp-integration.test.ts` | the §13 matrix per entry; viewer `health.probe.run` denied on REST and MCP; operator with `allow_apply` on a legacy client → `MCP_CONFIRMATION_UNSUPPORTED`; modern → confirmation flow, consumed once (AC-14) |
 | e2e — `health-support.test.ts` extension | deep through the hardened host: artifact names differ per call, none left behind; *(S19c, cases 4c/4d/5)* `health.baseline` against a stub engine (`health_baseline.python` → a shell script printing a canned report and a `--sections` list) through the agent's real sandboxed subprocess, the cache on `max_age_s`, `sections_source: engine` in `health.context`; the report schema served and a report over the run's raw quick report `verified` while an edited raw report is a `mismatch`; `health.context` while the agent is SIGSTOPped still answers with a non-healthy heartbeat (AC-18). The missing-interpreter case (`not_supported`/`ENOENT`) is a unit test |
@@ -1378,14 +1438,14 @@ tests that shipped with S19a–c.*
 
 | AC | Where |
 |---|---|
-| AC-01 | §11.3 step 2 (a `fail` outranks everything); fixture `ac-01-raid-degraded-baseline-pass` — the RAID fail is kept as `critical` while the baseline says PASS, the finding names `arr-data`; `report-validate.test.ts` "a critical fail is critical … regardless of other rows" |
-| AC-02 | §7.3 (`coverage_status: partial`), §11.3 step 1; fixture `ac-02-collector-missing-stale` — collector in error + stale rows → `unknown`/`partial`, no false ok; `routes-health.test.ts` (S19a) |
+| AC-01 | §11.3 step 2 (a `fail` outranks everything); fixture `ac-01-raid-degraded-baseline-pass` — the RAID fail is kept as `critical` while the baseline says PASS, the finding names `arr-data`; `report-validate.test.ts` "a critical fail is critical … regardless of other rows"; the floor forces `fail`/critical on HC-03 whenever the raw row says critical (`report-floor.test.ts`) |
+| AC-02 | §7.3 (`coverage_status: partial`), §11.3 steps 1 and 5; fixture `ac-02-collector-missing-stale` — collector degraded (collection success) → HC-01 `fail`/degraded by the floor, stale rows → `unknown`; `degraded`/`partial`, no false ok; `routes-health.test.ts` (S19a) |
 | AC-03 | §7.1/§7.2 status enum and mapping; fixture `ac-03-probe-failures-not-absence` — timeout, permission_denied and PARSE are three `unknown`s, never `not_applicable`; `standard.test.ts`, `collect.test.ts` (S19a) |
-| AC-04 | §6.2 `declared_absent` derivation, §11.3 step 3; fixture `ac-04-no-nfs-no-raid-by-inventory` — cited `not_applicable` rows keep `ok`/`complete`, the uncited variant is rewritten to `unknown`; `routes-health-context.test.ts` `declaredAbsent` |
+| AC-04 | §6.2 `declared_absent` derivation, §11.3 step 3; fixture `ac-04-no-nfs-no-raid-by-inventory` — cited `not_applicable` rows keep `ok`/`complete`, the uncited variant is rewritten to `unknown`; `routes-health-context.test.ts` `declaredAbsent`; `declared_absent` is checked against the ledger's proven set, and a self-declared absence is a status error (`routes-health-report.test.ts` F02b) |
 | AC-05 | §8 (baseline profiles) vs §9 (probes) are different tools; fixture `ac-05-observe-only-no-mcp-deep` — the deep baseline profile runs, `health.check profile=deep` and `health.probe.run` are forbidden calls; `mcp-prompts.test.ts` (probe_policy capped) |
 | AC-06 | §8.5 (S19c: the SKIP `checker` row and `--sections`); fixture `ac-06-section-without-checker` — kerberos under `not_checked`, the SKIP row preserved in the ledger; `tests/test_health_engine_sections.py`, `routes-health-baseline.test.ts` |
 | AC-07 | §10 `expected_source` order; overrides live in `config.json` (survive updates) — provenance in `evidence_manifest.source`; `agentic-catalog.test.ts` (expectation keys, source order) |
-| AC-08 | §9.2 `proves` text; fixture `ac-08-loopback-passes-client-unreachable` — HC-12 passes, HC-11 stays `unknown`, `service_path` coverage `partial`; `probe-host.test.ts` (S19a) |
+| AC-08 | §9.2 `proves` text; fixture `ac-08-loopback-passes-client-unreachable` — HC-12 passes, HC-11 stays `unknown`, `service_path` coverage `partial`; `probe-host.test.ts` (S19a); §11.3 step 7 — the `no_source` row HC-11 cannot be `pass` |
 | AC-09 | HC-03/HC-09 rows in §10.2; fixture `ac-09-counter-without-series` — the trend row is `unknown` with a `data_gap` finding and a `next_check`, never `fail`/`warn` |
 | AC-10 | HC-10 rows produce `hypothesis` findings; fixture `ac-10-change-with-alternative` — a `hypothesis` with alternatives and a discriminating check; `report-validate.test.ts` (a hypothesis without alternatives is a schema error) |
 | AC-11 | schema `findings.kind: conflict`; fixture `ac-11-subagents-disagree` — `execution.roles_ran` of length 2, a `conflict` finding kept next to the observation, `run_status: partial`, the confirmed `warn` outranks the missing role |
@@ -1396,7 +1456,7 @@ tests that shipped with S19a–c.*
 | AC-16 | §4, §5.6, §4.4; `mcp-wire.test.ts`, `mcp-integration.test.ts` (S19b) |
 | AC-17 | §5.5 (ledger keeps the run's versions), §6.3; `run-ledger.test.ts`, `health-prompt-context.test.ts` (S19b) |
 | AC-18 | §8.4 cache + §11.2 `unverifiable`; fixture `ac-18-budget-exhausted` — `run_status: partial`, the deterministic reports kept, nine rows under `not_checked`, no tool called twice; `routes-health-report.test.ts` (`unverifiable` stays valid) |
-| AC-19 | §11.4; fixture `ac-19-invented-evidence-corrected-fail` — a dangling evidence id and a tampered raw report → reference error + `mismatch`, the ledger still holds the critical row; `routes-health-report.test.ts` |
+| AC-19 | §11.4 and §11.3 step 6; fixture `ac-19-invented-evidence-corrected-fail` — a tampered raw report is `mismatch` AND compromises every check it feeds (`unknown`/`partial`), the invented evidence id is a reference error, the ledger still holds the critical row; `routes-health-report.test.ts` |
 | AC-20 | §11.5 (nothing overwritten server-side); fixture `ac-20-repeat-after-fix` — the run after the fix is a new run with fresh digests and the earlier report still verifies against its own ledger |
 
 ## 17. Deferred (to `docs/TODO.md` when each slice lands)

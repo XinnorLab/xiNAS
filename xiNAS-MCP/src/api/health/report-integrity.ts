@@ -11,12 +11,19 @@
  * expired run is `unverifiable` — reported, never treated as invalid
  * (SAFE-04, AC-18).
  *
+ * Completeness is the other half: the LATEST result of every `(tool,
+ * args)` the ledger holds must appear in `raw_reports`. One that does not
+ * is `omitted` and makes the report a `mismatch` — hiding a result xiNAS
+ * produced is the same lie as editing it. `floorInputFrom` turns that
+ * verdict into what the evidence floor may read (§11.3 steps 5–6).
+ *
  * `runIdentityErrors` is the companion §11.4 check: the report's
  * `run.principal` / `run.versions` must equal the ledger entry's. Since the
  * ledger itself refuses a cross-principal read (`RunLedger.get`, F03), the
  * caller only ever reaches this with its own run's entry.
  */
 
+import type { FloorInput } from '../../lib/health/report-floor.js';
 import type { RawReport } from '../../lib/health/report-validate.js';
 import { type RunEntry, digestOf } from './run-ledger.js';
 
@@ -34,14 +41,27 @@ export interface IntegrityMismatch {
   actual_digest: string;
 }
 
+/** A result xiNAS produced for this run that the report does not carry (§11.4 completeness). */
+export interface IntegrityOmission {
+  tool: string;
+  args_digest: string;
+  collected_at: string;
+}
+
 export interface Integrity {
   status: 'verified' | 'mismatch' | 'unverifiable';
   /** How many raw reports were checkable (ledger-writing tools). */
   checked: number;
   mismatches: IntegrityMismatch[];
+  omitted: IntegrityOmission[];
 }
 
-export const UNVERIFIABLE: Integrity = { status: 'unverifiable', checked: 0, mismatches: [] };
+export const UNVERIFIABLE: Integrity = {
+  status: 'unverifiable',
+  checked: 0,
+  mismatches: [],
+  omitted: [],
+};
 
 /** The `RunVersions` keys the report's `run.versions` is compared against (`server` excluded — spec §11.4). */
 const VERSION_KEYS = ['prompt', 'template_sha256', 'policy', 'catalog', 'report_schema'] as const;
@@ -110,5 +130,51 @@ export function checkIntegrity(entry: RunEntry, rawReports: RawReport[]): Integr
       });
     }
   });
-  return { status: mismatches.length > 0 ? 'mismatch' : 'verified', checked, mismatches };
+
+  // §11.4 completeness: the LATEST row of every (tool, args) the ledger
+  // holds must be in the report. An earlier one is superseded; a missing
+  // latest one is a result the model hid (validation F01b).
+  const latest = new Map<string, (typeof entry.reports)[number]>();
+  for (const row of entry.reports) latest.set(`${row.tool} ${row.args_digest}`, row);
+  const omitted: IntegrityOmission[] = [];
+  for (const row of latest.values()) {
+    const carried = rawReports.some(
+      (raw) =>
+        raw.tool === row.tool &&
+        digestOf(raw.args) === row.args_digest &&
+        raw.digest === row.report_digest,
+    );
+    if (!carried) {
+      omitted.push({
+        tool: row.tool,
+        args_digest: row.args_digest,
+        collected_at: row.collected_at,
+      });
+    }
+  }
+
+  return {
+    status: mismatches.length > 0 || omitted.length > 0 ? 'mismatch' : 'verified',
+    checked,
+    mismatches,
+    omitted,
+  };
+}
+
+/**
+ * What the evidence floor may trust, from the integrity verdict (§11.3
+ * steps 5–6): every raw report integrity did not reject, and the tools
+ * whose latest result the report omitted or tampered with.
+ */
+export function floorInputFrom(integrity: Integrity, rawReports: RawReport[]): FloorInput {
+  const mismatched = new Set(integrity.mismatches.map((m) => m.raw_report_index));
+  const compromisedTools = new Set<string>([
+    ...integrity.omitted.map((o) => o.tool),
+    ...integrity.mismatches.map((m) => rawReports[m.raw_report_index]?.tool ?? ''),
+  ]);
+  compromisedTools.delete('');
+  return {
+    usableRawReports: new Set(rawReports.map((_, i) => i).filter((i) => !mismatched.has(i))),
+    compromisedTools,
+  };
 }

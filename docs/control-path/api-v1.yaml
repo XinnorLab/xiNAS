@@ -1967,6 +1967,15 @@ components:
                   reason: { type: string, enum: [report_rehash_mismatch, not_in_ledger, digest_mismatch] }
                   expected_digest: { type: string, nullable: true }
                   actual_digest: { type: string }
+            omitted:
+              type: array
+              description: Ledger rows (latest per tool and arguments) the report did not carry; non-empty makes status mismatch.
+              items:
+                type: object
+                properties:
+                  tool: { type: string }
+                  args_digest: { type: string }
+                  collected_at: { type: string, format: date-time }
         computed:
           type: object
           nullable: true
@@ -1974,12 +1983,24 @@ components:
           properties:
             health_status: { type: string, enum: [ok, warning, degraded, critical, unknown] }
             coverage_status: { type: string, enum: [complete, partial, none] }
+        adjustments:
+          type: array
+          description: Rows whose outcome the validator raised or rewrote (S19 §11.3 steps 3, 5–8); each is also a status error except not_applicable_uncited.
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              from: { type: string, enum: [pass, warn, fail, unknown, not_applicable] }
+              to: { type: string, enum: [pass, warn, fail, unknown, not_applicable] }
+              severity: { type: string, nullable: true, enum: [warning, degraded, critical] }
+              reason: { type: string, enum: [floor, no_source, stale_evidence, not_applicable_uncited, declared_absent_unproven] }
+              detail: { type: string }
         status_errors:
           type: array
           items: { type: string }
         rewritten_to_unknown:
           type: array
-          description: Check ids whose `not_applicable` outcome cited no declared-absent component or scope exclusion (REPORT-02).
+          description: Check ids whose effective outcome became `unknown` from another outcome — an uncited `not_applicable` (REPORT-02), a `no_source` row, stale evidence or an `unknown` floor.
           items: { type: string }
         report_digest:
           type: string

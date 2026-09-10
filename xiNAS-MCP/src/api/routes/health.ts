@@ -64,8 +64,9 @@ import { getOrNull, sendOk } from '../handlers/reads.js';
 import {
   type AgenticReport,
   REPORT_SCHEMA,
+  evaluateReport,
   isReportValid,
-  validateReportShape,
+  schemaErrorsOf,
 } from '../../lib/health/report-validate.js';
 import { parseMaxAgeS, runBaseline } from '../health/baseline.js';
 import { buildHealthContext, runUnknownWarning } from '../health/context.js';
@@ -73,6 +74,7 @@ import {
   type Integrity,
   UNVERIFIABLE,
   checkIntegrity,
+  floorInputFrom,
   runIdentityErrors,
 } from '../health/report-integrity.js';
 import { digestOf } from '../health/run-ledger.js';
@@ -448,25 +450,30 @@ export function healthRouter(ctx: ApiContext): Router {
       if (body === null || typeof body !== 'object' || Array.isArray(body)) {
         throw new ApiException('INVALID_ARGUMENT', 'the body must be the report object');
       }
-      const shape = validateReportShape(body, AGENTIC_CATALOG);
-      const warnings: Warning[] = [];
-      let runId: string | null = null;
-      let integrity: Integrity = UNVERIFIABLE;
-      let status_errors = shape.status_errors;
-      if (shape.computed !== null) {
-        const report = body as AgenticReport;
-        runId = report.run.run_id;
-        const entry = ctx.healthPrompt?.ledger.get(runId, rc.principal) ?? null;
-        if (entry === null) {
-          warnings.push(runUnknownWarning(runId));
-        } else {
-          integrity = checkIntegrity(entry, report.raw_reports);
-          // F03: a run this principal did not mint is RUN_UNKNOWN above and
-          // never reaches here, so identity is only ever checked against the
-          // caller's own run.
-          status_errors = [...shape.status_errors, ...runIdentityErrors(entry, report.run)];
-        }
-      }
+      // Integrity comes first: what the ledger says about the raw reports is
+      // what the evidence floor (§11.3 steps 5–6) is allowed to read.
+      const report = body as AgenticReport;
+      const schemaOk = schemaErrorsOf(body).length === 0;
+      const runId = schemaOk ? report.run.run_id : null;
+      const entry =
+        runId === null ? null : (ctx.healthPrompt?.ledger.get(runId, rc.principal) ?? null);
+      const raw = schemaOk ? report.raw_reports : [];
+      const integrity: Integrity = entry === null ? UNVERIFIABLE : checkIntegrity(entry, raw);
+      const warnings: Warning[] =
+        runId !== null && entry === null ? [runUnknownWarning(runId)] : [];
+      const shape = evaluateReport(
+        body,
+        AGENTIC_CATALOG,
+        floorInputFrom(integrity, raw),
+        entry?.declared_absent ?? null,
+      );
+      // F03: a run this principal did not mint is RUN_UNKNOWN above and never
+      // reaches here, so identity is only ever checked against the caller's
+      // own run.
+      const status_errors =
+        entry === null
+          ? shape.status_errors
+          : [...shape.status_errors, ...runIdentityErrors(entry, report.run)];
       const valid = isReportValid({ ...shape, status_errors }, integrity.status);
       sendOk(
         req,
@@ -478,6 +485,7 @@ export function healthRouter(ctx: ApiContext): Router {
           reference_errors: shape.reference_errors,
           integrity,
           computed: shape.computed,
+          adjustments: shape.adjustments,
           status_errors,
           rewritten_to_unknown: shape.rewritten_to_unknown,
           report_digest: digestOf(body),

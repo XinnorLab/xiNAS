@@ -6,14 +6,15 @@ import {
   type Integrity,
   UNVERIFIABLE,
   checkIntegrity,
+  floorInputFrom,
 } from '../../../api/health/report-integrity.js';
 import { type RunEntry, RunLedger, digestOf } from '../../../api/health/run-ledger.js';
 import { CATALOG } from '../../../api/mcp/catalog.js';
 import { AGENTIC_CATALOG, type Scope } from '../../../lib/health/agentic-catalog.js';
 import {
   type ShapeVerdict,
+  evaluateReport,
   isReportValid,
-  validateReportShape,
 } from '../../../lib/health/report-validate.js';
 
 /**
@@ -95,6 +96,8 @@ interface Expected {
   reference_errors?: number;
   status_errors?: number;
   rewritten_to_unknown?: string[];
+  /** Rows the verdict raised or rewrote (§11.3 steps 3, 5–8); subset match. */
+  adjustments_include?: Array<{ id: string; to: string; reason: string }>;
   run_status?: string;
   checks?: Record<string, string>;
   checks_forbid_outcomes?: { ids: string[]; outcomes: string[] };
@@ -256,12 +259,19 @@ function evaluate(sc: Scenario, source: Json = sc.report): Evaluated {
   for (const item of Object.values(sc.ledger)) {
     ledger.record(entry.run_id, item.tool, item.args, item.report, item.collected_at ?? T0);
   }
+  // §6.3: what `health.context` proved absent for this run — the verdict's
+  // only proof for a `not_applicable` row (§11.3 step 3).
+  ledger.setDeclaredAbsent(entry.run_id, sc.declared_absent ?? []);
   const report = resolveReport(sc, entry, source);
-  const shape = validateReportShape(report, AGENTIC_CATALOG);
-  const integrity =
-    shape.computed === null
-      ? UNVERIFIABLE
-      : checkIntegrity(entry, report.raw_reports as Parameters<typeof checkIntegrity>[1]);
+  const raw = report.raw_reports as Parameters<typeof checkIntegrity>[1];
+  const checked = checkIntegrity(entry, raw);
+  const shape = evaluateReport(
+    report,
+    AGENTIC_CATALOG,
+    floorInputFrom(checked, raw),
+    entry.declared_absent,
+  );
+  const integrity = shape.computed === null ? UNVERIFIABLE : checked;
   return { entry, report, shape, integrity, valid: isReportValid(shape, integrity.status) };
 }
 
@@ -304,6 +314,11 @@ function assertExpected(sc: Scenario, ev: Evaluated, exp: Expected, label: strin
     expect(ev.shape.status_errors.length, why).toBe(exp.status_errors);
   if (exp.rewritten_to_unknown !== undefined) {
     expect(ev.shape.rewritten_to_unknown).toEqual(exp.rewritten_to_unknown);
+  }
+  for (const a of exp.adjustments_include ?? []) {
+    expect(ev.shape.adjustments, `${sc.id}: adjustment ${a.id}`).toContainEqual(
+      expect.objectContaining(a),
+    );
   }
   if (exp.run_status !== undefined) expect(ev.report.run_status).toBe(exp.run_status);
 
@@ -445,6 +460,7 @@ describe('isReportValid (spec §11.2)', () => {
     status_errors: [],
     mandatory_ids: [],
     rewritten_to_unknown: [],
+    adjustments: [],
   };
   it('is true only with no schema, reference or status errors and no integrity mismatch', () => {
     expect(isReportValid(clean, 'verified')).toBe(true);
