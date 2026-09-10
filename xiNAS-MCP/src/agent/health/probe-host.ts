@@ -214,11 +214,24 @@ const defaultExecCapture = (
   timeoutMs: number,
 ): Promise<ExecCaptureResult> =>
   new Promise((resolve) => {
+    const captureTimeoutMs = timeoutMs + 5_000;
     execFile(
       file,
       args,
-      { timeout: timeoutMs + 5_000, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024 },
+      { timeout: captureTimeoutMs, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024 },
       (err, stdout, stderr) => {
+        // A timeout kill reports `code: null` / `signal: 'SIGKILL'`, not a
+        // process exit code — the old `?? 127` fallback misreported that
+        // as "exited 127". `code: -1` is data the caller (fsIoViaPid1)
+        // recognizes as a timeout rather than a real exit status.
+        if (err !== null && (err.killed === true || err.signal !== undefined)) {
+          resolve({
+            stdout: String(stdout ?? ''),
+            stderr: `timed out after ${captureTimeoutMs} ms`,
+            code: -1,
+          });
+          return;
+        }
         const code = err === null ? 0 : typeof err.code === 'number' ? err.code : 127;
         resolve({ stdout: String(stdout ?? ''), stderr: String(stderr ?? ''), code });
       },
@@ -354,6 +367,27 @@ export function createRealProbeHost(deps: RealProbeHostDeps = {}): ProbeHost {
    */
   async function fsIoViaPid1(mountpoint: string, opts: ProbeRunOptions): Promise<ProbeOutcome> {
     const startedAt = new Date(clock()).toISOString();
+    const refused = (error: NonNullable<ProbeOutcome['error']>): ProbeOutcome => ({
+      ok: false,
+      started_at: startedAt,
+      completed_at: new Date(clock()).toISOString(),
+      artifact: null,
+      error,
+      cleanup: { status: 'not_needed' },
+    });
+    // Validate BEFORE spawning the root transient unit: neither check
+    // needs a process to answer, and both must never reach `execCapture`.
+    const badRunId = runIdInvalid(opts.runId, 'dir');
+    if (badRunId !== null) return refused(toError(badRunId, 'dir'));
+    if (/\s/.test(mountpoint)) {
+      // `systemd-run -p ReadWritePaths=<mountpoint>` splits its value on
+      // whitespace, so a path containing any is unsafe to grant.
+      return refused({
+        code: 'MOUNTPOINT_UNSUPPORTED',
+        message: 'mountpoint paths with whitespace are not supported by the PID1 fs_io boundary',
+        stage: 'open',
+      });
+    }
     const unit = `xinas-health-fsio-${random()}`;
     const args = [
       '--wait',
@@ -395,6 +429,14 @@ export function createRealProbeHost(deps: RealProbeHostDeps = {}): ProbeHost {
       return failed(
         `systemd-run: ${errMessage(err)}`,
         'artifact state unknown: helper did not run',
+      );
+    }
+    if (res.code === -1) {
+      // execCapture's own sentinel for "the process was killed after a
+      // timeout", not a real exit status — see defaultExecCapture.
+      return failed(
+        `systemd-run timed out after ${opts.timeoutMs} ms`,
+        'artifact state unknown: helper timed out',
       );
     }
     if (res.code !== 0) {

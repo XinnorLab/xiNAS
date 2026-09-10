@@ -117,7 +117,9 @@ describe('health.probe.run handler', () => {
 
   it('F08: a host that refuses between busy() and the call is still an RPC error', async () => {
     // The gate closed after busy() answered null — the verb's own refusal
-    // outcome must not be returned as a successful probe result.
+    // outcome must not be returned as a successful probe result. review
+    // fix 4: `details` always carries the REQUESTED probe/path plus the
+    // outcome's own message, whether or not busy() still holds a record.
     const host: ProbeHost = {
       ...gatedHost(Promise.resolve()),
       fsIo: async () =>
@@ -133,6 +135,40 @@ describe('health.probe.run handler', () => {
     const handler = makeHealthProbeRunHandler({ probeHost: host });
     await expect(handler({ probe: 'fs_io', path: '/mnt/data' })).rejects.toMatchObject({
       code: 'PROBE_IN_PROGRESS',
+      details: {
+        probe: 'fs_io',
+        path: '/mnt/data',
+        message: 'a nfs_loopback probe is in flight on /export',
+      },
+    });
+  });
+
+  it('review fix 4: when busy() still holds a record at that point, it nests under details.in_flight', async () => {
+    let heldAfter: { probe: 'fs_io' | 'nfs_loopback'; path: string } | null = null;
+    const host: ProbeHost = {
+      fsIo: async () => {
+        heldAfter = { probe: 'nfs_loopback', path: '/export' };
+        return outcome(false, {
+          error: {
+            code: 'PROBE_IN_PROGRESS',
+            message: 'a nfs_loopback probe is in flight on /export',
+            stage: 'lock',
+          },
+          cleanup: { status: 'not_needed' },
+        });
+      },
+      nfsLoopback: async () => outcome(true),
+      busy: () => heldAfter,
+    };
+    const handler = makeHealthProbeRunHandler({ probeHost: host });
+    await expect(handler({ probe: 'fs_io', path: '/mnt/data' })).rejects.toMatchObject({
+      code: 'PROBE_IN_PROGRESS',
+      details: {
+        probe: 'fs_io',
+        path: '/mnt/data',
+        message: 'a nfs_loopback probe is in flight on /export',
+        in_flight: { probe: 'nfs_loopback', path: '/export' },
+      },
     });
   });
 

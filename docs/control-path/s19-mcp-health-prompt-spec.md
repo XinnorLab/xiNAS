@@ -949,13 +949,22 @@ removed, not kept as a fallback.
 > /usr/bin/node <dist>/agent/health/fsio-child.js <mountpoint> <run_id|none> <timeout_ms>`.
 > The transient unit runs the SAME hardened `fs_io` (steps 1–6 above) as
 > root with exactly one writable path and prints the `ProbeOutcome` as
-> JSON on stdout; the agent parses it. A helper that exits non-zero or
-> prints no outcome is `ok: false`, `error.code: FSIO_HELPER_FAILED`,
+> JSON on stdout; the agent parses it. A mountpoint path containing
+> whitespace is refused before the unit is ever spawned
+> (`error.code: MOUNTPOINT_UNSUPPORTED`), because `systemd-run`'s
+> `ReadWritePaths=` splits its value on whitespace and such a path could
+> never be granted safely. A helper that exits non-zero or prints no
+> outcome is `ok: false`, `error.code: FSIO_HELPER_FAILED`,
 > `cleanup: failed` ("artifact state unknown") — never `clean`. Tests and
 > fixture mode run the in-process implementation (`fsIoMode: 'in_process'`);
 > production wiring (`makeProbeHost`) selects `'pid1'`. Verified on
-> systemd 255: `ReadWritePaths=<mountpoint>` under `ProtectSystem=strict`
-> re-binds an existing submount read-write (`hardware-smoke-runbook.md`).
+> xinas-box (systemd 255.4-1ubuntu8.17, 2026-09-10) with `systemd-run
+> --wait --pipe --collect --quiet -p ProtectSystem=strict -p
+> ReadWritePaths=/mnt/data findmnt -no TARGET,OPTIONS /mnt/data`: the
+> mountpoint is `rw` inside the transient unit, `rw` with
+> `ReadWritePaths=/mnt` too, and `ro` without a grant. The full probe
+> path on an installed node is the B01 row of `hardware-smoke-runbook.md`
+> (pending).
 
 **`nfs_loopback`**
 

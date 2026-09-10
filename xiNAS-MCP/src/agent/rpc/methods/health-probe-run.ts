@@ -83,10 +83,18 @@ export function makeHealthProbeRunHandler(deps: HealthProbeRunDeps) {
           ? await deps.probeHost.fsIo(p.path, { runId, timeoutMs })
           : await deps.probeHost.nfsLoopback(p.path, { runId, timeoutMs });
       // The host refused between busy() and the call: that is the RPC
-      // error the api maps to 409, not a probe result.
+      // error the api maps to 409, not a probe result. `details` always
+      // carries what THIS call asked for, plus the outcome's own message;
+      // when busy() still holds a record it nests under `in_flight` — one
+      // shape either way, not two (review fix 4).
       if (outcome.error?.code === 'PROBE_IN_PROGRESS') {
         const nowHeld = deps.probeHost.busy();
-        throw inProgress(nowHeld !== null ? { ...nowHeld } : { message: outcome.error.message });
+        throw inProgress({
+          probe: p.probe,
+          path: p.path,
+          message: outcome.error.message,
+          ...(nowHeld !== null ? { in_flight: { ...nowHeld } } : {}),
+        });
       }
       return { probe: p.probe, path: p.path, ...outcome };
     } finally {

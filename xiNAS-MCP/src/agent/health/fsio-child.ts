@@ -10,6 +10,7 @@
  * would run, so the checks of spec §9.3 steps 1–6 apply unchanged.
  */
 
+import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { ProbeOutcome } from '../../lib/health/probe-types.js';
 import { createRealProbeHost } from './probe-host.js';
@@ -42,7 +43,28 @@ export async function runFsIoChild(argv: string[]): Promise<ProbeOutcome> {
   return host.fsIo(mountpoint, { runId: runArg === 'none' ? null : runArg, timeoutMs });
 }
 
-const isMain = process.argv[1] !== undefined && fileURLToPath(import.meta.url) === process.argv[1];
+/**
+ * Whether this module is the process entry point (review fix 2). Node's
+ * ESM loader resolves `import.meta.url` through any symlinks in the path
+ * it loaded, but leaves `process.argv[1]` exactly as invoked. Under the
+ * release layout `systemd-run` executes through (a `current` symlink
+ * pointing at the versioned install dir), those two strings then never
+ * compare equal, `isMain` was false, and the helper silently printed
+ * nothing — the parent read that as `FSIO_HELPER_FAILED` ("printed no
+ * outcome") on every production `fs_io`. Resolving `argv1` through the
+ * filesystem before comparing fixes it; an `argv1` that cannot be
+ * resolved (already gone, or not a real path) just means "not main".
+ */
+export function isMainModule(argv1: string | undefined, selfPath: string): boolean {
+  if (argv1 === undefined) return false;
+  try {
+    return realpathSync(argv1) === selfPath;
+  } catch {
+    return false;
+  }
+}
+
+const isMain = isMainModule(process.argv[1], fileURLToPath(import.meta.url));
 if (isMain) {
   runFsIoChild(process.argv.slice(2)).then(
     (outcome) => {

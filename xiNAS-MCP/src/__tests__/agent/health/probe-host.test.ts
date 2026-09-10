@@ -460,6 +460,30 @@ describe('F08: one active probe per node, any entry point', () => {
     expect((await first).ok).toBe(true);
     expect(host.busy()).toBeNull();
   });
+
+  it('review fix 6: the gate releases even when an inner verb step throws instead of settling cleanly', async () => {
+    // nfsLoopbackInner's post-mount `isMountpoint` check is not itself
+    // wrapped in a try/catch; a throw there propagates out of the mount
+    // step's `finally` and is caught only by the function's OUTER
+    // try/catch, which turns it into a result rather than a rejection.
+    // admitted()'s own finally must still release the gate in that case.
+    const root = fresh('gate-throw');
+    const host = createRealProbeHost({
+      root,
+      exec: async (file) => {
+        if (file === 'systemd-mount') throw new Error('mount failed');
+      },
+      isMountpoint: async () => {
+        throw new Error('boom');
+      },
+    });
+    const r = await host.nfsLoopback('/export', opts);
+    expect(r.ok).toBe(false);
+    expect(host.busy()).toBeNull();
+    const mnt = fresh('gate-throw-mnt');
+    const next = await host.fsIo(mnt, opts);
+    expect(next.ok).toBe(true);
+  });
 });
 
 /** B01 — spec §9.3 "Execution boundary": the write leaves the agent's namespace. */
@@ -562,6 +586,62 @@ describe('B01: fs_io delegated to a PID1 transient unit', () => {
       detail: 'artifact state unknown: helper did not run',
     });
     expect(host.busy()).toBeNull();
+  });
+
+  it('review fix 3a: an invalid run id is refused before the transient unit is spawned', async () => {
+    let spawned = 0;
+    const host = createRealProbeHost({
+      fsIoMode: 'pid1',
+      execCapture: async () => {
+        spawned += 1;
+        return { stdout: JSON.stringify(outcome), stderr: '', code: 0 };
+      },
+    });
+    const r = await host.fsIo('/mnt/data', { runId: '../outside', timeoutMs: 5_000 });
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatchObject({ code: 'RUN_ID_INVALID', stage: 'dir' });
+    expect(r.cleanup).toEqual({ status: 'not_needed' });
+    expect(spawned).toBe(0);
+  });
+
+  it('review fix 3b: a mountpoint containing whitespace is refused before the transient unit is spawned', async () => {
+    // systemd-run's `ReadWritePaths=` splits its value on whitespace, so
+    // a path with a space can never be granted safely.
+    let spawned = 0;
+    const host = createRealProbeHost({
+      fsIoMode: 'pid1',
+      execCapture: async () => {
+        spawned += 1;
+        return { stdout: JSON.stringify(outcome), stderr: '', code: 0 };
+      },
+    });
+    const r = await host.fsIo('/mnt/my data', { runId: null, timeoutMs: 5_000 });
+    expect(r.ok).toBe(false);
+    expect(r.error).toEqual({
+      code: 'MOUNTPOINT_UNSUPPORTED',
+      message: 'mountpoint paths with whitespace are not supported by the PID1 fs_io boundary',
+      stage: 'open',
+    });
+    expect(r.cleanup).toEqual({ status: 'not_needed' });
+    expect(spawned).toBe(0);
+  });
+
+  it('review fix 5: a helper timeout (execCapture code -1) is reported as a timeout, not exit 127', async () => {
+    const host = createRealProbeHost({
+      fsIoMode: 'pid1',
+      execCapture: async () => ({ stdout: '', stderr: 'timed out after 10000 ms', code: -1 }),
+    });
+    const r = await host.fsIo('/mnt/data', { runId: null, timeoutMs: 5_000 });
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatchObject({
+      code: 'FSIO_HELPER_FAILED',
+      message: 'systemd-run timed out after 5000 ms',
+      stage: 'open',
+    });
+    expect(r.cleanup).toEqual({
+      status: 'failed',
+      detail: 'artifact state unknown: helper timed out',
+    });
   });
 
   it("the default mode is in_process: no helper is spawned and the mountpoint's own file is written", async () => {
