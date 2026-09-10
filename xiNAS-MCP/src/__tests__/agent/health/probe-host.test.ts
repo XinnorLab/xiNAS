@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { createFakeProbeHost } from '../../../agent/health/fake-probe-host.js';
-import { createRealProbeHost } from '../../../agent/health/probe-host.js';
+import { CLEANUP_GRACE_MS, createRealProbeHost } from '../../../agent/health/probe-host.js';
 import { PROBE_DIR_NAME } from '../../../lib/health/probe-types.js';
 
 const base = mkdtempSync(join(tmpdir(), 'xinas-probe-host-'));
@@ -179,8 +179,11 @@ describe('createRealProbeHost.nfsLoopback (spec §9.3)', () => {
   it('a failed umount command alone does not block cleanup once the device check finds nothing mounted (F05)', async () => {
     // The old behavior trusted the umount command's own exit status; F05
     // replaces that with a real `st_dev` check, so a command-level "busy"
-    // with nothing actually left behind still cleans up (see the F05
-    // regression test below for the case where something IS left behind).
+    // with nothing actually left behind still cleans up (see the
+    // `isMountpoint`-injected test below for the case where the device
+    // check itself says something is still mounted, and the "F05: an
+    // ambiguous mount failure..." regression test for the case where the
+    // mountpoint directory holds foreign content instead).
     const root = fresh('loop-umount');
     const host = createRealProbeHost({
       root,
@@ -279,6 +282,15 @@ describe('validation F05/F06/F07 regressions', () => {
     expect(readdirSync(root)).toEqual([]);
   });
 
+  it('F06: fsIo refuses a run id that could leave the probe directory, before anything is created', async () => {
+    const mnt = fresh('f06-fsio');
+    const r = await createRealProbeHost().fsIo(mnt, { runId: '../outside', timeoutMs: 1000 });
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatchObject({ code: 'RUN_ID_INVALID', stage: 'dir' });
+    expect(r.cleanup).toEqual({ status: 'not_needed' });
+    expect(existsSync(join(mnt, PROBE_DIR_NAME))).toBe(false);
+  });
+
   it('F07: a group/world-writable probe directory is untrusted', async () => {
     const mnt = fresh('f07-mode');
     mkdirSync(join(mnt, PROBE_DIR_NAME));
@@ -308,5 +320,74 @@ describe('validation F05/F06/F07 regressions', () => {
     expect(r.cleanup.detail).toMatch(/replaced/);
     expect(readFileSync(replacement, 'utf8')).toBe('FOREIGN-DATA');
     expect(existsSync(original)).toBe(true);
+  });
+
+  it('F07: an unresolved create-stage identity is reported as identity unknown, not replaced, and the file survives', async () => {
+    const mnt = fresh('f07-identity-unknown');
+    const base = 1_700_000_000_000;
+    let calls = 0;
+    // Two clock() reads happen before fsIo's try (startedAt, deadline),
+    // then one per step() call: 'open' x2, 'dir' x3, 'create' (the
+    // O_CREAT|O_EXCL open) x1 — that is 8 reads. The 9th read is at the
+    // top of the *second* 'create' step, the post-open fstat that records
+    // createdIno. Returning a time already past the deadline there means
+    // the file was opened (filePath is set) but its identity fstat never
+    // ran, so createdIno stays undefined.
+    const clock = () => {
+      calls += 1;
+      return calls >= 9 ? base + 10_000 : base;
+    };
+    const host = createRealProbeHost({ clock, random: () => 'deedbeefdeedbeef' });
+    const r = await host.fsIo(mnt, { runId: 'run-1', timeoutMs: 5_000 });
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatchObject({ code: 'TIMEOUT', stage: 'create' });
+    expect(r.cleanup.status).toBe('failed');
+    expect(r.cleanup.detail).toMatch(/identity unknown/);
+    const filePath = join(mnt, PROBE_DIR_NAME, 'probe-run-1-deedbeefdeedbeef');
+    expect(existsSync(filePath)).toBe(true);
+  });
+
+  it('F05 cleanup bound: an umount after a full-budget mount timeout is capped at CLEANUP_GRACE_MS', async () => {
+    const root = fresh('umount-bound');
+    let now = 1_000_000;
+    const clock = () => now;
+    let umountTimeoutMs: number | undefined;
+    const host = createRealProbeHost({
+      root,
+      clock,
+      exec: async (file, _args, timeoutMs) => {
+        if (file === 'systemd-mount') {
+          now += 1000; // the mount step consumes the whole run budget
+          throw new Error('mount timed out');
+        }
+        if (file === 'systemd-umount') umountTimeoutMs = timeoutMs;
+      },
+    });
+    const r = await host.nfsLoopback('/export', { runId: 'run', timeoutMs: 1000 });
+    expect(r.ok).toBe(false);
+    expect(umountTimeoutMs).toBeDefined();
+    expect(umountTimeoutMs as number).toBeLessThanOrEqual(CLEANUP_GRACE_MS);
+  });
+
+  it('F05: when the device check itself says something is still mounted, cleanup is failed and both directories survive untouched', async () => {
+    const root = fresh('loop-stillmounted');
+    const calls: string[] = [];
+    const host = createRealProbeHost({
+      root,
+      random: () => 'cafefeedcafefeed',
+      isMountpoint: async () => true,
+      exec: async (file) => {
+        calls.push(file);
+        if (file === 'systemd-mount') throw new Error('mount client timed out');
+      },
+    });
+    const r = await host.nfsLoopback('/export', opts);
+    const dir = join(root, 'run-1-cafefeedcafefeed');
+    const mnt = join(dir, 'mnt');
+    expect(r.ok).toBe(false);
+    expect(calls).toEqual(['systemd-mount', 'systemd-umount']);
+    expect(r.cleanup).toEqual({ status: 'failed', detail: 'mountpoint still mounted' });
+    expect(existsSync(mnt)).toBe(true);
+    expect(existsSync(dir)).toBe(true);
   });
 });

@@ -13,15 +13,20 @@
  *    fsync, read it back through a fresh open, unlink it. Node has no
  *    `openat`, so the post-open fstat (same device, one link, plain
  *    file) stands in for it. The unlink is preceded by an `lstat`
- *    checked against the inode/device this run's own create step saw;
- *    a mismatch means the name was swapped and nothing is removed
- *    (F07). A failed or refused unlink is `cleanup.status: 'failed'`.
+ *    checked against the inode/device this run's own create step
+ *    recorded; a mismatch means the name was swapped and nothing is
+ *    removed, and an identity that was never recorded (the create
+ *    step's own fstat never finished) is left too, reported as identity
+ *    unknown rather than a replacement claim (F07). A failed or refused
+ *    unlink is `cleanup.status: 'failed'`.
  *  - nfsLoopback: PID1-DELEGATED `systemd-mount localhost:<export>` at a
  *    per-run `<root>/<run>-<random>/mnt` (the S5 pattern — PID1 performs
  *    the mount so the probe inherits `.mount` unit semantics), list it.
- *    However the mount step ends, `systemd-umount` is always attempted
+ *    However the mount step ends, `systemd-umount` is always attempted —
+ *    bounded by whatever remains of the run's own deadline plus a short
+ *    grace so this cleanup step can never itself outrun the api's wait
  *    (the client's own failure or timeout does not prove PID1 did not
- *    mount), then `st_dev` of `<mnt>` is compared with its parent: a
+ *    mount) — then `st_dev` of `<mnt>` is compared with its parent: a
  *    differing device means something is still mounted and the
  *    directory is left in place; otherwise `rmdir` removes the two
  *    per-run directories — never a recursive delete (F05). Loopback
@@ -65,6 +70,13 @@ const LOCK_NAME = '.lock';
 const PAYLOAD = Buffer.alloc(PROBE_PAYLOAD_BYTES, 'xinas-health-probe\n');
 const CREATE_ATTEMPTS = 3;
 const UMOUNT_TIMEOUT_MS = 20_000;
+/**
+ * Grace added to whatever remains of the run's own deadline when bounding
+ * the post-mount `systemd-umount`, so this cleanup step can never itself
+ * push the agent's answer past the api's `timeout_s + 5 s` wait (spec §9.3
+ * loopback step 3/4).
+ */
+export const CLEANUP_GRACE_MS = 4_000;
 
 /** Test-only seams: let a test slow or sabotage a single step. */
 export interface FsIoHooks {
@@ -87,6 +99,8 @@ export interface RealProbeHostDeps {
   /** systemd-mount / systemd-umount runner; default execFile with a SIGKILL timeout. */
   exec?: (file: string, args: string[], timeoutMs: number) => Promise<void>;
   clock?: () => number;
+  /** Is `path` a mountpoint (its device differs from its parent's)? Default: the real check below. */
+  isMountpoint?: (path: string) => Promise<boolean>;
 }
 
 class StageError extends Error {
@@ -169,7 +183,7 @@ const isAlive = (pid: number): boolean => {
 };
 
 /** A directory is a mountpoint when its device differs from its parent's. */
-async function isMountpoint(path: string): Promise<boolean> {
+async function defaultIsMountpoint(path: string): Promise<boolean> {
   try {
     const [self, parent] = await Promise.all([stat(path), stat(join(path, '..'))]);
     return self.dev !== parent.dev;
@@ -184,6 +198,7 @@ export function createRealProbeHost(deps: RealProbeHostDeps = {}): ProbeHost {
   const random = deps.random ?? (() => randomBytes(8).toString('hex'));
   const exec = deps.exec ?? defaultExec;
   const clock = deps.clock ?? Date.now;
+  const isMountpoint = deps.isMountpoint ?? defaultIsMountpoint;
   const { O_RDONLY, O_WRONLY, O_CREAT, O_EXCL, O_NOFOLLOW, O_DIRECTORY } = constants;
   let loopbackBusy = false;
 
@@ -344,12 +359,13 @@ export function createRealProbeHost(deps: RealProbeHostDeps = {}): ProbeHost {
           try {
             await hooks?.beforeUnlink?.();
             const now = await lstat(path);
-            if (
-              createdIno === undefined ||
-              !now.isFile() ||
-              now.ino !== createdIno.ino ||
-              now.dev !== createdIno.dev
-            ) {
+            if (createdIno === undefined) {
+              // The create step's own fstat never finished (a timeout, or
+              // the nlink guard rejected first): the file exists but its
+              // identity was never recorded, so it is left rather than
+              // unlinked on the strength of the name alone (F07).
+              cleanup = { status: 'failed', detail: 'probe file identity unknown; not removed' };
+            } else if (!now.isFile() || now.ino !== createdIno.ino || now.dev !== createdIno.dev) {
               cleanup = { status: 'failed', detail: 'probe file was replaced; not removed' };
             } else {
               await unlink(path);
@@ -376,26 +392,23 @@ export function createRealProbeHost(deps: RealProbeHostDeps = {}): ProbeHost {
       const startedAt = new Date(clock()).toISOString();
       const deadline = clock() + opts.timeoutMs;
       const step = makeStepper(deadline, clock);
-      const refused = (message: string): ProbeOutcome => ({
+      const refused = (outcomeError: NonNullable<ProbeOutcome['error']>): ProbeOutcome => ({
         ok: false,
         started_at: startedAt,
         completed_at: new Date(clock()).toISOString(),
         artifact: null,
-        error: { code: 'PROBE_IN_PROGRESS', message, stage: 'lock' },
+        error: outcomeError,
         cleanup: { status: 'not_needed' },
       });
       const bad = runIdInvalid(opts.runId, 'lock');
-      if (bad !== null) {
-        return {
-          ok: false,
-          started_at: startedAt,
-          completed_at: new Date(clock()).toISOString(),
-          artifact: null,
-          error: toError(bad, 'lock'),
-          cleanup: { status: 'not_needed' },
-        };
+      if (bad !== null) return refused(toError(bad, 'lock'));
+      if (loopbackBusy) {
+        return refused({
+          code: 'PROBE_IN_PROGRESS',
+          message: 'another loopback probe is in flight on this node',
+          stage: 'lock',
+        });
       }
-      if (loopbackBusy) return refused('another loopback probe is in flight on this node');
       loopbackBusy = true;
       const lockPath = join(root, LOCK_NAME);
       let lockHeld = false;
@@ -408,15 +421,13 @@ export function createRealProbeHost(deps: RealProbeHostDeps = {}): ProbeHost {
           await acquireLock(lockPath);
           lockHeld = true;
         } catch (err) {
-          return refused(errMessage(err));
+          return refused({ code: 'PROBE_IN_PROGRESS', message: errMessage(err), stage: 'lock' });
         }
         const dir = join(root, `${opts.runId ?? 'none'}-${random()}`);
         const mnt = join(dir, 'mnt');
         await mkdir(mnt, { recursive: true, mode: 0o700 });
         artifact = { kind: 'mountpoint', path: mnt };
-        let mountAttempted = false;
         try {
-          mountAttempted = true;
           await step('mount', () =>
             exec(
               'systemd-mount',
@@ -431,13 +442,19 @@ export function createRealProbeHost(deps: RealProbeHostDeps = {}): ProbeHost {
           // The client's death does not prove PID1 did not mount: always
           // umount, then look at real state (validation F05) — never rely
           // on the command's own exit status, and never delete recursively.
+          // Bounded by whatever remains of the run's own deadline plus a
+          // short grace, so this cleanup step can never itself push the
+          // agent's answer past the api's `timeout_s + 5 s` wait (spec
+          // §9.3 loopback step 3/4).
           let umountError: string | null = null;
-          if (mountAttempted) {
-            try {
-              await exec('systemd-umount', [mnt], UMOUNT_TIMEOUT_MS);
-            } catch (err) {
-              umountError = errMessage(err);
-            }
+          try {
+            await exec(
+              'systemd-umount',
+              [mnt],
+              Math.max(1_000, Math.min(UMOUNT_TIMEOUT_MS, deadline + CLEANUP_GRACE_MS - clock())),
+            );
+          } catch (err) {
+            umountError = errMessage(err);
           }
           const stillMounted = await isMountpoint(mnt);
           if (stillMounted) {
