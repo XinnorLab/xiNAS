@@ -76,9 +76,20 @@ export function outcomeAt(level: FloorLevel): {
   return { outcome: 'pass', severity: null };
 }
 
+/**
+ * A JSON scalar as text; objects, arrays and null are '' — never a coercion
+ * that can throw. `raw_reports[].report` is `true` in the report schema, so
+ * a model-supplied `id`/`status`/`name`/`section`/`probe` may be any JSON
+ * value, including an object carrying a non-callable `toString`/`valueOf`
+ * member — `String(...)` on that throws `TypeError: Cannot convert object
+ * to primitive value` (fix round 2, finding 1).
+ */
+const str = (v: unknown): string =>
+  typeof v === 'string' ? v : typeof v === 'number' || typeof v === 'boolean' ? String(v) : '';
+
 /** Baseline sections are compared case- and separator-insensitively ('NVMe Health' → 'nvme_health'). */
 const norm = (s: unknown): string =>
-  String(s ?? '')
+  str(s)
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '_');
 
@@ -118,8 +129,8 @@ function indexRaw(raw: RawReport[], usable: ReadonlySet<number>): RawIndex {
         if (c === null) continue;
         const collection = asRecord(asRecord(c.evidence)?.collection)?.status;
         out.mcp.push({
-          id: String(c.id),
-          status: String(c.status),
+          id: str(c.id),
+          status: str(c.status),
           collection: typeof collection === 'string' ? collection : null,
         });
       }
@@ -131,13 +142,13 @@ function indexRaw(raw: RawReport[], usable: ReadonlySet<number>): RawIndex {
         for (const item of engine.checks as unknown[]) {
           const x = asRecord(item);
           if (x === null) continue;
-          rows.push({ section: norm(x.section), name: String(x.name), status: String(x.status) });
+          rows.push({ section: norm(x.section), name: str(x.name), status: str(x.status) });
         }
       }
       out.baseline.push({ ok, rows });
     } else if (r.tool === 'health.probe.run') {
       out.probe.push({
-        probe: String(body.probe),
+        probe: str(body.probe),
         ok: body.ok === true,
         cleanupFailed: asRecord(body.cleanup)?.status === 'failed',
       });

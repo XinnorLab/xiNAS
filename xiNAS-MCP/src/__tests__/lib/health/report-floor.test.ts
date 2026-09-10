@@ -242,6 +242,63 @@ describe('computeFloors over raw JSON the schema permits', () => {
     };
     expect(floorsOf([probe]).size).toBe(0);
   });
+
+  /**
+   * `String(v)` throws `TypeError: Cannot convert object to primitive value`
+   * when `v` is a JSON object carrying a non-callable `toString`/`valueOf`
+   * member — schema-permitted JSON, since only strings, numbers, booleans,
+   * objects, arrays and null are constrained; objects are unconstrained.
+   * Fix round 2, finding 1: every coercion of model data is total.
+   */
+  it('a health.check row whose id cannot be coerced to a string never throws and contributes no floor', () => {
+    const bad = [
+      { id: { toString: 1 }, status: 'critical', evidence: { collection: { status: 'success' } } },
+    ] as unknown as Array<Record<string, unknown>>;
+    expect(() => floorsOf([quick(bad)])).not.toThrow();
+    expect(floorsOf([quick(bad)]).size).toBe(0);
+  });
+
+  it('a health.check row whose status cannot be coerced to a string never throws and contributes no floor', () => {
+    const bad = [
+      {
+        id: 'xiraid.arrays',
+        status: { toString: 1 },
+        evidence: { collection: { status: 'success' } },
+      },
+    ] as unknown as Array<Record<string, unknown>>;
+    expect(() => floorsOf([quick(bad)])).not.toThrow();
+    expect(floorsOf([quick(bad)]).size).toBe(0);
+  });
+
+  it('a baseline row whose section cannot be coerced to a string never throws and contributes no floor', () => {
+    const bad = baseline({
+      collection: { status: 'success' },
+      report: { checks: [{ section: { valueOf: 1 }, name: 'thp', status: 'FAIL' }] },
+    });
+    expect(() => floorsOf([bad])).not.toThrow();
+    expect(floorsOf([bad]).size).toBe(0);
+  });
+
+  it('a baseline row whose name cannot be coerced to a string never throws and contributes no floor', () => {
+    const bad = baseline({
+      collection: { status: 'success' },
+      report: { checks: [{ section: 'Kernel', name: { toString: 1 }, status: 'FAIL' }] },
+    });
+    expect(() => floorsOf([bad])).not.toThrow();
+    expect(floorsOf([bad]).size).toBe(0);
+  });
+
+  it('a probe report whose probe id cannot be coerced to a string never throws and contributes no floor', () => {
+    const bad = {
+      tool: 'health.probe.run',
+      args: { probe: 'fs_io', target: 'fs-1', timeout_s: 20 },
+      collected_at: T,
+      digest: `sha256:${'6'.repeat(64)}`,
+      report: { probe: { toString: 1 }, ok: false, cleanup: { status: 'clean' } },
+    };
+    expect(() => floorsOf([bad])).not.toThrow();
+    expect(floorsOf([bad]).size).toBe(0);
+  });
 });
 
 describe('levelOf / outcomeAt (the §11.3 step 5 ordering)', () => {

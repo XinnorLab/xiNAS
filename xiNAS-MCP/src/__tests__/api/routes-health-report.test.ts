@@ -303,6 +303,48 @@ describe('health report schema and validation (S19c)', () => {
     expect(res.body.result.valid).toBe(true);
   });
 
+  it('a raw health.check row whose id cannot be coerced to a string is a verdict, not a 500', async () => {
+    const { raw, identity } = await runAndReport();
+    // `{ toString: 1 }` is schema-permitted JSON; `String(...)` on it throws
+    // TypeError: Cannot convert object to primitive value (fix round 2).
+    const malformed = {
+      profile: 'quick',
+      overall: 'ok',
+      checks: [
+        {
+          id: { toString: 1 },
+          status: 'critical',
+          evidence: { collection: { status: 'success' } },
+        },
+      ],
+    };
+    const res = await validate(
+      buildReport(
+        '00000000-0000-4000-8000-000000000000',
+        raw,
+        {
+          raw_reports: [
+            {
+              tool: 'health.check',
+              args: { profile: 'quick' },
+              collected_at: T0,
+              digest: digestOf(malformed),
+              report: malformed,
+            },
+          ],
+        },
+        identity,
+      ),
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.result.computed).toEqual({
+      health_status: 'ok',
+      coverage_status: 'complete',
+    });
+    expect(res.body.result.adjustments).toEqual([]);
+    expect(res.body.result.valid).toBe(true);
+  });
+
   it('F01b: dropping every raw report is an omission, and stale evidence cannot carry a pass', async () => {
     const { runId, raw, identity } = await runAndReport();
     const res = await validate(
