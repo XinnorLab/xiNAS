@@ -1,9 +1,11 @@
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -174,7 +176,11 @@ describe('createRealProbeHost.nfsLoopback (spec §9.3)', () => {
     expect((await host.nfsLoopback('/srv/a', opts)).ok).toBe(true);
   });
 
-  it('a failed umount leaves the directory and reports cleanup failed', async () => {
+  it('a failed umount command alone does not block cleanup once the device check finds nothing mounted (F05)', async () => {
+    // The old behavior trusted the umount command's own exit status; F05
+    // replaces that with a real `st_dev` check, so a command-level "busy"
+    // with nothing actually left behind still cleans up (see the F05
+    // regression test below for the case where something IS left behind).
     const root = fresh('loop-umount');
     const host = createRealProbeHost({
       root,
@@ -185,8 +191,8 @@ describe('createRealProbeHost.nfsLoopback (spec §9.3)', () => {
     });
     const r = await host.nfsLoopback('/srv/data', opts);
     expect(r.ok).toBe(true);
-    expect(r.cleanup).toEqual({ status: 'failed', detail: 'systemd-umount: busy' });
-    expect(readdirSync(root)).toEqual(['run-1-0000000000000000']);
+    expect(r.cleanup).toEqual({ status: 'clean' });
+    expect(readdirSync(root)).toEqual([]);
   });
 
   it('a mount failure is the result, not a throw, and leaves nothing behind', async () => {
@@ -230,5 +236,77 @@ describe('createFakeProbeHost', () => {
       'loopback:/srv/bad',
       'loopback-umount:/srv/bad',
     ]);
+  });
+});
+
+describe('validation F05/F06/F07 regressions', () => {
+  it('F05: an ambiguous mount failure never deletes below the mountpoint and does not report clean', async () => {
+    const root = fresh('f05');
+    let marker = '';
+    const called: string[] = [];
+    const host = createRealProbeHost({
+      root,
+      exec: async (file, args) => {
+        called.push(file);
+        if (file === 'systemd-mount') {
+          marker = join(args[2]!, 'FOREIGN-DATA');
+          writeFileSync(marker, 'data visible at the mountpoint');
+          throw new Error('mount client timed out after submission');
+        }
+      },
+    });
+    const r = await host.nfsLoopback('/export', { runId: 'run', timeoutMs: 1000 });
+    expect(r.ok).toBe(false);
+    expect(called).toEqual(['systemd-mount', 'systemd-umount']);
+    expect(existsSync(marker)).toBe(true);
+    expect(r.cleanup.status).toBe('failed');
+    expect(r.cleanup.detail).toMatch(/not empty|still mounted/);
+  });
+
+  it('F06: the host refuses a run id that could leave its root', async () => {
+    const root = fresh('f06');
+    let mounted = '';
+    const host = createRealProbeHost({
+      root,
+      exec: async (file, args) => {
+        if (file === 'systemd-mount') mounted = args[2]!;
+      },
+    });
+    const r = await host.nfsLoopback('/export', { runId: '../outside', timeoutMs: 1000 });
+    expect(r.ok).toBe(false);
+    expect(r.error?.code).toBe('RUN_ID_INVALID');
+    expect(mounted).toBe('');
+    expect(readdirSync(root)).toEqual([]);
+  });
+
+  it('F07: a group/world-writable probe directory is untrusted', async () => {
+    const mnt = fresh('f07-mode');
+    mkdirSync(join(mnt, PROBE_DIR_NAME));
+    chmodSync(join(mnt, PROBE_DIR_NAME), 0o777);
+    const r = await createRealProbeHost().fsIo(mnt, opts);
+    expect(r.ok).toBe(false);
+    expect(r.error?.code).toBe('probe_dir_untrusted');
+    expect(r.cleanup.status).toBe('not_needed');
+    expect(readdirSync(join(mnt, PROBE_DIR_NAME))).toEqual([]);
+  });
+
+  it('F07: cleanup unlinks only the inode it created', async () => {
+    const mnt = fresh('f07-inode');
+    const dir = join(mnt, PROBE_DIR_NAME);
+    let original = '';
+    let replacement = '';
+    const r = await createRealProbeHost().fsIo(mnt, opts, {
+      beforeUnlink: () => {
+        replacement = join(dir, readdirSync(dir)[0]!);
+        original = `${replacement}.moved`;
+        renameSync(replacement, original);
+        writeFileSync(replacement, 'FOREIGN-DATA');
+      },
+    });
+    expect(r.ok).toBe(true);
+    expect(r.cleanup.status).toBe('failed');
+    expect(r.cleanup.detail).toMatch(/replaced/);
+    expect(readFileSync(replacement, 'utf8')).toBe('FOREIGN-DATA');
+    expect(existsSync(original)).toBe(true);
   });
 });

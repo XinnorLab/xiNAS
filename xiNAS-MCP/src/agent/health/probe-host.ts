@@ -1,22 +1,33 @@
 /**
  * ProbeHost (S7 T5, ADR-0009 §deep; rewritten in S19a T2 — spec §9.3,
- * D-08, ADR-0018 §4): the privileged verbs behind the active health
- * probes. Every artifact is per run and every outcome says what happened
- * to it.
+ * D-08, ADR-0018 §4; hardened for validation F05/F06/F07): the privileged
+ * verbs behind the active health probes. Every artifact is per run and
+ * every outcome says what happened to it. `runId` is untrusted input
+ * embedded in a path, so both verbs reject anything outside
+ * `ARTIFACT_RUN_RE` before it can reach one (F06).
  *
- *  - fsIo: under `<mountpoint>/.xinas-health` (a root-owned directory
- *    that must sit on the mountpoint's own device and must not be a
- *    symlink) create `probe-<run>-<random>` with O_CREAT|O_EXCL|O_NOFOLLOW,
- *    write 4 KiB, fsync, read it back through a fresh open, unlink it.
- *    Node has no `openat`, so the post-open fstat (same device, one link,
- *    plain file) stands in for it. Only the file this run created is ever
- *    unlinked; a failed unlink is reported as `cleanup.status: 'failed'`.
+ *  - fsIo: under `<mountpoint>/.xinas-health` (a directory that must sit
+ *    on the mountpoint's own device, be owned by us, must not be a
+ *    symlink and must not be group/world-writable — F07) create
+ *    `probe-<run>-<random>` with O_CREAT|O_EXCL|O_NOFOLLOW, write 4 KiB,
+ *    fsync, read it back through a fresh open, unlink it. Node has no
+ *    `openat`, so the post-open fstat (same device, one link, plain
+ *    file) stands in for it. The unlink is preceded by an `lstat`
+ *    checked against the inode/device this run's own create step saw;
+ *    a mismatch means the name was swapped and nothing is removed
+ *    (F07). A failed or refused unlink is `cleanup.status: 'failed'`.
  *  - nfsLoopback: PID1-DELEGATED `systemd-mount localhost:<export>` at a
  *    per-run `<root>/<run>-<random>/mnt` (the S5 pattern — PID1 performs
- *    the mount so the probe inherits `.mount` unit semantics), list it,
- *    `systemd-umount`, remove the directory. Loopback probes are
- *    serialized by an in-process flag plus an O_EXCL lock file whose pid
- *    is checked for staleness; a held lock is `PROBE_IN_PROGRESS`.
+ *    the mount so the probe inherits `.mount` unit semantics), list it.
+ *    However the mount step ends, `systemd-umount` is always attempted
+ *    (the client's own failure or timeout does not prove PID1 did not
+ *    mount), then `st_dev` of `<mnt>` is compared with its parent: a
+ *    differing device means something is still mounted and the
+ *    directory is left in place; otherwise `rmdir` removes the two
+ *    per-run directories — never a recursive delete (F05). Loopback
+ *    probes are serialized by an in-process flag plus an O_EXCL lock
+ *    file whose pid is checked for staleness; a held lock is
+ *    `PROBE_IN_PROGRESS`.
  *
  * Every step is bounded by the run's `timeoutMs` ON THE AGENT: a step
  * that overruns ends the probe with `TIMEOUT` and cleanup is still
@@ -29,16 +40,18 @@ import { randomBytes } from 'node:crypto';
 import {
   type FileHandle,
   constants,
+  lstat,
   mkdir,
   open,
   readFile,
   readdir,
-  rm,
   rmdir,
+  stat,
   unlink,
 } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
+  ARTIFACT_RUN_RE,
   PROBE_DIR_NAME,
   PROBE_PAYLOAD_BYTES,
   type ProbeCleanup,
@@ -98,6 +111,16 @@ const toError = (err: unknown, fallbackStage: ProbeStage): NonNullable<ProbeOutc
     ? { code: err.code, message: err.message, stage: err.stage }
     : { code: errCode(err), message: errMessage(err), stage: fallbackStage };
 
+/**
+ * F06: `runId` is embedded verbatim into an artifact name (and, for
+ * `nfsLoopback`, a directory name under `root`), so it is checked before
+ * it can reach a path — a null runId (the deep-probe caller) is fine.
+ */
+const runIdInvalid = (runId: string | null, stage: ProbeStage): StageError | null =>
+  runId !== null && !ARTIFACT_RUN_RE.test(runId)
+    ? new StageError(stage, 'RUN_ID_INVALID', 'run id may only contain letters, digits and dashes')
+    : null;
+
 /** A step runner bounded by the run deadline; an overrun rejects with TIMEOUT. */
 function makeStepper(deadline: number, clock: () => number) {
   return async function step<T>(stage: ProbeStage, fn: () => Promise<T>): Promise<T> {
@@ -145,6 +168,16 @@ const isAlive = (pid: number): boolean => {
   }
 };
 
+/** A directory is a mountpoint when its device differs from its parent's. */
+async function isMountpoint(path: string): Promise<boolean> {
+  try {
+    const [self, parent] = await Promise.all([stat(path), stat(join(path, '..'))]);
+    return self.dev !== parent.dev;
+  } catch {
+    return false;
+  }
+}
+
 export function createRealProbeHost(deps: RealProbeHostDeps = {}): ProbeHost {
   const root = deps.root ?? DEFAULT_ROOT;
   const uid = deps.uid ?? process.getuid?.() ?? 0;
@@ -188,7 +221,11 @@ export function createRealProbeHost(deps: RealProbeHostDeps = {}): ProbeHost {
       let dirFh: FileHandle | undefined;
       let fh: FileHandle | undefined;
       let filePath: string | undefined;
+      let createdIno: { ino: number; dev: number } | undefined;
       try {
+        const bad = runIdInvalid(opts.runId, 'dir');
+        if (bad !== null) throw bad;
+
         // 1. The mountpoint itself, never through a symlink.
         mntFh = await step('open', () => open(mountpoint, O_RDONLY | O_DIRECTORY | O_NOFOLLOW));
         const mntHandle = mntFh;
@@ -222,11 +259,16 @@ export function createRealProbeHost(deps: RealProbeHostDeps = {}): ProbeHost {
         });
         const dirHandle = dirFh;
         const dirStat = await step('dir', () => dirHandle.stat());
-        if (!dirStat.isDirectory() || dirStat.dev !== mntStat.dev || dirStat.uid !== uid) {
+        if (
+          !dirStat.isDirectory() ||
+          dirStat.dev !== mntStat.dev ||
+          dirStat.uid !== uid ||
+          (dirStat.mode & 0o022) !== 0
+        ) {
           throw new StageError(
             'dir',
             'probe_dir_untrusted',
-            `${PROBE_DIR_NAME} must be a directory on the mountpoint's device owned by uid ${uid}`,
+            `${PROBE_DIR_NAME} must be a directory on the mountpoint's device, owned by uid ${uid}, not group/world-writable`,
           );
         }
 
@@ -254,6 +296,7 @@ export function createRealProbeHost(deps: RealProbeHostDeps = {}): ProbeHost {
             'the created probe file is not a plain file on the mountpoint device',
           );
         }
+        createdIno = { ino: fileStat.ino, dev: fileStat.dev };
 
         // 4. Write, fsync, close.
         await step('write', () => created.handle.write(PAYLOAD, 0, PAYLOAD.length, 0));
@@ -293,13 +336,25 @@ export function createRealProbeHost(deps: RealProbeHostDeps = {}): ProbeHost {
         error = toError(err, 'open');
       } finally {
         if (fh !== undefined) await fh.close().catch(() => undefined);
-        // 6. Only the file this run created is ever unlinked; a failure is a finding.
+        // 6. Only the file this run created is ever unlinked: an lstat of the
+        //    name must still show the inode/device this run's `create` step
+        //    saw, or the name was swapped underneath us (validation F07).
         if (filePath !== undefined) {
           const path = filePath;
           try {
             await hooks?.beforeUnlink?.();
-            await unlink(path);
-            cleanup = { status: 'clean' };
+            const now = await lstat(path);
+            if (
+              createdIno === undefined ||
+              !now.isFile() ||
+              now.ino !== createdIno.ino ||
+              now.dev !== createdIno.dev
+            ) {
+              cleanup = { status: 'failed', detail: 'probe file was replaced; not removed' };
+            } else {
+              await unlink(path);
+              cleanup = { status: 'clean' };
+            }
           } catch (err) {
             cleanup = { status: 'failed', detail: `${errCode(err)}: ${errMessage(err)}` };
           }
@@ -329,6 +384,17 @@ export function createRealProbeHost(deps: RealProbeHostDeps = {}): ProbeHost {
         error: { code: 'PROBE_IN_PROGRESS', message, stage: 'lock' },
         cleanup: { status: 'not_needed' },
       });
+      const bad = runIdInvalid(opts.runId, 'lock');
+      if (bad !== null) {
+        return {
+          ok: false,
+          started_at: startedAt,
+          completed_at: new Date(clock()).toISOString(),
+          artifact: null,
+          error: toError(bad, 'lock'),
+          cleanup: { status: 'not_needed' },
+        };
+      }
       if (loopbackBusy) return refused('another loopback probe is in flight on this node');
       loopbackBusy = true;
       const lockPath = join(root, LOCK_NAME);
@@ -348,8 +414,9 @@ export function createRealProbeHost(deps: RealProbeHostDeps = {}): ProbeHost {
         const mnt = join(dir, 'mnt');
         await mkdir(mnt, { recursive: true, mode: 0o700 });
         artifact = { kind: 'mountpoint', path: mnt };
-        let mounted = false;
+        let mountAttempted = false;
         try {
+          mountAttempted = true;
           await step('mount', () =>
             exec(
               'systemd-mount',
@@ -357,29 +424,35 @@ export function createRealProbeHost(deps: RealProbeHostDeps = {}): ProbeHost {
               Math.max(1, deadline - clock()),
             ),
           );
-          mounted = true;
           await step('readdir', () => readdir(mnt));
         } catch (err) {
           error = toError(err, 'mount');
         } finally {
-          if (mounted) {
+          // The client's death does not prove PID1 did not mount: always
+          // umount, then look at real state (validation F05) — never rely
+          // on the command's own exit status, and never delete recursively.
+          let umountError: string | null = null;
+          if (mountAttempted) {
             try {
               await exec('systemd-umount', [mnt], UMOUNT_TIMEOUT_MS);
+            } catch (err) {
+              umountError = errMessage(err);
+            }
+          }
+          const stillMounted = await isMountpoint(mnt);
+          if (stillMounted) {
+            cleanup = {
+              status: 'failed',
+              detail: `mountpoint still mounted${umountError !== null ? ` (systemd-umount: ${umountError})` : ''}`,
+            };
+          } else {
+            try {
+              await rmdir(mnt);
+              await rmdir(dir);
               cleanup = { status: 'clean' };
             } catch (err) {
-              cleanup = { status: 'failed', detail: `systemd-umount: ${errMessage(err)}` };
+              cleanup = { status: 'failed', detail: `rmdir: ${errCode(err)}: ${errMessage(err)}` };
             }
-            if (cleanup.status === 'clean') {
-              try {
-                await rmdir(mnt);
-                await rmdir(dir);
-              } catch (err) {
-                cleanup = { status: 'failed', detail: `rmdir: ${errMessage(err)}` };
-              }
-            }
-          } else {
-            await rm(dir, { recursive: true, force: true }).catch(() => undefined);
-            cleanup = { status: 'clean' };
           }
         }
       } catch (err) {

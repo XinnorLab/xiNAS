@@ -57,3 +57,8 @@ export const PROVES: Record<ProbeKind, string> = {
 export const PROBE_PAYLOAD_BYTES = 4096;
 /** The root-owned directory under a mountpoint that holds fs_io probe files. */
 export const PROBE_DIR_NAME = '.xinas-health';
+
+/** A run id `health.context` minted (UUID v4 shape); validated before it can reach a path. */
+export const RUN_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+/** What the probe host itself tolerates in an artifact name (deep passes null → 'none'). */
+export const ARTIFACT_RUN_RE = /^[A-Za-z0-9-]{1,64}$/;

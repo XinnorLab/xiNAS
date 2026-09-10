@@ -855,11 +855,15 @@ argument is not it (ARCH-03).
 
 ### 9.2 Request and response
 
-Body: `{ probe, target, run_id?, timeout_s? }`. `target` is a
-`Filesystem` id for `fs_io` (the probe runs at its observed mountpoint)
-or a `Share` id for `nfs_loopback` (the probe mounts that export's
-path). An unknown id is `NOT_FOUND`; a filesystem that is not observed
-mounted is `PRECONDITION_FAILED` (`not_mounted`).
+Body: `{ probe, target, run_id?, timeout_s? }`. `run_id`, when present,
+MUST be a run id minted by `health.context` (a UUID); any other string
+is `INVALID_ARGUMENT` on the api and `INVALID_PARAMS` on the agent — the
+id is embedded in artifact names, so it is validated before it reaches a
+path (validation F06). `target` is a `Filesystem` id for `fs_io` (the
+probe runs at its observed mountpoint) or a `Share` id for
+`nfs_loopback` (the probe mounts that export's path). An unknown id is
+`NOT_FOUND`; a filesystem that is not observed mounted is
+`PRECONDITION_FAILED` (`not_mounted`).
 
 ```jsonc
 {
@@ -885,7 +889,9 @@ removed, not kept as a fallback.
    `openat(dirfd, '.xinas-health', O_DIRECTORY | O_NOFOLLOW)`; `fstat`
    MUST report the same `st_dev` and a directory owned by root, else
    `PRECONDITION_FAILED` (`probe_dir_untrusted`) — a symlink or a
-   foreign mount under that name never receives the probe.
+   foreign mount under that name never receives the probe — and MUST
+   NOT be group- or world-writable (`mode & 0o022 === 0`) — a root-owned
+   0777 directory is `probe_dir_untrusted` (validation F07).
 3. `openat(probedirfd, 'probe-<run_id|none>-<16 hex random>',
    O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW, 0600)`; `EEXIST` retries the
    random part twice, then fails.
@@ -896,7 +902,10 @@ removed, not kept as a fallback.
    result is `error: TIMEOUT` with `cleanup` reflecting what the unlink
    returned.
 6. Only the file this run created is ever unlinked; the directory is
-   left in place.
+   left in place. The unlink is preceded by an `lstat` of the name; if
+   the inode or device differs from the file this run created, nothing
+   is unlinked and `cleanup` is `failed` with `detail: 'probe file was
+   replaced; not removed'` (validation F07).
 
 > **Implemented (S19a, `agent/health/probe-host.ts`).** Node has no
 > `openat`/`mkdirat`/`unlinkat`: the host opens the mountpoint and the
@@ -922,11 +931,16 @@ removed, not kept as a fallback.
    (`ESRCH`). A refused lock is a result with `error.stage: 'lock'`.
 2. Mountpoint `/run/xinas/health-probe/<run_id|none>-<random>/mnt`,
    created 0700; `systemd-mount --collect localhost:<export> <mnt>`
-   bounded by `timeout_s`; `readdir`; `systemd-umount <mnt>`; the
-   directory is removed after a successful umount.
-3. A failed umount leaves the directory, reports `cleanup.status:
-   failed` with the unit name, and the next probe uses a new directory —
-   nothing is ever retried onto a busy mountpoint.
+   bounded by `timeout_s`; `readdir`; `systemd-umount <mnt>`.
+3. After the mount step ends in ANY way other than success (timeout,
+   error, killed client) the host still runs `systemd-umount <mnt>` —
+   the client's death does not prove PID1 did not mount — then compares
+   `st_dev` of `<mnt>` with its parent: a differing device means
+   something is mounted and the directory is left in place with
+   `cleanup: failed` (`detail: 'mountpoint still mounted'`); otherwise
+   the two directories are removed with `rmdir` (never recursively).
+   Nothing under a probe mountpoint is ever deleted (validation F05,
+   PROBE-03).
 4. The agent kills the `systemd-mount` subprocess at `timeout_s`; the
    api's own timeout is `timeout_s + 5 s` so the agent, not the api wait,
    is what stops the work.

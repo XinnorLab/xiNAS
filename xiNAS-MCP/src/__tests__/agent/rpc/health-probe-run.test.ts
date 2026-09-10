@@ -45,7 +45,11 @@ describe('health.probe.run handler', () => {
       release = r;
     });
     const h = makeHealthProbeRunHandler({ probeHost: gatedHost(gate) });
-    const first = h({ probe: 'fs_io', path: '/mnt/a', run_id: 'r1' });
+    const first = h({
+      probe: 'fs_io',
+      path: '/mnt/a',
+      run_id: '11111111-1111-4111-8111-111111111111',
+    });
     await expect(h({ probe: 'nfs_loopback', path: '/srv/x' })).rejects.toMatchObject({
       code: 'PROBE_IN_PROGRESS',
       details: { probe: 'fs_io', path: '/mnt/a' },
@@ -73,11 +77,26 @@ describe('health.probe.run handler', () => {
     };
     const h = makeHealthProbeRunHandler({ probeHost: host });
     await h({ probe: 'fs_io', path: '/mnt/a' });
-    await h({ probe: 'nfs_loopback', path: '/srv/x', run_id: 'r9', timeout_ms: 5_000 });
+    await h({
+      probe: 'nfs_loopback',
+      path: '/srv/x',
+      run_id: '99999999-9999-4999-8999-999999999999',
+      timeout_ms: 5_000,
+    });
     expect(seen).toEqual([
       { runId: null, timeoutMs: 20_000 },
-      { runId: 'r9', timeoutMs: 5_000 },
+      { runId: '99999999-9999-4999-8999-999999999999', timeoutMs: 5_000 },
     ]);
+  });
+
+  it('F06: run_id must be a health.context UUID', async () => {
+    const handler = makeHealthProbeRunHandler({ probeHost: gatedHost(Promise.resolve()) });
+    await expect(
+      handler({ probe: 'nfs_loopback', path: '/export', run_id: '../outside', timeout_ms: 1000 }),
+    ).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+    await expect(
+      handler({ probe: 'fs_io', path: '/mnt/x', run_id: 'smoke-1', timeout_ms: 1000 }),
+    ).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
   });
 
   it('over the dispatcher: PROBE_IN_PROGRESS travels as -32000 data.code', async () => {

@@ -590,10 +590,12 @@ describe.sequential('e2e: S7 health/drift/support (fixture mode)', () => {
 
   it('4b. S19a: POST /health/probe runs ONE fs_io probe through the same host (REST operator, no confirmation)', async () => {
     writeFileSync(join(fixtureDir, 'probe-host-state.json'), JSON.stringify({ ops: [] }));
+    const ctx = await requestJson(apiSockPath, '/api/v1/health/context', ADMIN_TOKEN, 'GET');
+    const runId = (ctx.body.result as { run: { run_id: string } }).run.run_id;
     const res = await requestJson(apiSockPath, '/api/v1/health/probe', ADMIN_TOKEN, 'POST', {
       probe: 'fs_io',
       target: 'mnt-data.mount',
-      run_id: 'e2e-run-1',
+      run_id: runId,
     });
     expect(res.status).toBe(200);
     const result = res.body.result as {
@@ -610,11 +612,11 @@ describe.sequential('e2e: S7 health/drift/support (fixture mode)', () => {
       probe: 'fs_io',
       target: 'mnt-data.mount',
       path: '/mnt/data',
-      run_id: 'e2e-run-1',
+      run_id: runId,
       ok: true,
       cleanup: { status: 'clean' },
     });
-    expect(result.artifact?.path).toContain('e2e-run-1');
+    expect(result.artifact?.path).toContain(runId);
     expect(result.proves).toContain('not client connectivity');
     const state = JSON.parse(readFileSync(join(fixtureDir, 'probe-host-state.json'), 'utf8')) as {
       ops: string[];

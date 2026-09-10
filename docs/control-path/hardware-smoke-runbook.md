@@ -152,9 +152,10 @@ On a scratch node (or after `./uninstall.sh`):
   every check's `evidence.collection.status` is `success` on a healthy
   node — a `not_supported` license section means `xicli` is absent.
 - [ ] `POST /health/probe {probe: fs_io, target: <Filesystem id>, run_id:
-  smoke-1}` with an operator token: `ok: true`, `artifact.path` names
-  `probe-smoke-1-<random>`, `cleanup.status: clean`, and the file is gone.
-  Repeat with `nfs_loopback` on a Share id. Then over MCP with
+  <the run_id from GET /health/context>}` (any other value is
+  `INVALID_ARGUMENT`) with an operator token: `ok: true`, `artifact.path`
+  names `probe-<run_id>-<random>`, `cleanup.status: clean`, and the file
+  is gone. Repeat with `nfs_loopback` on a Share id. Then over MCP with
   `mcp.allow_apply: true` from a modern client: `input_required` form →
   `decision: APPLY` → the same result plus `confirmation_id`; the record
   reads `consumed` with `consumed_task_id: probe:<uuid>`. Run two probes

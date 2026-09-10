@@ -1575,7 +1575,8 @@ components:
             Optional S19 run id from `GET /health/context`; carried into the
             artifact name and the audit row, counted against the run's
             `probes_per_run` budget, and the result digest is recorded in
-            the run ledger.
+            the run ledger. Must be the UUID `GET /health/context` minted;
+            any other value is `INVALID_ARGUMENT`.
         timeout_s:
           type: integer
           minimum: 1

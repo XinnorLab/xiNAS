@@ -11,7 +11,7 @@
  * result, not an RPC error.
  */
 
-import type { ProbeKind, ProbeOutcome } from '../../../lib/health/probe-types.js';
+import { RUN_ID_RE, type ProbeKind, type ProbeOutcome } from '../../../lib/health/probe-types.js';
 import type { ProbeHost } from '../../health/probe-host.js';
 
 export interface HealthProbeRunDeps {
@@ -46,6 +46,9 @@ export function makeHealthProbeRunHandler(deps: HealthProbeRunDeps) {
       throw invalid('params.path must be an absolute path');
     }
     const runId = typeof p.run_id === 'string' && p.run_id.length > 0 ? p.run_id : null;
+    if (runId !== null && !RUN_ID_RE.test(runId)) {
+      throw invalid('params.run_id must be the UUID health.context minted');
+    }
     const timeoutMs = p.timeout_ms === undefined ? defaultTimeout : p.timeout_ms;
     if (
       typeof timeoutMs !== 'number' ||

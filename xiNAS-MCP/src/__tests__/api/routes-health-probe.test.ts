@@ -68,6 +68,10 @@ describe('POST /api/v1/health/probe (S19a)', () => {
   });
 
   it('nfs_loopback resolves the share export path; run_id and the 20 s default travel to the agent', async () => {
+    const ctxRes = await request(setup.app)
+      .get('/api/v1/health/context')
+      .set('Authorization', OPERATOR_TOKEN);
+    const runId = ctxRes.body.result.run.run_id as string;
     let seen: unknown;
     setup.mockAgent.respondToRpc(TOOL, (p) => {
       seen = p;
@@ -76,20 +80,40 @@ describe('POST /api/v1/health/probe (S19a)', () => {
           probe: 'nfs_loopback',
           path: '/mnt/data',
           ...okOutcome,
-          artifact: { kind: 'mountpoint', path: '/run/xinas/health-probe/r1-x/mnt' },
+          artifact: { kind: 'mountpoint', path: `/run/xinas/health-probe/${runId}-x/mnt` },
         },
       };
     });
-    const res = await post(OPERATOR_TOKEN, { probe: 'nfs_loopback', target: 'sh-1', run_id: 'r1' });
+    const res = await post(OPERATOR_TOKEN, {
+      probe: 'nfs_loopback',
+      target: 'sh-1',
+      run_id: runId,
+    });
     expect(res.status).toBe(200);
     expect(seen).toEqual({
       probe: 'nfs_loopback',
       path: '/mnt/data',
-      run_id: 'r1',
+      run_id: runId,
       timeout_ms: 20_000,
     });
     expect(res.body.result.proves).toContain('NFS-mounted from the node itself');
-    expect(res.body.result.run_id).toBe('r1');
+    expect(res.body.result.run_id).toBe(runId);
+  });
+
+  it('F06: a run_id that is not a health.context UUID is 400 INVALID_ARGUMENT; the agent is never called', async () => {
+    let called = false;
+    setup.mockAgent.respondToRpc(TOOL, () => {
+      called = true;
+      return { result: { probe: 'fs_io', path: '/mnt/data', ...okOutcome } };
+    });
+    const res = await post(OPERATOR_TOKEN, {
+      probe: 'fs_io',
+      target: 'fs-data',
+      run_id: '../outside',
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.errors[0].code).toBe('INVALID_ARGUMENT');
+    expect(called).toBe(false);
   });
 
   it('a viewer is refused by the catalog rank', async () => {

@@ -54,7 +54,7 @@ import {
   xiraidLicenseCheck,
   xiraidServiceCheck,
 } from '../../lib/health/standard.js';
-import { PROVES, type ProbeKind } from '../../lib/health/probe-types.js';
+import { PROVES, RUN_ID_RE, type ProbeKind } from '../../lib/health/probe-types.js';
 import { AgentRpcError } from '../agent-client.js';
 import type { ApiContext, RequestContext } from '../context.js';
 import type { Warning } from '../envelope.js';
@@ -496,6 +496,13 @@ export function healthRouter(ctx: ApiContext): Router {
         throw new ApiException('INVALID_ARGUMENT', 'target (a Filesystem or Share id) is required');
       }
       const runId = typeof body.run_id === 'string' && body.run_id.length > 0 ? body.run_id : null;
+      if (runId !== null && !RUN_ID_RE.test(runId)) {
+        throw new ApiException(
+          'INVALID_ARGUMENT',
+          'run_id must be the UUID GET /health/context minted',
+          { run_id: runId },
+        );
+      }
       const timeoutS = body.timeout_s === undefined ? PROBE_DEFAULT_TIMEOUT_S : body.timeout_s;
       if (
         typeof timeoutS !== 'number' ||
