@@ -735,9 +735,13 @@ says `No module named` → `not_supported`), `KILLED` (a signal that was
 not the deadline) and `PARSE` (stdout not a JSON object, or beyond the 4
 MiB cap — the whole output is dropped, never truncated into a report).
 `timeout_s` is 1–900. The profile the engine receives is the canonical
-realpath. Concurrency is per profile: two callers of the same profile
-share one subprocess; a different profile waits for the running one
-(one engine subprocess per agent at any time). The environment is
+realpath. Concurrency (amended 2026-09-10, validation F09): the deadline
+is absolute from the moment the RPC arrives (`now + timeout_s`), not from
+spawn; a queued run whose deadline passes before its turn is `timeout`
+without a spawn; callers are coalesced by the profile's realpath across
+the WHOLE queue (A, B, A spawns A once), each joiner keeping its own
+deadline; at most four distinct profiles wait (`QUEUE_FULL` beyond that);
+the `--sections` call queues under the same rules. The environment is
 exactly `PATH`, `LANG=C.UTF-8`, `PYTHONPATH=<module_root>`; stdin is
 `/dev/null`; the child is its own process group and the group is
 SIGKILLed at the deadline.
@@ -1312,7 +1316,7 @@ validate --file`) from the catalog without CLI code.
 | Unit — `standard.ts` | every `CollectionStatus` maps per §7.2; `not_supported` is the only `skipped`; `success` + empty keeps the old symptom with `collection.status: success` (AC-03) |
 | Unit — `routes-health` | `coverage_status` and `collection` per §7.3; a v1-shaped probe result maps to `LEGACY_AGENT`; `overall` semantics unchanged (REPORT-01) |
 | Unit — `probe-host` (fake fs via the existing file-backed fakes plus a real `tmpdir` case) | unique names, `EEXIST` retry, symlinked `.xinas-health` refused, foreign-device refused, cleanup failure surfaced, timeout stops the step, two concurrent loopbacks → one `PROBE_IN_PROGRESS` (AC-15) |
-| Unit — `agent/health/baseline-host.test.ts`, `agent/rpc/health-baseline.test.ts`, `agent/config-health-baseline.test.ts` (S19c) | against real stub interpreters: command line, cwd, env sanitization, realpath allow-list (path and symlink), SIGKILL of the process group at the timeout, `EXIT_<n>` / `MODULE_ABSENT` / `PARSE` / `ENOENT`, the stdout cap, concurrent callers share one run and a different profile is serialized, `--sections` parsing and caching; the RPC's parameter validation; the config block's defaults and validation |
+| Unit — `agent/health/baseline-host.test.ts`, `agent/rpc/health-baseline.test.ts`, `agent/config-health-baseline.test.ts` (S19c) | against real stub interpreters: command line, cwd, env sanitization, realpath allow-list (path and symlink), SIGKILL of the process group at the timeout, `EXIT_<n>` / `MODULE_ABSENT` / `PARSE` / `ENOENT`, the stdout cap, concurrent callers share one run and a different profile is serialized, `--sections` parsing and caching; the F09 queue rules (a queued caller times out on its own deadline without a spawn, A-B-A spawns A once, a joiner keeps its own deadline, `QUEUE_FULL` past the bound); the RPC's parameter validation; the config block's defaults and validation |
 | Unit — `api/routes-health-baseline.test.ts` (S19c) | the capped timeout per profile, the live section list, the per-profile cache (`from_cache`, `age_s`, a failed run never cached), profile and `max_age_s` validation, the ledger digest under a `run_id`, `RUN_UNKNOWN`, `EXECUTOR_UNAVAILABLE` without an agent |
 | Unit — `lib/health/report-validate.test.ts`, `api/routes-health-report.test.ts` (S19c) | the schema on a minimal valid report and each error path; the verdict table of §11.3 row by row (AC-01, AC-02, REPORT-02 rewrite, AC-08 service_path); reference errors with paths; status errors; over the route: `verified`, an edited raw FAIL → `mismatch` (AC-19), an invented report → `not_in_ledger`, non-ledger tools skipped, `unverifiable` on an unknown run, a malformed body |
 | Contract — `mcp-wire.test.ts` (S19b) | `prompts/list` and `prompts/get` responses validate against the pinned `2026-07-28` schema on the modern era (`ListPromptsResult`, `Prompt`, `GetPromptResult`, `JSONRPCErrorResponse`); `mcp-integration.test.ts` drives the legacy shapes over the wire (no `resultType`, `initialize` advertises `prompts`) and the audit row. The stdio adapter forwards every method unchanged, so it is covered by the HTTP contract (AC-16) |

@@ -16,6 +16,7 @@ import type { HealthBaselineConfig } from '../../../agent/config.js';
 import {
   BASELINE_MODULE,
   type BaselineHost,
+  type BaselineHostDeps,
   makeBaselineHost,
 } from '../../../agent/health/baseline-host.js';
 
@@ -50,11 +51,11 @@ describe('BaselineHost', () => {
   const host = (
     python: string,
     over: Partial<HealthBaselineConfig> = {},
-    caps = {},
+    deps: BaselineHostDeps = {},
   ): BaselineHost =>
     makeBaselineHost(
       { python, module_root: dir, log_dir: join(dir, 'logs'), profiles_dir: profiles, ...over },
-      caps,
+      deps,
     );
 
   const OK_JSON = '{"metadata":{"profile":"quick"},"overall":"PASS","checks":[]}';
@@ -202,5 +203,55 @@ describe('BaselineHost', () => {
       sections: null,
       error: { code: 'ENOENT' },
     });
+  });
+
+  it('F09: a queued caller times out on its own deadline and A-B-A spawns A once', async () => {
+    const counter = join(dir, 'runs.txt');
+    const b = join(profiles, 'b.yml');
+    writeFileSync(b, 'profile: b\n');
+    const python = stub(
+      'slow.sh',
+      `echo run >> ${counter}; sleep 0.2; printf '%s\\n' '${OK_JSON}'`,
+    );
+    const h = host(python);
+    const started = Date.now();
+    const p1 = h.run(quick, 1_000);
+    const p2 = h.run(b, 50);
+    const p3 = h.run(quick, 1_000);
+    const r2 = await p2;
+    expect(Date.now() - started).toBeLessThan(180);
+    expect(r2.status).toBe('timeout');
+    expect(r2.error?.code).toBe('TIMEOUT');
+    const [r1, r3] = await Promise.all([p1, p3]);
+    expect(r1.status).toBe('success');
+    expect(r3).toBe(r1);
+    // B never spawned: its deadline had passed by the time its turn came.
+    expect(readFileSync(counter, 'utf8').trim().split('\n')).toHaveLength(1);
+  });
+
+  it('F09: a joiner keeps its own deadline', async () => {
+    const python = stub('slow2.sh', `sleep 0.3; printf '%s\\n' '${OK_JSON}'`);
+    const h = host(python);
+    const p1 = h.run(quick, 1_000);
+    const p2 = h.run(quick, 50);
+    expect((await p2).status).toBe('timeout');
+    expect((await p1).status).toBe('success');
+  });
+
+  it('F09: the queue is bounded', async () => {
+    const python = stub('slow3.sh', `sleep 0.2; printf '%s\\n' '${OK_JSON}'`);
+    const h = host(python, {}, { maxQueued: 2 });
+    const names = ['q1', 'q2', 'q3'].map((n) => {
+      const p = join(profiles, `${n}.yml`);
+      writeFileSync(p, `profile: ${n}\n`);
+      return p;
+    });
+    const results = await Promise.all([
+      h.run(names[0]!, 1_000),
+      h.run(names[1]!, 1_000),
+      h.run(names[2]!, 1_000),
+    ]);
+    expect(results.map((r) => r.status)).toEqual(['success', 'success', 'error']);
+    expect(results[2]?.error?.code).toBe('QUEUE_FULL');
   });
 });
