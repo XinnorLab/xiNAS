@@ -204,11 +204,33 @@ const defaultExec = (file: string, args: string[], timeoutMs: number): Promise<v
   });
 
 /**
+ * Classifies an `execFile` callback error into the exit code the delegate
+ * reports; `-1` means "killed by the timeout/signal", not a real exit
+ * status. Node sets `err.signal` to `null` — not `undefined` — on an
+ * ORDINARY non-zero exit (verified with plain Node: `execFile('false', ...,
+ * cb)` reports `{ code: 1, signal: null, killed: false }`); `@types/node`
+ * declares `signal?: NodeJS.Signals` without `null` and marks that "Just
+ * Plain Wrong" — the runtime value is what counts, so classification
+ * checks for a string signal, never `!== undefined`. A previous version of
+ * this check used `err.signal !== undefined`, which made `null !==
+ * undefined` true and misreported every ordinary non-zero exit as a
+ * timeout, discarding the real exit code and stderr.
+ */
+export function execCaptureCode(
+  err: (Error & { code?: unknown; killed?: unknown; signal?: unknown }) | null,
+): number {
+  if (err === null) return 0;
+  if (err.killed === true || typeof err.signal === 'string') return -1;
+  return typeof err.code === 'number' ? err.code : 127;
+}
+
+/**
  * The fs_io helper's runner: unlike {@link defaultExec} a non-zero exit
  * is DATA (the caller turns it into `FSIO_HELPER_FAILED` with an unknown
- * artifact state), never a rejection.
+ * artifact state), never a rejection. Exported for the round-2 real-child
+ * regression test — see {@link execCaptureCode}.
  */
-const defaultExecCapture = (
+export const defaultExecCapture = (
   file: string,
   args: string[],
   timeoutMs: number,
@@ -220,11 +242,8 @@ const defaultExecCapture = (
       args,
       { timeout: captureTimeoutMs, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024 },
       (err, stdout, stderr) => {
-        // A timeout kill reports `code: null` / `signal: 'SIGKILL'`, not a
-        // process exit code — the old `?? 127` fallback misreported that
-        // as "exited 127". `code: -1` is data the caller (fsIoViaPid1)
-        // recognizes as a timeout rather than a real exit status.
-        if (err !== null && (err.killed === true || err.signal !== undefined)) {
+        const code = execCaptureCode(err);
+        if (code === -1) {
           resolve({
             stdout: String(stdout ?? ''),
             stderr: `timed out after ${captureTimeoutMs} ms`,
@@ -232,7 +251,6 @@ const defaultExecCapture = (
           });
           return;
         }
-        const code = err === null ? 0 : typeof err.code === 'number' ? err.code : 127;
         resolve({ stdout: String(stdout ?? ''), stderr: String(stderr ?? ''), code });
       },
     );

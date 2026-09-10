@@ -14,7 +14,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { createFakeProbeHost } from '../../../agent/health/fake-probe-host.js';
-import { CLEANUP_GRACE_MS, createRealProbeHost } from '../../../agent/health/probe-host.js';
+import {
+  CLEANUP_GRACE_MS,
+  createRealProbeHost,
+  defaultExecCapture,
+  execCaptureCode,
+} from '../../../agent/health/probe-host.js';
 import { PROBE_DIR_NAME } from '../../../lib/health/probe-types.js';
 
 const base = mkdtempSync(join(tmpdir(), 'xinas-probe-host-'));
@@ -658,5 +663,57 @@ describe('B01: fs_io delegated to a PID1 transient unit', () => {
     expect(r.ok).toBe(true);
     expect(spawned).toBe(0);
     expect(r.artifact?.path).toBe(join(mnt, PROBE_DIR_NAME, 'probe-run-1-add0add0add0add0'));
+  });
+});
+
+/**
+ * B01 review, round 2 — `execFile` sets `err.signal` to `null` (not
+ * `undefined`) on an ordinary non-zero exit; `@types/node` declares
+ * `signal?: NodeJS.Signals` without `null`, so `err.signal !== undefined`
+ * misclassified every such exit as a timeout. `execCaptureCode` is the pure
+ * classifier under test, independent of `execFile`'s own timing.
+ */
+describe('execCaptureCode (Task 3 review, round 2)', () => {
+  it('null (a clean exit) is code 0', () => {
+    expect(execCaptureCode(null)).toBe(0);
+  });
+
+  it('an ordinary non-zero exit reports signal: null, not undefined — this is the bug this fix closes', () => {
+    const err = Object.assign(new Error('Command failed'), {
+      code: 1,
+      signal: null,
+      killed: false,
+    });
+    expect(execCaptureCode(err)).toBe(1);
+  });
+
+  it('killed: true with a SIGKILL signal is the -1 (timeout/killed) sentinel', () => {
+    const err = Object.assign(new Error('Command failed'), {
+      code: null,
+      signal: 'SIGKILL',
+      killed: true,
+    });
+    expect(execCaptureCode(err)).toBe(-1);
+  });
+
+  it('a string signal alone (killed: false) is still the -1 sentinel', () => {
+    const err = Object.assign(new Error('Command failed'), {
+      code: null,
+      signal: 'SIGTERM',
+      killed: false,
+    });
+    expect(execCaptureCode(err)).toBe(-1);
+  });
+
+  it('a spawn-level string code (no numeric exit) falls back to 127', () => {
+    const err = Object.assign(new Error('spawn systemd-run ENOENT'), { code: 'ENOENT' });
+    expect(execCaptureCode(err)).toBe(127);
+  });
+});
+
+describe('defaultExecCapture (Task 3 review, round 2)', () => {
+  it('a real child exiting non-zero reports its own code, stdout and stderr — not a timeout', async () => {
+    const r = await defaultExecCapture('/bin/sh', ['-c', 'echo out; echo err 1>&2; exit 3'], 5_000);
+    expect(r).toEqual({ stdout: 'out\n', stderr: 'err\n', code: 3 });
   });
 });
