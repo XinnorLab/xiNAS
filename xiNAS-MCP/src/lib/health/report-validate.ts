@@ -184,10 +184,12 @@ const SCOPE_EXCLUSION_RE = /out of scope|not in scope|scope exclusion|excluded f
  * over the *effective* outcomes: an uncited `not_applicable` becomes
  * `unknown` (step 3), a `no_source` row may not claim a measurement (step
  * 7), stale evidence cannot back a `pass` (step 8), and the evidence floor
- * (steps 5–6) raises whatever is left below what the raw reports say. Every
- * change is listed in `adjustments`; every one but step 3's is also a
- * status error, since step 3's rewrite already shows up as a verdict
- * mismatch.
+ * (steps 5–6) raises whatever is left below what the raw reports say. A
+ * catalog row the report left out entirely is then synthesized at its floor
+ * when that floor is `warn` or worse, so that omitting a row is no cheaper
+ * than over-claiming it. Every change is listed in `adjustments`; every one
+ * but step 3's is also a status error, since step 3's rewrite already shows
+ * up as a verdict mismatch.
  */
 export function computeVerdict(
   checks: ReportCheck[],
@@ -287,6 +289,37 @@ export function computeVerdict(
     return { ...c, outcome, severity };
   });
 
+  // step 5, the omission direction: leaving the damning row out of
+  // `checks[]` is not a way around its floor. A row the report does not
+  // carry, whose own evidence says `warn` or worse, is synthesized at the
+  // floor and takes part in the verdict; `not_checked[]` does not excuse it
+  // — the evidence is in the report. (A level-1 floor changes nothing: a
+  // missing row already counts as unknown.)
+  const listed = new Set(checks.map((c) => c.id));
+  for (const [id, floor] of input.floors) {
+    if (listed.has(id) || floor.level < 2) continue;
+    const forced = outcomeAt(floor.level);
+    errors.push(
+      `check '${id}' is missing from checks[] but the evidence floor is '${forced.outcome}' (${floor.detail})`,
+    );
+    adjustments.push({
+      id,
+      from: 'unknown',
+      to: forced.outcome,
+      severity: forced.severity,
+      reason: 'floor',
+      detail: floor.detail,
+    });
+    effective.push({
+      id,
+      outcome: forced.outcome,
+      severity: forced.severity,
+      reason: `synthesized from the evidence floor: ${floor.detail}`,
+      mandatory: mandatoryIds.has(id),
+      evidence_refs: [],
+    });
+  }
+
   const byId = new Map(effective.map((c) => [c.id, c]));
   const ids = [...mandatoryIds];
   const coveredCount = ids.filter((id) => {
@@ -340,18 +373,30 @@ export function validateReportShape(
   input?: ShapeInput,
 ): ShapeVerdict {
   const schema_errors = schemaErrorsOf(report);
-  if (schema_errors.length > 0) {
-    return {
-      schema_errors,
-      reference_errors: [],
-      computed: null,
-      status_errors: [],
-      mandatory_ids: [],
-      rewritten_to_unknown: [],
-      adjustments: [],
-    };
-  }
-  const r = report as AgenticReport;
+  if (schema_errors.length > 0) return unevaluable(schema_errors);
+  return evaluateParsed(report as AgenticReport, catalog, input);
+}
+
+/** A report the schema rejected: nothing downstream may read it. */
+function unevaluable(schema_errors: SchemaError[]): ShapeVerdict {
+  return {
+    schema_errors,
+    reference_errors: [],
+    computed: null,
+    status_errors: [],
+    mandatory_ids: [],
+    rewritten_to_unknown: [],
+    adjustments: [],
+  };
+}
+
+/** References and the §11.3 verdict over a report the schema already accepted. */
+function evaluateParsed(
+  r: AgenticReport,
+  catalog: AgenticCatalog,
+  input?: ShapeInput,
+): ShapeVerdict {
+  const schema_errors: SchemaError[] = [];
   const scopeKind = r.scope.kind;
   const catalogIds = new Set(catalog.checks.map((c) => c.id));
   const mandatory_ids = catalog.checks
@@ -449,16 +494,25 @@ export function validateReportShape(
 }
 
 /**
- * The api's composition: shape, references and the verdict with the floor
- * the ledger side allows (`floorInputFrom`) and the absences the run's
- * ledger entry proved (`null` when there is no entry). The one place a
- * caller with a ledger should go through (validation F01).
+ * What the ledger says about a report the schema accepted: the floor input
+ * `floorInputFrom` derives from the integrity verdict, and the absences the
+ * run's ledger entry proved (`null` when there is no entry).
+ */
+export type LedgerFacts = (report: AgenticReport) => ShapeInput;
+
+/**
+ * The api's composition and the single place the schema is validated for a
+ * caller with a ledger (validation F01): the schema runs once, and
+ * `ledgerFacts` is called only with a report it accepted — so the caller
+ * may read `run` and `raw_reports` there without checking the shape again.
  */
 export function evaluateReport(
   report: unknown,
   catalog: AgenticCatalog,
-  floorInput: FloorInput,
-  provenAbsent: readonly string[] | null,
+  ledgerFacts: LedgerFacts,
 ): ShapeVerdict {
-  return validateReportShape(report, catalog, { floorInput, provenAbsent });
+  const schema_errors = schemaErrorsOf(report);
+  if (schema_errors.length > 0) return unevaluable(schema_errors);
+  const r = report as AgenticReport;
+  return evaluateParsed(r, catalog, ledgerFacts(r));
 }

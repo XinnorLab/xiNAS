@@ -61,13 +61,7 @@ import type { Warning } from '../envelope.js';
 import { ApiException } from '../errors.js';
 import { gatherHealthFacts } from '../handlers/health-facts.js';
 import { getOrNull, sendOk } from '../handlers/reads.js';
-import {
-  type AgenticReport,
-  REPORT_SCHEMA,
-  evaluateReport,
-  isReportValid,
-  schemaErrorsOf,
-} from '../../lib/health/report-validate.js';
+import { REPORT_SCHEMA, evaluateReport, isReportValid } from '../../lib/health/report-validate.js';
 import { parseMaxAgeS, runBaseline } from '../health/baseline.js';
 import { buildHealthContext, runUnknownWarning } from '../health/context.js';
 import {
@@ -77,7 +71,7 @@ import {
   floorInputFrom,
   runIdentityErrors,
 } from '../health/report-integrity.js';
-import { digestOf } from '../health/run-ledger.js';
+import { type RunEntry, digestOf } from '../health/run-ledger.js';
 import { SERVER_INFO } from '../mcp/discover.js';
 import { queueConfirmationEvent } from '../mcp/confirmation/audit.js';
 import { argumentsHash } from '../mcp/confirmation/policy.js';
@@ -450,37 +444,46 @@ export function healthRouter(ctx: ApiContext): Router {
       if (body === null || typeof body !== 'object' || Array.isArray(body)) {
         throw new ApiException('INVALID_ARGUMENT', 'the body must be the report object');
       }
-      // Integrity comes first: what the ledger says about the raw reports is
-      // what the evidence floor (§11.3 steps 5–6) is allowed to read.
-      const report = body as AgenticReport;
-      const schemaOk = schemaErrorsOf(body).length === 0;
-      const runId = schemaOk ? report.run.run_id : null;
-      const entry =
-        runId === null ? null : (ctx.healthPrompt?.ledger.get(runId, rc.principal) ?? null);
-      const raw = schemaOk ? report.raw_reports : [];
-      const integrity: Integrity = entry === null ? UNVERIFIABLE : checkIntegrity(entry, raw);
+      // The schema runs once, inside `evaluateReport`, which calls back here
+      // only for a report it accepted: what the ledger says about the raw
+      // reports is what the evidence floor (§11.3 steps 5–6) may read.
+      const ledger: {
+        runId: string | null;
+        entry: RunEntry | null;
+        run: { principal: string; versions: Record<string, unknown> } | null;
+        integrity: Integrity;
+      } = { runId: null, entry: null, run: null, integrity: UNVERIFIABLE };
+      const shape = evaluateReport(body, AGENTIC_CATALOG, (report) => {
+        const entry = ctx.healthPrompt?.ledger.get(report.run.run_id, rc.principal) ?? null;
+        const integrity: Integrity =
+          entry === null ? UNVERIFIABLE : checkIntegrity(entry, report.raw_reports);
+        ledger.runId = report.run.run_id;
+        ledger.entry = entry;
+        ledger.run = report.run;
+        ledger.integrity = integrity;
+        return {
+          floorInput: floorInputFrom(integrity, report.raw_reports),
+          provenAbsent: entry?.declared_absent ?? null,
+        };
+      });
+      const entry = ledger.entry;
+      const integrity = ledger.integrity;
       const warnings: Warning[] =
-        runId !== null && entry === null ? [runUnknownWarning(runId)] : [];
-      const shape = evaluateReport(
-        body,
-        AGENTIC_CATALOG,
-        floorInputFrom(integrity, raw),
-        entry?.declared_absent ?? null,
-      );
+        ledger.runId !== null && entry === null ? [runUnknownWarning(ledger.runId)] : [];
       // F03: a run this principal did not mint is RUN_UNKNOWN above and never
       // reaches here, so identity is only ever checked against the caller's
       // own run.
       const status_errors =
-        entry === null
+        entry === null || ledger.run === null
           ? shape.status_errors
-          : [...shape.status_errors, ...runIdentityErrors(entry, report.run)];
+          : [...shape.status_errors, ...runIdentityErrors(entry, ledger.run)];
       const valid = isReportValid({ ...shape, status_errors }, integrity.status);
       sendOk(
         req,
         res,
         {
           valid,
-          run_id: runId,
+          run_id: ledger.runId,
           schema_errors: shape.schema_errors,
           reference_errors: shape.reference_errors,
           integrity,

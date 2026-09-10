@@ -95,17 +95,28 @@ interface RawIndex {
   probe: Array<{ probe: string; ok: boolean; cleanupFailed: boolean }>;
 }
 
+/**
+ * `raw_reports[].report` is `true` in the report schema — any JSON value
+ * passes. Parsing is therefore total: a shape this index cannot read
+ * contributes nothing, never an exception (a crash here would be a 500 on
+ * `POST /health/report/validate` instead of a verdict).
+ */
+const asRecord = (v: unknown): Record<string, unknown> | null =>
+  v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+
 /** Flatten the usable raw reports into the three shapes the input families read. */
 function indexRaw(raw: RawReport[], usable: ReadonlySet<number>): RawIndex {
   const out: RawIndex = { mcp: [], baseline: [], probe: [] };
   raw.forEach((r, i) => {
     if (!usable.has(i)) return;
-    const body = r.report as Record<string, unknown> | null;
-    if (body === null || typeof body !== 'object') return;
-    if (r.tool === 'health.check' && Array.isArray(body.checks)) {
-      for (const c of body.checks as Array<Record<string, unknown>>) {
-        const collection = (c.evidence as { collection?: { status?: unknown } } | undefined)
-          ?.collection?.status;
+    const body = asRecord(r.report);
+    if (body === null) return;
+    if (r.tool === 'health.check') {
+      if (!Array.isArray(body.checks)) return;
+      for (const item of body.checks as unknown[]) {
+        const c = asRecord(item);
+        if (c === null) continue;
+        const collection = asRecord(asRecord(c.evidence)?.collection)?.status;
         out.mcp.push({
           id: String(c.id),
           status: String(c.status),
@@ -113,25 +124,22 @@ function indexRaw(raw: RawReport[], usable: ReadonlySet<number>): RawIndex {
         });
       }
     } else if (r.tool === 'health.baseline') {
-      const engine = body.report as Record<string, unknown> | null | undefined;
-      const ok =
-        (body.collection as { status?: unknown } | undefined)?.status === 'success' &&
-        engine !== null &&
-        engine !== undefined;
-      const rows = ok ? ((engine?.checks as Array<Record<string, unknown>> | undefined) ?? []) : [];
-      out.baseline.push({
-        ok,
-        rows: rows.map((x) => ({
-          section: norm(x.section),
-          name: String(x.name),
-          status: String(x.status),
-        })),
-      });
+      const engine = asRecord(body.report);
+      const ok = asRecord(body.collection)?.status === 'success' && engine !== null;
+      const rows: Array<{ section: string; name: string; status: string }> = [];
+      if (ok && engine !== null && Array.isArray(engine.checks)) {
+        for (const item of engine.checks as unknown[]) {
+          const x = asRecord(item);
+          if (x === null) continue;
+          rows.push({ section: norm(x.section), name: String(x.name), status: String(x.status) });
+        }
+      }
+      out.baseline.push({ ok, rows });
     } else if (r.tool === 'health.probe.run') {
       out.probe.push({
         probe: String(body.probe),
         ok: body.ok === true,
-        cleanupFailed: (body.cleanup as { status?: unknown } | undefined)?.status === 'failed',
+        cleanupFailed: asRecord(body.cleanup)?.status === 'failed',
       });
     }
   });

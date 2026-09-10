@@ -791,6 +791,12 @@ describe.sequential('e2e: S7 health/drift/support (fixture mode)', () => {
       AGENTIC_CATALOG,
       { usableRawReports: new Set([0]), compromisedTools: new Set() },
     );
+    // Not self-consistency: scenario 2's netplan drift is still in place, so
+    // this run's own quick report says `drift.netplan: degraded`, and
+    // HC-02.drift consumes it — that row must come back fail/degraded.
+    const rawChecks = raw.checks as Array<{ id: string; status: string }>;
+    expect(rawChecks.find((c) => c.id === 'drift.netplan')?.status).toBe('degraded');
+    expect(floors.get('HC-02.drift')?.level).toBe(3);
     const honest = mandatory.map((id) => {
       const floor = floors.get(id);
       const forced =
@@ -805,6 +811,10 @@ describe.sequential('e2e: S7 health/drift/support (fixture mode)', () => {
         mandatory: true,
         evidence_refs: ['ev-1'],
       };
+    });
+    expect(honest.find((c) => c.id === 'HC-02.drift')).toMatchObject({
+      outcome: 'fail',
+      severity: 'degraded',
     });
     const covered = honest.every((c) => c.outcome !== 'unknown');
     const coverage_status = covered
@@ -854,9 +864,15 @@ describe.sequential('e2e: S7 health/drift/support (fixture mode)', () => {
       integrity: { status: 'verified' },
       computed: { health_status, coverage_status },
     });
-    expect(
-      (overclaimed.body.result as { adjustments: unknown[] }).adjustments.length,
-    ).toBeGreaterThan(0);
+    expect((overclaimed.body.result as { adjustments: unknown[] }).adjustments).toContainEqual(
+      expect.objectContaining({
+        id: 'HC-02.drift',
+        from: 'pass',
+        to: 'fail',
+        severity: 'degraded',
+        reason: 'floor',
+      }),
+    );
     const tampered = await requestJson(
       apiSockPath,
       '/api/v1/health/report/validate',

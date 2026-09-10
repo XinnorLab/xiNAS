@@ -437,6 +437,72 @@ describe('computeVerdict with floors (spec §11.3 steps 3, 5–8)', () => {
     expect(v.health_status).toBe('ok');
   });
 
+  it('F01: a mandatory row missing from checks[] cannot dodge its floor', () => {
+    const floors = new Map([
+      ['HC-03.arrays', { level: 4 as const, detail: 'health.check xiraid.arrays: critical' }],
+    ]);
+    const checks = allPass.filter((c) => c.id !== 'HC-03.arrays');
+    const v = computeVerdict(checks, mandatory, [], 'node', AGENTIC_CATALOG, {
+      ...noFloors,
+      floors,
+    });
+    expect(v.adjustments).toEqual([
+      {
+        id: 'HC-03.arrays',
+        from: 'unknown',
+        to: 'fail',
+        severity: 'critical',
+        reason: 'floor',
+        detail: 'health.check xiraid.arrays: critical',
+      },
+    ]);
+    expect(v.errors).toEqual([
+      "check 'HC-03.arrays' is missing from checks[] but the evidence floor is 'fail' (health.check xiraid.arrays: critical)",
+    ]);
+    expect(v.health_status).toBe('critical');
+    // the synthesized row is an outcome in the covered set
+    expect(v.coverage_status).toBe('complete');
+  });
+
+  it('a non-mandatory row missing from checks[] is synthesized too', () => {
+    const floors = new Map([
+      ['HC-12.active-probe', { level: 3 as const, detail: 'health.probe.run fs_io: failed' }],
+    ]);
+    const v = computeVerdict(allPass, mandatory, [], 'node', AGENTIC_CATALOG, {
+      ...noFloors,
+      floors,
+    });
+    expect(v.adjustments).toEqual([
+      {
+        id: 'HC-12.active-probe',
+        from: 'unknown',
+        to: 'fail',
+        severity: 'degraded',
+        reason: 'floor',
+        detail: 'health.probe.run fs_io: failed',
+      },
+    ]);
+    expect(v.health_status).toBe('degraded');
+    expect(v.coverage_status).toBe('complete');
+  });
+
+  it('an unknown floor on a missing row changes nothing (the row is already unknown)', () => {
+    const floors = new Map([
+      ['HC-03.arrays', { level: 1 as const, detail: 'health.check xiraid.arrays: skipped' }],
+    ]);
+    const v = computeVerdict(
+      allPass.filter((c) => c.id !== 'HC-03.arrays'),
+      mandatory,
+      [],
+      'node',
+      AGENTIC_CATALOG,
+      { ...noFloors, floors },
+    );
+    expect(v.adjustments).toEqual([]);
+    expect(v.errors).toEqual([]);
+    expect(v).toMatchObject({ health_status: 'unknown', coverage_status: 'partial' });
+  });
+
   it('stale evidence cannot back a pass', () => {
     const checks = allPass.map((c) =>
       c.id === 'HC-05.filesystems' ? row(c.id, 'pass', { evidence_refs: ['ev-old'] }) : c,

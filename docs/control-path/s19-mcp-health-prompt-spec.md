@@ -1267,12 +1267,20 @@ catalog, not from the report's own `mandatory` flag, which must agree):
    the floor is listed under `adjustments` (`reason: floor`) and is a
    status error. A validly cited `not_applicable` row (step 3) waives an
    `unknown` floor — absence explains a skipped input — but not a `warn`
-   or `fail` floor.
+   or `fail` floor. A catalog row ABSENT from `checks[]` whose floor is
+   `warn` or worse is synthesized at that floor (`adjustments` with
+   `from: unknown`, and a status error naming the missing row), counts in
+   the verdict like any other row, and is covered iff it is mandatory:
+   dropping the damning row is no cheaper than over-claiming it, and
+   listing it under `not_checked[]` does not excuse it — the evidence is
+   in the report.
 6. **Compromised sources** (validation F01b). A ledger tool whose latest
    row is missing from `raw_reports` (`integrity.omitted`) or present but
    tampered (`mismatch`) makes every input of that tool contribute
    `unknown`: a check fed by evidence the model hid or edited cannot be
-   `pass` or `not_applicable`.
+   `pass` or `not_applicable`. A validly cited `not_applicable` (step 3)
+   still waives this level-1 floor; the report is invalid anyway, because
+   a compromised source is an integrity `mismatch`.
 7. **No source** (CHECK-01; validation F02). A catalog row with
    `no_source: true` may only be `unknown` or `not_applicable`; `pass`,
    `warn` or `fail` is rewritten to `unknown` (`reason: no_source`, a

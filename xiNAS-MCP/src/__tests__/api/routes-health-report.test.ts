@@ -226,6 +226,83 @@ describe('health report schema and validation (S19c)', () => {
     expect(res.body.result.valid).toBe(false);
   });
 
+  it('F01: a row dropped from checks[] does not dodge its floor, and not_checked does not excuse it', async () => {
+    setup.state.kv.put('/xinas/v1/observed/XiraidArray/arr-data', {
+      kind: 'XiraidArray',
+      id: 'arr-data',
+      spec: {},
+      status: { state: 'degraded' },
+    });
+    const { runId, raw, identity } = await runAndReport();
+    const res = await validate(
+      honestReport(runId, raw, identity, {
+        health_status: 'unknown',
+        coverage_status: 'partial',
+        checks: mandatoryNode
+          .filter((id) => id !== 'HC-03.arrays')
+          .map((id) =>
+            checkRow(id, {
+              outcome: FLOORED[id]?.outcome ?? 'pass',
+              severity: FLOORED[id]?.severity ?? null,
+            }),
+          ),
+        not_checked: [{ check_id: 'HC-03.arrays', reason: 'left out of the report' }],
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.result.adjustments).toContainEqual(
+      expect.objectContaining({
+        id: 'HC-03.arrays',
+        from: 'unknown',
+        to: 'fail',
+        severity: 'critical',
+        reason: 'floor',
+      }),
+    );
+    expect(res.body.result.status_errors).toContainEqual(
+      expect.stringContaining(
+        "check 'HC-03.arrays' is missing from checks[] but the evidence floor is 'fail'",
+      ),
+    );
+    expect(res.body.result.computed).toEqual({
+      health_status: 'critical',
+      coverage_status: 'partial',
+    });
+    expect(res.body.result.valid).toBe(false);
+  });
+
+  it('a raw report shape the schema permits but the floor cannot read is a verdict, not a 500', async () => {
+    const { raw, identity } = await runAndReport();
+    // `raw_reports[].report` is unconstrained by the schema; an unknown run
+    // makes integrity `unverifiable`, so the floor reads this body as is.
+    const malformed = { profile: 'quick', overall: 'ok', checks: [null] };
+    const res = await validate(
+      buildReport(
+        '00000000-0000-4000-8000-000000000000',
+        raw,
+        {
+          raw_reports: [
+            {
+              tool: 'health.check',
+              args: { profile: 'quick' },
+              collected_at: T0,
+              digest: digestOf(malformed),
+              report: malformed,
+            },
+          ],
+        },
+        identity,
+      ),
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.result.computed).toEqual({
+      health_status: 'ok',
+      coverage_status: 'complete',
+    });
+    expect(res.body.result.adjustments).toEqual([]);
+    expect(res.body.result.valid).toBe(true);
+  });
+
   it('F01b: dropping every raw report is an omission, and stale evidence cannot carry a pass', async () => {
     const { runId, raw, identity } = await runAndReport();
     const res = await validate(
@@ -459,6 +536,30 @@ describe('health report schema and validation (S19c)', () => {
       "health_status 'ok' does not match computed 'critical'",
     ]);
     expect(res.body.result.integrity.status).toBe('verified');
+  });
+
+  it('a row the model declares worse than its floor stands, and the computed verdict follows it', async () => {
+    const { runId, raw, identity } = await runAndReport();
+    const report = honestReport(runId, raw, identity, { health_status: 'degraded' });
+    const row = (report.checks as Array<{ id: string; outcome: string; severity: string | null }>) //
+      .find((c) => c.id === 'HC-05.filesystems');
+    expect(row?.outcome).toBe('unknown'); // its raw input is `skipped`: the floor is unknown
+    if (row !== undefined) {
+      row.outcome = 'fail';
+      row.severity = 'critical';
+    }
+    const res = await validate(report);
+    // a floor is a floor, not a ceiling: nothing is lowered back
+    expect(res.body.result.adjustments).toEqual([]);
+    expect(res.body.result.rewritten_to_unknown).toEqual([]);
+    expect(res.body.result.computed).toEqual({
+      health_status: 'critical',
+      coverage_status: 'partial',
+    });
+    expect(res.body.result.status_errors).toEqual([
+      "health_status 'degraded' does not match computed 'critical'",
+    ]);
+    expect(res.body.result.valid).toBe(false);
   });
 
   it('F03: another principal cannot validate against, or append to, a run it did not start', async () => {

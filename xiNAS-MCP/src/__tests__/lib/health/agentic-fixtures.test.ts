@@ -263,14 +263,16 @@ function evaluate(sc: Scenario, source: Json = sc.report): Evaluated {
   // only proof for a `not_applicable` row (§11.3 step 3).
   ledger.setDeclaredAbsent(entry.run_id, sc.declared_absent ?? []);
   const report = resolveReport(sc, entry, source);
-  const raw = report.raw_reports as Parameters<typeof checkIntegrity>[1];
-  const checked = checkIntegrity(entry, raw);
-  const shape = evaluateReport(
-    report,
-    AGENTIC_CATALOG,
-    floorInputFrom(checked, raw),
-    entry.declared_absent,
-  );
+  let checked: Integrity = UNVERIFIABLE;
+  // The same composition the route uses: one schema pass, then the ledger
+  // facts for the report it accepted (§11.3 steps 5–6).
+  const shape = evaluateReport(report, AGENTIC_CATALOG, (r) => {
+    checked = checkIntegrity(entry, r.raw_reports);
+    return {
+      floorInput: floorInputFrom(checked, r.raw_reports),
+      provenAbsent: entry.declared_absent,
+    };
+  });
   const integrity = shape.computed === null ? UNVERIFIABLE : checked;
   return { entry, report, shape, integrity, valid: isReportValid(shape, integrity.status) };
 }

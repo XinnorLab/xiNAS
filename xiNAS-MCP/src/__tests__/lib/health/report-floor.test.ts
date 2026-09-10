@@ -180,6 +180,70 @@ describe('computeFloors (spec §11.3 steps 5–6)', () => {
   });
 });
 
+/**
+ * `raw_reports[].report` is `true` in the schema: every shape below passes
+ * Ajv, so the floor parser must be total. A crash here is a 500 on
+ * `POST /health/report/validate` instead of a verdict (fix round 1, F01).
+ */
+describe('computeFloors over raw JSON the schema permits', () => {
+  const floorsOf = (raw: unknown[]) =>
+    computeFloors(report(raw), AGENTIC_CATALOG, {
+      usableRawReports: all(raw.length),
+      compromisedTools: new Set(),
+    });
+  const baseline = (body: unknown) => ({
+    tool: 'health.baseline',
+    args: { profile: 'standard', max_age_s: 0 },
+    collected_at: T,
+    digest: `sha256:${'4'.repeat(64)}`,
+    report: body,
+  });
+
+  it('skips a null element in a raw health.check checks[]', () => {
+    const bad = [null] as unknown as Array<Record<string, unknown>>;
+    expect(floorsOf([quick(bad)]).size).toBe(0);
+    // the sound rows next to it are still read
+    const mixed = [
+      null,
+      { id: 'xiraid.arrays', status: 'critical', evidence: { collection: { status: 'success' } } },
+    ] as unknown as Array<Record<string, unknown>>;
+    expect(floorsOf([quick(mixed)]).get('HC-03.arrays')?.level).toBe(4);
+  });
+
+  it('skips a baseline whose checks is not an array', () => {
+    const floors = floorsOf([
+      baseline({ collection: { status: 'success' }, report: { checks: 'oops' } }),
+    ]);
+    expect(floors.size).toBe(0);
+  });
+
+  it('skips a null baseline row', () => {
+    const floors = floorsOf([
+      baseline({ collection: { status: 'success' }, report: { checks: [null] } }),
+    ]);
+    expect(floors.size).toBe(0);
+  });
+
+  it('treats a non-object evidence, collection, report or cleanup as absent', () => {
+    const odd = [{ id: 'xiraid.arrays', status: 'critical', evidence: 'nope' }] as unknown as Array<
+      Record<string, unknown>
+    >;
+    expect(floorsOf([quick(odd)]).get('HC-03.arrays')?.level).toBe(4);
+    expect(floorsOf([baseline('nope')]).size).toBe(0);
+    expect(
+      floorsOf([baseline({ collection: 'nope', report: null })]).get('HC-04.drives')?.level,
+    ).toBe(1);
+    const probe = {
+      tool: 'health.probe.run',
+      args: { probe: 'fs_io', target: 'fs-1', timeout_s: 20 },
+      collected_at: T,
+      digest: `sha256:${'5'.repeat(64)}`,
+      report: { probe: 'fs_io', ok: true, cleanup: 'nope' },
+    };
+    expect(floorsOf([probe]).size).toBe(0);
+  });
+});
+
 describe('levelOf / outcomeAt (the §11.3 step 5 ordering)', () => {
   it('orders pass < unknown < warn = fail/warning < fail/degraded < fail/critical', () => {
     expect(levelOf('pass', null)).toBe(0);
