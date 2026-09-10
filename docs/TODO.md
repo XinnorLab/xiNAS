@@ -1020,3 +1020,22 @@ model would test nothing.
 **What done looks like.** A `captured/` subset of fixtures per host and
 release (`ac-NN-<host>-<n>.json`), produced by the runbook procedure and
 committed with the release notes; the runner already accepts them.
+
+## Health — the fs_io PID1 delegation is not yet proven on hardware
+
+*Deferred 2026-09-10, from the S19 validation remediation
+(`fix/s19-validation-findings`); spec §9.3 "Execution boundary", B01.*
+
+**What is missing.** The `systemd-run` delegation of `fs_io` was designed
+from the `ReadWritePaths` semantics observed on xinas-box (systemd 255) and
+is covered by unit and e2e tests with a stubbed `systemd-run`; no node has
+run the built code yet.
+
+**What the code does instead.** Nothing different — the delegation is the
+shipped path; a `systemd-run` failure is an honest `FSIO_HELPER_FAILED`
+outcome with `cleanup: failed`, never a false `clean`.
+
+**Why it was cut.** No installed 3.14 node existed on 2026-09-10.
+
+**Done looks like.** The two B01 rows of `hardware-smoke-runbook.md` ticked
+on a real node and this entry deleted.

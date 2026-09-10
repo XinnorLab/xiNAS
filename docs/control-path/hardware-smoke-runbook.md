@@ -160,6 +160,21 @@ On a scratch node (or after `./uninstall.sh`):
   `decision: APPLY` → the same result plus `confirmation_id`; the record
   reads `consumed` with `consumed_task_id: probe:<uuid>`. Run two probes
   concurrently: the second answers `409 CONFLICT` (`PROBE_IN_PROGRESS`).
+- [ ] Validation B01 (2026-09-10): on the installed node,
+  `nsenter -t $(systemctl show -p MainPID --value xinas-agent) -m -- findmnt -no TARGET,OPTIONS <mountpoint>`
+  shows `ro` (the agent's own namespace) while `findmnt` on the host
+  shows `rw`; `POST /health/probe {probe: fs_io}` nevertheless returns
+  `ok: true`, `cleanup.status: clean`, and `journalctl -u 'xinas-health-fsio-*'`
+  shows one transient unit per probe, `ProtectSystem=strict`,
+  `ReadWritePaths=<mountpoint>`, exited 0. `GET /health?profile=deep`
+  (operator, `mcp.allow_apply: true`) reports `filesystem.io: ok` on the
+  same node — before this fix it was `critical` with `EROFS`.
+- [ ] Validation F05/F08 (2026-09-10): start `GET /health?profile=deep` and,
+  while it runs, `POST /health/probe {probe: nfs_loopback}`: the second
+  answers `409 CONFLICT` (`PROBE_IN_PROGRESS`). Stop `nfs-server` and run
+  `POST /health/probe {probe: nfs_loopback}`: `ok: false`, the per-run
+  directory under `/run/xinas/health-probe/` is gone or reported under
+  `cleanup.detail`, and nothing under the export path changed.
 - [ ] S19b prompt, from a real MCP client (Claude Desktop / Inspector) on
   both eras: `server/discover` (modern) and `initialize` (legacy)
   advertise `prompts: { listChanged: false }`; `prompts/list` shows

@@ -117,7 +117,7 @@ subagents in that order; Task 8 runs last.
 **Interfaces:**
 - Produces: `rdmaLinkShow()` REJECTS on any non-zero exit (an `Error` with `code: 'ENOENT'` for exit 127, `code: 'EPERM'` when the output says "Operation not permitted"/"Permission denied", else `code: 'EXIT_<n>'`); `parseRdmaLinks()` throws `ProbeCollectionError('error', 'PARSE', …)` for a non-array; `makeDeepProbeRunner` rethrows an inventory failure as `ProbeCollectionError('error', 'INVENTORY_UNAVAILABLE', …)` so the whole `probes` section is `status: 'error'`.
 
-- [ ] **Step 1: Amend the spec first.** In
+- [x] **Step 1: Amend the spec first.** In
   `docs/control-path/s19-mcp-health-prompt-spec.md` §7.1, right after the
   status-assignment table, add:
 
@@ -140,7 +140,7 @@ subagents in that order; Task 8 runs last.
   row, change "fresh rdma links" to "fresh rdma links (a refused or
   failed `rdma` call is a typed failure, never an empty list)".
 
-- [ ] **Step 2: Write the failing tests** (append to
+- [x] **Step 2: Write the failing tests** (append to
   `src/__tests__/agent/rpc/health-probe.test.ts`; the file already imports
   `makeHealthProbeHandler`, `makeDeepProbeRunner` and `rdmaLiveCheck` /
   `filesystemIoCheck` may need adding from `../../../lib/health/standard.js`):
@@ -211,12 +211,12 @@ it('rdmaLinkShow rejects on a non-zero exit that is not 127', async () => {
 });
 ```
 
-- [ ] **Step 3: Run the tests to verify they fail**
+- [x] **Step 3: Run the tests to verify they fail**
 
 Run: `npx vitest run src/__tests__/agent/rpc/health-probe.test.ts src/__tests__/agent/net/host.test.ts`
 Expected: the four F04 cases FAIL (`status: 'success'` where a failure is expected), the rest pass.
 
-- [ ] **Step 4: Implement.** In `src/agent/net/host.ts` replace `rdmaLinkShow`:
+- [x] **Step 4: Implement.** In `src/agent/net/host.ts` replace `rdmaLinkShow`:
 
 ```ts
     async rdmaLinkShow(): Promise<string> {
@@ -236,7 +236,7 @@ Expected: the four F04 cases FAIL (`status: 'success'` where a failure is expect
     },
 ```
 
-  Update the interface comment: `/** \`rdma link show -j\` JSON text; rejects on failure (ENOENT = absent, EPERM = refused, EXIT_<n> otherwise). */`.
+  Update the interface comment: ``/** `rdma link show -j` JSON text; rejects on failure (ENOENT = absent, EPERM = refused, EXIT_<n> otherwise). */``.
 
   In `src/agent/rpc/methods/health-probe.ts`:
 
@@ -275,12 +275,12 @@ export function parseRdmaLinks(raw: string): RdmaLink[] {
 
   Update the `HealthProbeDeps.rdmaLinkShow` doc comment to "Rejects on failure; '' = no links".
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `npx vitest run src/__tests__/agent/rpc/health-probe.test.ts src/__tests__/agent/net/host.test.ts src/__tests__/lib/health/standard.test.ts`
 Expected: PASS.
 
-- [ ] **Step 6: Lint, then commit** (message file via Write):
+- [x] **Step 6: Lint, then commit** (message file via Write):
 
 ```
 fix(health): typed collection never hides a failed source (F04)
@@ -314,7 +314,7 @@ Run: `git commit -F <msg> -- xiNAS-MCP/src/agent/net/host.ts xiNAS-MCP/src/agent
 **Interfaces:**
 - Produces: `RUN_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/` in `lib/health/probe-types.ts`; `health.probe.run` and `POST /health/probe` reject a non-matching `run_id` (`INVALID_PARAMS` / `INVALID_ARGUMENT`); the host itself refuses any `runId` outside `/^[A-Za-z0-9-]{1,64}$/` (`error.code: 'RUN_ID_INVALID'`, stage `lock`/`dir`); `ProbeCleanup.status` gains no new value — an unresolved state is `failed` with a `detail`.
 
-- [ ] **Step 1: Amend the spec first.** §9.2: after "Body: …" add
+- [x] **Step 1: Amend the spec first.** §9.2: after "Body: …" add
   "`run_id`, when present, MUST be a run id minted by `health.context`
   (a UUID); any other string is `INVALID_ARGUMENT` on the api and
   `INVALID_PARAMS` on the agent — the id is embedded in artifact names,
@@ -342,7 +342,7 @@ Run: `git commit -F <msg> -- xiNAS-MCP/src/agent/net/host.ts xiNAS-MCP/src/agent
   `INVALID_ARGUMENT`)" and `probe-smoke-1-<random>` with
   `probe-<run_id>-<random>`.
 
-- [ ] **Step 2: Write the failing tests.** Append to
+- [x] **Step 2: Write the failing tests.** Append to
   `src/__tests__/agent/health/probe-host.test.ts` (imports: add
   `existsSync`, `renameSync`, `statSync`, `lstatSync`, `chmodSync` from
   `node:fs`):
@@ -442,12 +442,12 @@ it('F06: run_id must be a health.context UUID', async () => {
   with the operator token and expects `400` with `error.code: 'INVALID_ARGUMENT'`
   and that the fake agent client was NOT called.
 
-- [ ] **Step 3: Run the tests to verify they fail**
+- [x] **Step 3: Run the tests to verify they fail**
 
 Run: `npx vitest run src/__tests__/agent/health/probe-host.test.ts src/__tests__/agent/rpc/health-probe-run.test.ts src/__tests__/api/routes-health-probe.test.ts`
 Expected: the six new cases FAIL.
 
-- [ ] **Step 4: Implement.** `src/lib/health/probe-types.ts`, add:
+- [x] **Step 4: Implement.** `src/lib/health/probe-types.ts`, add:
 
 ```ts
 /** A run id `health.context` minted (UUID v4 shape); validated before it can reach a path. */
@@ -457,8 +457,8 @@ export const ARTIFACT_RUN_RE = /^[A-Za-z0-9-]{1,64}$/;
 ```
 
   `src/agent/health/probe-host.ts`:
-  - add `import { lstat } from 'node:fs/promises'` / `stat` and `ARTIFACT_RUN_RE`;
-  - a helper at the top of each verb:
+- add `import { lstat } from 'node:fs/promises'` / `stat` and `ARTIFACT_RUN_RE`;
+- a helper at the top of each verb:
 
 ```ts
 const runIdInvalid = (runId: string | null, stage: ProbeStage): StageError | null =>
@@ -467,11 +467,11 @@ const runIdInvalid = (runId: string | null, stage: ProbeStage): StageError | nul
     : null;
 ```
 
-    In `fsIo`, before step 1: `const bad = runIdInvalid(opts.runId, 'dir'); if (bad !== null) throw bad;`
-    (inside the try, so it lands in `error` with `cleanup: not_needed`).
-    In `nfsLoopback`, before `if (loopbackBusy)`: the same with stage `'lock'`,
-    returning the same shape `refused()` returns but with the `RUN_ID_INVALID` error.
-  - dir trust (fsIo step 2), extend the condition:
+  In `fsIo`, before step 1: `const bad = runIdInvalid(opts.runId, 'dir'); if (bad !== null) throw bad;`
+  (inside the try, so it lands in `error` with `cleanup: not_needed`).
+  In `nfsLoopback`, before `if (loopbackBusy)`: the same with stage `'lock'`,
+  returning the same shape `refused()` returns but with the `RUN_ID_INVALID` error.
+- dir trust (fsIo step 2), extend the condition:
 
 ```ts
         if (
@@ -488,7 +488,7 @@ const runIdInvalid = (runId: string | null, stage: ProbeStage): StageError | nul
         }
 ```
 
-  - unlink (fsIo step 6): keep `fileIno`/`fileDev` from `fileStat` in outer scope (`let createdIno: { ino: number; dev: number } | undefined`), then:
+- unlink (fsIo step 6): keep `fileIno`/`fileDev` from `fileStat` in outer scope (`let createdIno: { ino: number; dev: number } | undefined`), then:
 
 ```ts
         if (filePath !== undefined) {
@@ -513,7 +513,7 @@ const runIdInvalid = (runId: string | null, stage: ProbeStage): StageError | nul
         }
 ```
 
-  - loopback cleanup: replace the whole `finally { if (mounted) {…} else {…} }` block:
+- loopback cleanup: replace the whole `finally { if (mounted) {…} else {…} }` block:
 
 ```ts
         } finally {
@@ -544,8 +544,8 @@ const runIdInvalid = (runId: string | null, stage: ProbeStage): StageError | nul
         }
 ```
 
-    with `let mountAttempted = false;` set to `true` immediately before the
-    `step('mount', …)` call, `mounted` removed, and:
+  with `let mountAttempted = false;` set to `true` immediately before the
+  `step('mount', …)` call, `mounted` removed, and:
 
 ```ts
 /** A directory is a mountpoint when its device differs from its parent's. */
@@ -559,10 +559,10 @@ async function isMountpoint(path: string): Promise<boolean> {
 }
 ```
 
-    Note: when `systemd-umount` was never attempted (lock refused) the
-    directory does not exist; keep the early-return paths as they are.
-    `rmdir(mnt)` on a directory that holds foreign data fails with
-    `ENOTEMPTY` → `cleanup: failed` with the errno, which is what F05 asserts.
+  Note: when `systemd-umount` was never attempted (lock refused) the
+  directory does not exist; keep the early-return paths as they are.
+  `rmdir(mnt)` on a directory that holds foreign data fails with
+  `ENOTEMPTY` → `cleanup: failed` with the errno, which is what F05 asserts.
 
   `src/agent/rpc/methods/health-probe-run.ts`: after computing `runId`:
 
@@ -584,12 +584,12 @@ async function isMountpoint(path: string): Promise<boolean> {
 
   (import `RUN_ID_RE` from `../../lib/health/probe-types.js`.)
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `npx vitest run src/__tests__/agent/health/probe-host.test.ts src/__tests__/agent/rpc/health-probe-run.test.ts src/__tests__/api/routes-health-probe.test.ts src/__tests__/api/routes-health-probe-budget.test.ts`
 Expected: PASS. If `routes-health-probe-budget.test.ts` used a non-UUID run id, switch it to the id `GET /health/context` returns.
 
-- [ ] **Step 6: Lint, then commit** with
+- [x] **Step 6: Lint, then commit** with
 
 ```
 fix(health): probe host never deletes foreign data (F05, F06, F07)
@@ -625,7 +625,7 @@ and the paths of every file in this task's list.
 **Interfaces:**
 - Produces: `ProbeHost.busy(): { probe: ProbeKind; path: string } | null`; `RealProbeHostDeps.fsIoMode?: 'in_process' | 'pid1'` (default `in_process`) and `execCapture?: (file, args, timeoutMs) => Promise<{ stdout: string; stderr: string; code: number }>`; `export const FSIO_CHILD = new URL('./fsio-child.js', import.meta.url)`; `runFsIoChild(argv: string[]): Promise<ProbeOutcome>` exported from `fsio-child.ts`; a refused probe is `error.code: 'PROBE_IN_PROGRESS'`, `stage: 'lock'` from either verb.
 
-- [ ] **Step 1: Amend the spec first.** §9.5 first bullet, replace the
+- [x] **Step 1: Amend the spec first.** §9.5 first bullet, replace the
   *Implemented (S19a)* note with: "*Implemented (S19a; amended 2026-09-10,
   validation F08):* the `ProbeHost` itself is the admission point — both
   verbs share one in-flight record, so the legacy deep path
@@ -667,7 +667,7 @@ and the paths of every file in this task's list.
   flight per node (any kind, deep included; the ProbeHost is the
   admission point)".
 
-- [ ] **Step 2: Write the failing tests.** `src/__tests__/agent/health/probe-host.test.ts`:
+- [x] **Step 2: Write the failing tests.** `src/__tests__/agent/health/probe-host.test.ts`:
 
 ```ts
 describe('F08: one active probe per node, any entry point', () => {
@@ -807,12 +807,12 @@ it('F08: a probe held by the host (deep path) refuses a direct probe with PROBE_
 });
 ```
 
-- [ ] **Step 3: Run the tests to verify they fail**
+- [x] **Step 3: Run the tests to verify they fail**
 
 Run: `npx vitest run src/__tests__/agent/health/ src/__tests__/agent/rpc/health-probe-run.test.ts`
 Expected: FAIL (`busy` is not a function; `fsIoMode` unknown; module `fsio-child` missing).
 
-- [ ] **Step 4: Implement.** `probe-host.ts`:
+- [x] **Step 4: Implement.** `probe-host.ts`:
   - interface:
 
 ```ts
@@ -844,8 +844,8 @@ export interface RealProbeHostDeps {
 export const FSIO_CHILD = new URL('./fsio-child.js', import.meta.url);
 ```
 
-  - inside `createRealProbeHost`: `let inFlight: { probe: ProbeKind; path: string } | null = null;`
-    and a wrapper used by both public verbs:
+- inside `createRealProbeHost`: `let inFlight: { probe: ProbeKind; path: string } | null = null;`
+  and a wrapper used by both public verbs:
 
 ```ts
   const admitted = async (
@@ -877,10 +877,10 @@ export const FSIO_CHILD = new URL('./fsio-child.js', import.meta.url);
   };
 ```
 
-    Rename the existing verb bodies to `fsIoInProcess(mountpoint, opts, hooks)`
-    and `nfsLoopbackInner(exportPath, opts)` (module-level functions taking
-    the deps they need, or closures inside `createRealProbeHost`), and
-    return:
+  Rename the existing verb bodies to `fsIoInProcess(mountpoint, opts, hooks)`
+  and `nfsLoopbackInner(exportPath, opts)` (module-level functions taking
+  the deps they need, or closures inside `createRealProbeHost`), and
+  return:
 
 ```ts
   return {
@@ -896,8 +896,8 @@ export const FSIO_CHILD = new URL('./fsio-child.js', import.meta.url);
   };
 ```
 
-    The `loopbackBusy` flag becomes redundant; remove it (the lock file stays).
-  - the delegate:
+  The `loopbackBusy` flag becomes redundant; remove it (the lock file stays).
+- the delegate:
 
 ```ts
   async function fsIoViaPid1(mountpoint: string, opts: ProbeRunOptions): Promise<ProbeOutcome> {
@@ -956,10 +956,10 @@ export const FSIO_CHILD = new URL('./fsio-child.js', import.meta.url);
   }
 ```
 
-    with `parseOutcome(text)` = `JSON.parse` of the last non-empty line,
-    returning the object when it has boolean `ok`, string `started_at` /
-    `completed_at`, a `cleanup.status` in `clean|failed|not_needed`, else
-    `null`. Default `execCapture`:
+  with `parseOutcome(text)` = `JSON.parse` of the last non-empty line,
+  returning the object when it has boolean `ok`, string `started_at` /
+  `completed_at`, a `cleanup.status` in `clean|failed|not_needed`, else
+  `null`. Default `execCapture`:
 
 ```ts
 const defaultExecCapture = (file: string, args: string[], timeoutMs: number): Promise<ExecCaptureResult> =>
@@ -976,7 +976,7 @@ const defaultExecCapture = (file: string, args: string[], timeoutMs: number): Pr
   });
 ```
 
-  - `fsio-child.ts`:
+- `fsio-child.ts`:
 
 ```ts
 /**
@@ -1039,9 +1039,9 @@ if (isMain) {
 }
 ```
 
-  - `fake-probe-host.ts`: add `busy: () => null,` to the returned object.
-  - `health-probe.ts` `makeProbeHost`: `createRealProbeHost({ fsIoMode: 'pid1' })`.
-  - `health-probe-run.ts`: replace the `inFlight` check with
+- `fake-probe-host.ts`: add `busy: () => null,` to the returned object.
+- `health-probe.ts` `makeProbeHost`: `createRealProbeHost({ fsIoMode: 'pid1' })`.
+- `health-probe-run.ts`: replace the `inFlight` check with
 
 ```ts
     const held = deps.probeHost.busy();
@@ -1053,16 +1053,16 @@ if (isMain) {
     }
 ```
 
-    keep the handler's own `inFlight` as a second, fast guard (unchanged),
-    and after the verb returns, if `outcome.error?.code === 'PROBE_IN_PROGRESS'`
-    throw the same RPC error (the host refused between `busy()` and the call).
+  keep the handler's own `inFlight` as a second, fast guard (unchanged),
+  and after the verb returns, if `outcome.error?.code === 'PROBE_IN_PROGRESS'`
+  throw the same RPC error (the host refused between `busy()` and the call).
 
-- [ ] **Step 5: Run the tests to verify they pass; build; run the e2e file**
+- [x] **Step 5: Run the tests to verify they pass; build; run the e2e file**
 
 Run: `npx vitest run src/__tests__/agent/ src/__tests__/api/routes-health-probe.test.ts && npm run build && npx vitest run --config vitest.e2e.config.ts src/__tests__/e2e/fsio-child.test.ts src/__tests__/e2e/health-support.test.ts`
 Expected: PASS.
 
-- [ ] **Step 6: Lint, then commit** with
+- [x] **Step 6: Lint, then commit** with
 
 ```
 fix(health): one probe admission point; fs_io runs in a PID1 unit (F08, B01)
@@ -1092,7 +1092,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 **Interfaces:**
 - Produces: `BaselineHostDeps.maxQueued?: number` (default 4); a run whose deadline (`now + timeoutMs` at the moment `run()` is called) passes while queued returns `status: 'timeout'`, `error.code: 'TIMEOUT'`, `message: 'the engine queue exceeded the caller deadline'` WITHOUT spawning; a caller joining a queued/running run of the same resolved profile gets that run's result or its OWN timeout; a fifth distinct queued profile is `status: 'error'`, `error.code: 'QUEUE_FULL'`.
 
-- [ ] **Step 1: Amend the spec first.** §8.3 *Implemented* note, replace
+- [x] **Step 1: Amend the spec first.** §8.3 *Implemented* note, replace
   "Concurrency is per profile: two callers of the same profile share one
   subprocess; a different profile waits for the running one (one engine
   subprocess per agent at any time)." with: "Concurrency (amended
@@ -1104,7 +1104,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
   distinct profiles wait (`QUEUE_FULL` beyond that); the `--sections`
   call queues under the same rules." Same sentence in the agent spec row.
 
-- [ ] **Step 2: Write the failing tests** (append inside the `BaselineHost`
+- [x] **Step 2: Write the failing tests** (append inside the `BaselineHost`
   describe of `baseline-host.test.ts`, using its `stub`/`host` helpers):
 
 ```ts
@@ -1152,12 +1152,12 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 
   (`host()` in that file wraps `makeBaselineHost(config, deps)`; pass `{ maxQueued: 2 }` as the deps argument — extend the helper if it only takes the config.)
 
-- [ ] **Step 3: Run the tests to verify they fail**
+- [x] **Step 3: Run the tests to verify they fail**
 
 Run: `npx vitest run src/__tests__/agent/health/baseline-host.test.ts`
 Expected: the three F09 cases FAIL (p2 takes > 180 ms, three spawns, no QUEUE_FULL).
 
-- [ ] **Step 4: Implement** in `makeBaselineHost` — replace `inFlight`/`chain`/`queue` with:
+- [x] **Step 4: Implement** in `makeBaselineHost` — replace `inFlight`/`chain`/`queue` with:
 
 ```ts
   const maxQueued = deps.maxQueued ?? 4;
@@ -1228,12 +1228,12 @@ Expected: the three F09 cases FAIL (p2 takes > 180 ms, three spawns, no QUEUE_FU
   Update the module header comment ("One engine subprocess runs at a
   time…") to describe the deadline, the bound and the coalescing key.
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `npx vitest run src/__tests__/agent/health/baseline-host.test.ts src/__tests__/agent/rpc/health-baseline.test.ts`
 Expected: PASS.
 
-- [ ] **Step 6: Lint, then commit** with
+- [x] **Step 6: Lint, then commit** with
 
 ```
 fix(health): baseline deadlines are absolute; runs coalesce by profile (F09)
@@ -1263,10 +1263,10 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 **Interfaces:**
 - Produces: agent `BaselineRunResult.profile_sha256: string | null` (hex of the bytes read from the realpath immediately before spawn; null on a failed read); api `BaselineResponse.profile.sha256` = the executed digest (falls back to the api's own fresh hash when the agent is older), `profile.sha256_changed: boolean` (true when it differs from the catalog snapshot taken at startup — the snapshot is then refreshed so `health.context` lists the current one); the cache entry is served only when its digest equals the current file's.
 
-- [ ] **Step 1: Amend the spec first.** §8.3 result block: add
+- [x] **Step 1: Amend the spec first.** §8.3 result block: add
   `"profile_sha256": "<hex>" | null,   // sha256 of the profile bytes the engine received, read just before spawn` and, in the *Implemented* note, "(amended 2026-09-10, validation F10) the agent hashes the profile immediately before it spawns the engine and returns `profile_sha256`; the api reports THAT digest as `profile.sha256`, marks `sha256_changed: true` when it differs from the catalog snapshot listed at startup and refreshes the snapshot, and serves a cached result only when the file's current digest equals the cached one — an edited profile is never served under an old hash (CFG-02, AC-07)." §8.4 gets the same cache sentence. Agent spec: delete the whole `health.baseline` **Planned (S19c, ADR-0018 — design, not yet implemented)** row (D01); in the Real row's result add `profile_sha256`. `api-v1.yaml` `profile.sha256` description: "sha256 of the profile bytes the engine actually ran (from the agent); the catalog snapshot when the agent is older." and add `sha256_changed: { type: boolean, description: True when the executed digest differs from the snapshot the api listed at startup; the snapshot is refreshed. }`.
 
-- [ ] **Step 2: Write the failing tests.** `baseline-host.test.ts`:
+- [x] **Step 2: Write the failing tests.** `baseline-host.test.ts`:
 
 ```ts
   it('F10: the result carries the sha256 of the bytes the engine received', async () => {
@@ -1303,12 +1303,12 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 
   (`sha256Hex` is exported by `src/api/mcp/prompts/health-check.ts`.)
 
-- [ ] **Step 3: Run the tests to verify they fail**
+- [x] **Step 3: Run the tests to verify they fail**
 
 Run: `npx vitest run src/__tests__/agent/health/baseline-host.test.ts src/__tests__/api/routes-health-baseline.test.ts`
 Expected: FAIL (`profile_sha256` undefined; cache hit; `sha256_changed` undefined).
 
-- [ ] **Step 4: Implement.** Agent `runOnce`: before `runEngine`,
+- [x] **Step 4: Implement.** Agent `runOnce`: before `runEngine`,
 
 ```ts
     let profileSha256: string | null = null;
@@ -1354,12 +1354,12 @@ export function sha256OfFile(path: string): string | null {
 
   (`profile` is the live `BaselineProfile` object from `hp.profiles.profiles`, so assigning `profile.sha256` refreshes the catalog.)
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `npx vitest run src/__tests__/agent/health/baseline-host.test.ts src/__tests__/api/routes-health-baseline.test.ts src/__tests__/api/routes-health-context.test.ts src/__tests__/api/health-profiles.test.ts`
 Expected: PASS.
 
-- [ ] **Step 6: Lint, then commit** with
+- [x] **Step 6: Lint, then commit** with
 
 ```
 fix(health): baseline provenance is the digest that ran (F10, D01)
@@ -1390,7 +1390,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 **Interfaces:**
 - Produces: `RunLedger.get(runId, principal?: string)`, `record(runId, tool, args, result, collectedAt, principal?: string)`, `startProbe(runId, max, principal?: string)` — a principal mismatch behaves exactly like an unknown run; `RunEntry.declared_absent: string[] | null` and `setDeclaredAbsent(runId, list): boolean`; `runIdentityErrors(entry: RunEntry, run: { principal: string; versions: Record<string, unknown> }): string[]` in `report-integrity.ts` — one string per mismatch (`run.principal 'x' does not match the ledger ('y')`, `run.versions.prompt '999.0.0' does not match the ledger ('1.0.0')`), over `principal`, `prompt`, `template_sha256`, `policy`, `catalog`, `report_schema`. Task 7 consumes `entry.declared_absent`.
 
-- [ ] **Step 1: Amend the spec first.** §5.5 last bullet becomes: "All
+- [x] **Step 1: Amend the spec first.** §5.5 last bullet becomes: "All
   five values are echoed by `health.context` and stamped into the run
   ledger. For the run's TTL the validator compares the report's
   `run.versions` (and `run.principal`) with the ledger entry — a report
@@ -1416,7 +1416,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
   `run.versions` against them for the run's TTL (AC-17). After an api
   restart the run is unknown and reports are `unverifiable`."
 
-- [ ] **Step 2: Write the failing tests.** `run-ledger.test.ts`:
+- [x] **Step 2: Write the failing tests.** `run-ledger.test.ts`:
 
 ```ts
 it('F03: reads and writes are bound to the minting principal', () => {
@@ -1464,12 +1464,12 @@ it('F03: claimed versions and principal must match the ledger', async () => {
 });
 ```
 
-- [ ] **Step 3: Run the tests to verify they fail**
+- [x] **Step 3: Run the tests to verify they fail**
 
 Run: `npx vitest run src/__tests__/api/run-ledger.test.ts src/__tests__/api/routes-health-report.test.ts`
 Expected: FAIL.
 
-- [ ] **Step 4: Implement.** `run-ledger.ts`:
+- [x] **Step 4: Implement.** `run-ledger.ts`:
 
 ```ts
   get(runId: string, principal?: string): RunEntry | null {
@@ -1537,12 +1537,12 @@ export function runIdentityErrors(
   with `valid = isReportValid({ ...shape, status_errors }, integrity.status)` and `status_errors` in the response.
   (`AgenticReport.run` in `report-validate.ts` gains `principal: string; versions: Record<string, unknown>` — it is read from a schema-valid report.)
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `npx vitest run src/__tests__/api/ src/__tests__/lib/health/agentic-fixtures.test.ts`
 Expected: PASS (fixture runner mints with `op:alice`/`VERSIONS` and resolves reports with the same values, so nothing changes there).
 
-- [ ] **Step 6: Lint, then commit** with
+- [x] **Step 6: Lint, then commit** with
 
 ```
 fix(health): a run is bound to its principal and its versions (F03, D02)
@@ -1612,7 +1612,7 @@ export function validateReportShape(report, catalog, input?: Partial<VerdictInpu
 
   `report-integrity.ts`: `Integrity.omitted: Array<{ tool: string; args_digest: string; collected_at: string }>` (status is `mismatch` when non-empty), `export function floorInputFrom(integrity: Integrity, rawReports: RawReport[]): FloorInput`.
 
-- [ ] **Step 1: Amend the spec first.** §11.3, replace step 3 and append steps 5–8:
+- [x] **Step 1: Amend the spec first.** §11.3, replace step 3 and append steps 5–8:
 
 ```markdown
 3. A `not_applicable` outcome on a MANDATORY row MUST cite, in `reason`,
@@ -1712,7 +1712,7 @@ export function validateReportShape(report, catalog, input?: Partial<VerdictInpu
   effective outcome became `unknown`, whatever the reason; say so in its
   description.)
 
-- [ ] **Step 2: Write the failing tests.** New `src/__tests__/lib/health/report-floor.test.ts`:
+- [x] **Step 2: Write the failing tests.** New `src/__tests__/lib/health/report-floor.test.ts`:
 
 ```ts
 import { describe, expect, it } from 'vitest';
@@ -1915,12 +1915,12 @@ it('F02b: self-declared absence and a scope-exclusion phrase do not bypass unkno
   `Expected.adjustments_include?: Array<{ id: string; to: string; reason: string }>`
   asserted with `expect(ev.shape.adjustments).toContainEqual(expect.objectContaining(a))`.
 
-- [ ] **Step 3: Run the tests to verify they fail**
+- [x] **Step 3: Run the tests to verify they fail**
 
 Run: `npx vitest run src/__tests__/lib/health/ src/__tests__/api/routes-health-report.test.ts`
 Expected: FAIL (module `report-floor` missing; `adjustments` undefined; AC-02/AC-19 expectations differ).
 
-- [ ] **Step 4: Implement.** `lib/health/report-floor.ts`:
+- [x] **Step 4: Implement.** `lib/health/report-floor.ts`:
 
 ```ts
 import type { AgenticCatalog, AgenticCheckInput, CheckOutcome, CheckSeverity } from './agentic-catalog.js';
@@ -2110,12 +2110,12 @@ export function floorInputFrom(integrity: Integrity, rawReports: RawReport[]): F
   identity errors from Task 6 appended, `adjustments` and `integrity.omitted` in the response.
   Fixture runner: same composition.
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `npx vitest run src/__tests__/lib/health/ src/__tests__/api/routes-health-report.test.ts src/__tests__/api/routes-health-context.test.ts && npm run test:contracts`
 Expected: PASS, every fixture green with the two documented corrections.
 
-- [ ] **Step 6: Lint, then commit** with
+- [x] **Step 6: Lint, then commit** with
 
 ```
 fix(health): the verdict is bounded by the evidence xiNAS produced (F01, F02)
@@ -2142,7 +2142,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 - Modify: `docs/TODO.md` (one new entry)
 - Modify: this plan (tick the boxes)
 
-- [ ] **Step 1: Runbook rows** (after the `POST /health/probe` row of the S19a block):
+- [x] **Step 1: Runbook rows** (after the `POST /health/probe` row of the S19a block):
 
 ```markdown
 - [ ] Validation B01 (2026-09-10): on the installed node,
@@ -2162,7 +2162,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
   `cleanup.detail`, and nothing under the export path changed.
 ```
 
-- [ ] **Step 2: TODO entry** (append; same shape as the neighbours):
+- [x] **Step 2: TODO entry** (append; same shape as the neighbours):
 
 ```markdown
 ## Health — the fs_io PID1 delegation is not yet proven on hardware
@@ -2185,7 +2185,7 @@ outcome with `cleanup: failed`, never a false `clean`.
 on a real node and this entry deleted.
 ```
 
-- [ ] **Step 3: Run the full gate** from `xiNAS-MCP/`:
+- [x] **Step 3: Run the full gate** from `xiNAS-MCP/`:
 
 ```
 npm run typecheck && npm run lint && npm run format:check
@@ -2205,13 +2205,13 @@ npx --yes -p @stoplight/spectral-cli@latest spectral lint --ruleset .spectral.ya
   `xinas_history/`, `tests/` or `nfs-helper/` changes in this plan.)
   Expected: all green; record the counts in the final report.
 
-- [ ] **Step 4: Re-run the auditor's reproductions against the fixed tree**
+- [x] **Step 4: Re-run the auditor's reproductions against the fixed tree**
   — copy `s19-audit.test.ts` from the auditor's worktree into
   `src/__tests__/` TEMPORARILY, run it, and confirm that every F-case now
   FAILS (each documented an unsafe outcome); then delete the copy. Do not
   commit it.
 
-- [ ] **Step 5: Commit the docs** (`docs(control-path): S19 validation closure — runbook rows, TODO, plan`), no trailer.
+- [x] **Step 5: Commit the docs** (`docs(control-path): S19 validation closure — runbook rows, TODO, plan`), no trailer.
 
 ---
 
