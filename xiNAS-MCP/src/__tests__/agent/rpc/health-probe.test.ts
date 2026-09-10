@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { ProbeCollectionError } from '../../../agent/health/collect.js';
+import { createRealNetHost } from '../../../agent/net/host.js';
 import {
   type HealthProbeDeps,
   type HealthProbeResultV2,
+  makeDeepProbeRunner,
   makeHealthProbeHandler,
 } from '../../../agent/rpc/methods/health-probe.js';
+import { filesystemIoCheck, rdmaLiveCheck } from '../../../lib/health/standard.js';
 import { parseXicliLicense } from '../../../lib/parse/xicli-license.js';
 
 const GOLDEN_VALID = [
@@ -201,5 +204,68 @@ describe('health.probe handler (schema 2)', () => {
   it('deep without a wired runner has no probes section', async () => {
     const result = (await makeHealthProbeHandler(deps())({ level: 'deep' })) as HealthProbeResultV2;
     expect(result.sections.probes).toBeUndefined();
+  });
+});
+
+describe('F04: collection failures never become an empty success', () => {
+  const base = {
+    readLicenseText: async () => null,
+    getCollectorHealth: () => ({}),
+    dryRenderNfsProfile: async () => null,
+  };
+
+  it('F04: a non-array RDMA payload is a PARSE error, not an empty list', async () => {
+    const run = makeHealthProbeHandler({
+      ...base,
+      rdmaLinkShow: async () => '{"unexpected":"shape"}',
+    });
+    const result = await run({ level: 'standard' });
+    expect(result.sections.rdma_links).toMatchObject({ status: 'error', error: { code: 'PARSE' } });
+    expect(rdmaLiveCheck(result.sections.rdma_links).status).toBe('degraded');
+  });
+
+  it('F04b: a failed managed-filesystem inventory fails the probes section', async () => {
+    const runner = makeDeepProbeRunner({
+      probeHost: {} as never,
+      listMountedManaged: async () => {
+        throw new Error('inventory unavailable');
+      },
+    });
+    await expect(runner(null)).rejects.toMatchObject({
+      code: 'INVENTORY_UNAVAILABLE',
+      status: 'error',
+    });
+    const run = makeHealthProbeHandler({
+      ...base,
+      rdmaLinkShow: async () => '[]',
+      runDeepProbes: runner,
+    });
+    const result = await run({ level: 'deep' });
+    expect(result.sections.probes).toMatchObject({
+      status: 'error',
+      error: { code: 'INVENTORY_UNAVAILABLE' },
+    });
+    expect(filesystemIoCheck(result.sections.probes!).status).toBe('degraded');
+  });
+
+  it('F04c: the production RDMA adapter surfaces a permission refusal', async () => {
+    const net = createRealNetHost({
+      runCommand: async () => ({ stdout: 'Operation not permitted', code: 1 }),
+    });
+    const run = makeHealthProbeHandler({ ...base, rdmaLinkShow: () => net.rdmaLinkShow() });
+    const result = await run({ level: 'standard' });
+    expect(result.sections.rdma_links).toMatchObject({
+      status: 'permission_denied',
+      error: { code: 'EPERM' },
+    });
+    expect(rdmaLiveCheck(result.sections.rdma_links).status).toBe('degraded');
+  });
+
+  it('F04c: exit 127 (tool absent) is still not_supported and skipped', async () => {
+    const net = createRealNetHost({ runCommand: async () => ({ stdout: '', code: 127 }) });
+    const run = makeHealthProbeHandler({ ...base, rdmaLinkShow: () => net.rdmaLinkShow() });
+    const result = await run({ level: 'standard' });
+    expect(result.sections.rdma_links).toMatchObject({ status: 'not_supported' });
+    expect(rdmaLiveCheck(result.sections.rdma_links).status).toBe('skipped');
   });
 });

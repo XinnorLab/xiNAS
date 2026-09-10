@@ -19,6 +19,7 @@ const gatedHost = (gate: Promise<void>): ProbeHost => ({
     return outcome(true);
   },
   nfsLoopback: async () => outcome(true),
+  busy: () => null,
 });
 
 /** S19a T2 — spec §9.2/§9.5: one probe at a time per node, validated params. */
@@ -45,7 +46,11 @@ describe('health.probe.run handler', () => {
       release = r;
     });
     const h = makeHealthProbeRunHandler({ probeHost: gatedHost(gate) });
-    const first = h({ probe: 'fs_io', path: '/mnt/a', run_id: 'r1' });
+    const first = h({
+      probe: 'fs_io',
+      path: '/mnt/a',
+      run_id: '11111111-1111-4111-8111-111111111111',
+    });
     await expect(h({ probe: 'nfs_loopback', path: '/srv/x' })).rejects.toMatchObject({
       code: 'PROBE_IN_PROGRESS',
       details: { probe: 'fs_io', path: '/mnt/a' },
@@ -70,14 +75,101 @@ describe('health.probe.run handler', () => {
         seen.push(o);
         return outcome(true);
       },
+      busy: () => null,
     };
     const h = makeHealthProbeRunHandler({ probeHost: host });
     await h({ probe: 'fs_io', path: '/mnt/a' });
-    await h({ probe: 'nfs_loopback', path: '/srv/x', run_id: 'r9', timeout_ms: 5_000 });
+    await h({
+      probe: 'nfs_loopback',
+      path: '/srv/x',
+      run_id: '99999999-9999-4999-8999-999999999999',
+      timeout_ms: 5_000,
+    });
     expect(seen).toEqual([
       { runId: null, timeoutMs: 20_000 },
-      { runId: 'r9', timeoutMs: 5_000 },
+      { runId: '99999999-9999-4999-8999-999999999999', timeoutMs: 5_000 },
     ]);
+  });
+
+  it('F06: run_id must be a health.context UUID', async () => {
+    const handler = makeHealthProbeRunHandler({ probeHost: gatedHost(Promise.resolve()) });
+    await expect(
+      handler({ probe: 'nfs_loopback', path: '/export', run_id: '../outside', timeout_ms: 1000 }),
+    ).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+    await expect(
+      handler({ probe: 'fs_io', path: '/mnt/x', run_id: 'smoke-1', timeout_ms: 1000 }),
+    ).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+  });
+
+  it('F08: a probe held by the host (deep path) refuses a direct probe with PROBE_IN_PROGRESS', async () => {
+    const host: ProbeHost = {
+      ...gatedHost(Promise.resolve()),
+      busy: () => ({ probe: 'fs_io', path: '/mnt/data' }),
+    };
+    const handler = makeHealthProbeRunHandler({ probeHost: host });
+    await expect(
+      handler({ probe: 'nfs_loopback', path: '/export', timeout_ms: 1000 }),
+    ).rejects.toMatchObject({
+      code: 'PROBE_IN_PROGRESS',
+      details: { probe: 'fs_io', path: '/mnt/data' },
+    });
+  });
+
+  it('F08: a host that refuses between busy() and the call is still an RPC error', async () => {
+    // The gate closed after busy() answered null — the verb's own refusal
+    // outcome must not be returned as a successful probe result. review
+    // fix 4: `details` always carries the REQUESTED probe/path plus the
+    // outcome's own message, whether or not busy() still holds a record.
+    const host: ProbeHost = {
+      ...gatedHost(Promise.resolve()),
+      fsIo: async () =>
+        outcome(false, {
+          error: {
+            code: 'PROBE_IN_PROGRESS',
+            message: 'a nfs_loopback probe is in flight on /export',
+            stage: 'lock',
+          },
+          cleanup: { status: 'not_needed' },
+        }),
+    };
+    const handler = makeHealthProbeRunHandler({ probeHost: host });
+    await expect(handler({ probe: 'fs_io', path: '/mnt/data' })).rejects.toMatchObject({
+      code: 'PROBE_IN_PROGRESS',
+      details: {
+        probe: 'fs_io',
+        path: '/mnt/data',
+        message: 'a nfs_loopback probe is in flight on /export',
+      },
+    });
+  });
+
+  it('review fix 4: when busy() still holds a record at that point, it nests under details.in_flight', async () => {
+    let heldAfter: { probe: 'fs_io' | 'nfs_loopback'; path: string } | null = null;
+    const host: ProbeHost = {
+      fsIo: async () => {
+        heldAfter = { probe: 'nfs_loopback', path: '/export' };
+        return outcome(false, {
+          error: {
+            code: 'PROBE_IN_PROGRESS',
+            message: 'a nfs_loopback probe is in flight on /export',
+            stage: 'lock',
+          },
+          cleanup: { status: 'not_needed' },
+        });
+      },
+      nfsLoopback: async () => outcome(true),
+      busy: () => heldAfter,
+    };
+    const handler = makeHealthProbeRunHandler({ probeHost: host });
+    await expect(handler({ probe: 'fs_io', path: '/mnt/data' })).rejects.toMatchObject({
+      code: 'PROBE_IN_PROGRESS',
+      details: {
+        probe: 'fs_io',
+        path: '/mnt/data',
+        message: 'a nfs_loopback probe is in flight on /export',
+        in_flight: { probe: 'nfs_loopback', path: '/export' },
+      },
+    });
   });
 
   it('over the dispatcher: PROBE_IN_PROGRESS travels as -32000 data.code', async () => {
@@ -105,7 +197,7 @@ describe('health.probe.run handler', () => {
 });
 
 describe('makeDeepProbeRunner over the new host', () => {
-  it('probes every mounted fs with runId null; loopback only with an export; listing failure → empty', async () => {
+  it('probes every mounted fs with runId null; loopback only with an export; listing failure rejects (F04b)', async () => {
     const seen: string[] = [];
     const host: ProbeHost = {
       fsIo: async (m, o) => {
@@ -118,6 +210,7 @@ describe('makeDeepProbeRunner over the new host', () => {
         seen.push(`loop:${e}:${o.runId}`);
         return outcome(true, { cleanup: { status: 'failed', detail: 'systemd-umount: busy' } });
       },
+      busy: () => null,
     };
     const runner = makeDeepProbeRunner({
       probeHost: host,
@@ -143,6 +236,9 @@ describe('makeDeepProbeRunner over the new host', () => {
         throw new Error('mountinfo unreadable');
       },
     });
-    expect((await broken(null)).fs_io).toEqual([]);
+    await expect(broken(null)).rejects.toMatchObject({
+      code: 'INVENTORY_UNAVAILABLE',
+      status: 'error',
+    });
   });
 });

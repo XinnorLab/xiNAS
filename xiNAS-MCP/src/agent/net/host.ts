@@ -30,7 +30,7 @@ export interface NetHost {
   /** `ip -j addr show` JSON text. */
   ipAddrShow(): Promise<string>;
   listSysClassNet(): Promise<Array<{ name: string; driver: string }>>;
-  /** `rdma link show -j` JSON text; '' when the tool is unavailable. */
+  /** `rdma link show -j` JSON text; rejects on failure (ENOENT = absent, EPERM = refused, EXIT_<n> otherwise). */
   rdmaLinkShow(): Promise<string>;
 }
 
@@ -130,9 +130,18 @@ export function createRealNetHost(opts: RealNetHostOptions = {}): NetHost {
 
     async rdmaLinkShow(): Promise<string> {
       const res = await run('rdma', ['link', 'show', '-j']);
-      // 127 = the rdma tool is absent (no MOFED) — degraded, not an error.
-      if (res.code !== 0) return '';
-      return res.stdout;
+      if (res.code === 0) return res.stdout;
+      const text = res.stdout.trim();
+      // 127 = the rdma tool is absent (no MOFED): a not_supported section, never an error.
+      if (res.code === 127) {
+        throw Object.assign(new Error('rdma: tool not found'), { code: 'ENOENT' });
+      }
+      if (/operation not permitted|permission denied/i.test(text)) {
+        throw Object.assign(new Error(`rdma link show: ${text}`), { code: 'EPERM' });
+      }
+      throw Object.assign(new Error(`rdma link show exited ${res.code}: ${text}`), {
+        code: `EXIT_${res.code}`,
+      });
     },
   };
 }

@@ -59,6 +59,20 @@ export const SHIPPED_PROFILE_NAMES = ['quick', 'standard', 'deep'] as const;
 
 const PROFILE_NAME = /^[a-z0-9_-]{1,32}$/;
 
+/**
+ * sha256 hex of a profile file right now (F10: the api's fallback digest
+ * when the agent didn't report `profile_sha256`, and the "current on disk"
+ * value the cache and change-detection compare against); null when the
+ * file is unreadable at this moment.
+ */
+export function sha256OfFile(path: string): string | null {
+  try {
+    return createHash('sha256').update(readFileSync(path)).digest('hex');
+  } catch {
+    return null;
+  }
+}
+
 interface ProfileYaml {
   profile?: unknown;
   timeout_seconds?: unknown;

@@ -6,14 +6,15 @@ import {
   type Integrity,
   UNVERIFIABLE,
   checkIntegrity,
+  floorInputFrom,
 } from '../../../api/health/report-integrity.js';
 import { type RunEntry, RunLedger, digestOf } from '../../../api/health/run-ledger.js';
 import { CATALOG } from '../../../api/mcp/catalog.js';
 import { AGENTIC_CATALOG, type Scope } from '../../../lib/health/agentic-catalog.js';
 import {
   type ShapeVerdict,
+  evaluateReport,
   isReportValid,
-  validateReportShape,
 } from '../../../lib/health/report-validate.js';
 
 /**
@@ -95,6 +96,8 @@ interface Expected {
   reference_errors?: number;
   status_errors?: number;
   rewritten_to_unknown?: string[];
+  /** Rows the verdict raised or rewrote (§11.3 steps 3, 5–8); subset match. */
+  adjustments_include?: Array<{ id: string; to: string; reason: string }>;
   run_status?: string;
   checks?: Record<string, string>;
   checks_forbid_outcomes?: { ids: string[]; outcomes: string[] };
@@ -256,12 +259,21 @@ function evaluate(sc: Scenario, source: Json = sc.report): Evaluated {
   for (const item of Object.values(sc.ledger)) {
     ledger.record(entry.run_id, item.tool, item.args, item.report, item.collected_at ?? T0);
   }
+  // §6.3: what `health.context` proved absent for this run — the verdict's
+  // only proof for a `not_applicable` row (§11.3 step 3).
+  ledger.setDeclaredAbsent(entry.run_id, sc.declared_absent ?? []);
   const report = resolveReport(sc, entry, source);
-  const shape = validateReportShape(report, AGENTIC_CATALOG);
-  const integrity =
-    shape.computed === null
-      ? UNVERIFIABLE
-      : checkIntegrity(entry, report.raw_reports as Parameters<typeof checkIntegrity>[1]);
+  let checked: Integrity = UNVERIFIABLE;
+  // The same composition the route uses: one schema pass, then the ledger
+  // facts for the report it accepted (§11.3 steps 5–6).
+  const shape = evaluateReport(report, AGENTIC_CATALOG, (r) => {
+    checked = checkIntegrity(entry, r.raw_reports);
+    return {
+      floorInput: floorInputFrom(checked, r.raw_reports),
+      provenAbsent: entry.declared_absent,
+    };
+  });
+  const integrity = shape.computed === null ? UNVERIFIABLE : checked;
   return { entry, report, shape, integrity, valid: isReportValid(shape, integrity.status) };
 }
 
@@ -304,6 +316,11 @@ function assertExpected(sc: Scenario, ev: Evaluated, exp: Expected, label: strin
     expect(ev.shape.status_errors.length, why).toBe(exp.status_errors);
   if (exp.rewritten_to_unknown !== undefined) {
     expect(ev.shape.rewritten_to_unknown).toEqual(exp.rewritten_to_unknown);
+  }
+  for (const a of exp.adjustments_include ?? []) {
+    expect(ev.shape.adjustments, `${sc.id}: adjustment ${a.id}`).toContainEqual(
+      expect.objectContaining(a),
+    );
   }
   if (exp.run_status !== undefined) expect(ev.report.run_status).toBe(exp.run_status);
 
@@ -445,6 +462,7 @@ describe('isReportValid (spec §11.2)', () => {
     status_errors: [],
     mandatory_ids: [],
     rewritten_to_unknown: [],
+    adjustments: [],
   };
   it('is true only with no schema, reference or status errors and no integrity mismatch', () => {
     expect(isReportValid(clean, 'verified')).toBe(true);
@@ -460,5 +478,57 @@ describe('isReportValid (spec §11.2)', () => {
       ),
     ).toBe(false);
     expect(isReportValid({ ...clean, status_errors: ['x'] }, 'verified')).toBe(false);
+  });
+});
+
+/**
+ * Final review 2(a) — spec §11.4: `verified` is a claim that something was
+ * checked. A report that carries no raw report from a ledger-writing tool
+ * checked nothing, so it is `unverifiable` (which never invalidates —
+ * SAFE-04), not `verified`. The completeness rule still wins: a ledger row
+ * the report left out is a `mismatch` whatever `checked` says.
+ */
+describe('checkIntegrity with no checkable evidence (spec §11.4)', () => {
+  const mint = (): { ledger: RunLedger; entry: RunEntry } => {
+    const ledger = new RunLedger({ now: () => NOW_MS, ttlMs: 900_000 });
+    const entry = ledger.mint({
+      principal: 'op:alice',
+      role: 'operator',
+      versions: VERSIONS,
+      limits: LIMITS,
+    });
+    return { ledger, entry };
+  };
+
+  it('an empty ledger and no raw reports is unverifiable, not verified', () => {
+    const { entry } = mint();
+    expect(checkIntegrity(entry, [])).toEqual({
+      status: 'unverifiable',
+      checked: 0,
+      mismatches: [],
+      omitted: [],
+    });
+  });
+
+  it('raw reports from non-ledger tools alone are unverifiable', () => {
+    const { entry } = mint();
+    const report = { items: [] };
+    const integrity = checkIntegrity(entry, [
+      { tool: 'arrays.list', args: {}, collected_at: T0, digest: digestOf(report), report },
+    ]);
+    expect(integrity.status).toBe('unverifiable');
+    expect(integrity.checked).toBe(0);
+  });
+
+  it('a ledger row the report does not carry is still a mismatch, checked or not', () => {
+    const { ledger, entry } = mint();
+    const raw = { status: 'critical' };
+    ledger.record(entry.run_id, 'health.check', { profile: 'quick' }, raw, T0);
+    const withRow = ledger.get(entry.run_id, 'op:alice');
+    expect(withRow).not.toBeNull();
+    const integrity = checkIntegrity(withRow as RunEntry, []);
+    expect(integrity.status).toBe('mismatch');
+    expect(integrity.checked).toBe(0);
+    expect(integrity.omitted).toHaveLength(1);
   });
 });

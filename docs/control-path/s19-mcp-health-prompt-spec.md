@@ -405,9 +405,13 @@ Rules:
   `catalog_version` comes from the catalog file (§10);
   `report_schema_version` from the schema file (§11).
 - All five values are echoed by `health.context` and stamped into the run
-  ledger, so a run keeps the versions it started with even if the process
-  is later restarted with a new template (AC-17: the ledger entry, not
-  the live constant, is what the validator compares against).
+  ledger. For the run's TTL the validator compares the report's
+  `run.versions` (and `run.principal`) with the ledger entry — a report
+  that claims other versions or another identity is invalid (AC-17,
+  validation F03). The ledger is in-memory (§6.3, O-4): after an api
+  restart the run is unknown and the report is `unverifiable`, never
+  invalid — what survives a restart is the report the client stored,
+  which carries the versions it ran with (validation D02).
 
 ### 5.6 Legacy era
 
@@ -543,6 +547,14 @@ the returned `result`) to the ledger. That digest is what
 unknown or expired `run_id` is accepted with `warnings:
 [RUN_UNKNOWN]` — a run must not fail because the api restarted (SAFE-04).
 
+Every ledger read and write is bound to the principal that minted the
+run: `health.check`, `health.baseline`, `health.probe.run` and
+`health.report.validate` treat a run another principal started exactly
+like an unknown run (`RUN_UNKNOWN`, `unverifiable`) — no cross-principal
+append, no cross-principal integrity proof (validation F03). The entry
+also records `declared_absent`, the components the inventory proved
+absent when `health.context` last served the run (§11.3 consumes it).
+
 *Implemented (S19b, `api/health/run-ledger.ts`):* the ledger sweeps
 expired entries lazily on every mint (and `get` drops an expired entry
 on read) rather than on the S15 sweeper's timer, and is bounded to 256
@@ -587,6 +599,19 @@ collection, never the api's request time (PROMPT-02). The api and the
 agent are rebuilt and restarted together by `xinas_node_build`; a v1
 result (no `schema`) is mapped to every section `status: 'error',
 code: 'LEGACY_AGENT'` so the mismatch is visible, not silent.
+
+> **Implemented (2026-09-10, validation F04).** Three production paths
+> had collapsed failures into an empty success: `rdma link show -j`
+> returned `''` on ANY non-zero exit (a permission refusal became "no
+> links"), a JSON payload that was not an array became `[]`, and a failed
+> managed-filesystem inventory became `fs_io: []`. Now: only exit 127 /
+> `ENOENT` is `not_supported`; "Operation not permitted" / "Permission
+> denied" in the tool output is `permission_denied` (`EPERM`); any other
+> non-zero exit is `error` (`EXIT_<n>`); a payload that is not a JSON
+> array is `error` (`PARSE`); and an inventory failure rejects the whole
+> `probes` section with `error` (`INVENTORY_UNAVAILABLE`) — both deep
+> checks then report "collection failed" instead of "no filesystems".
+> A `success` + `[]` section still means "asked and found none".
 
 ### 7.2 Mapping to checks (D-05)
 
@@ -699,6 +724,7 @@ Result:
   "engine": { "module": "xinas_menu.health.engine", "version": "<XINAS_MENU_VERSION>" | null },
   "report": { …the engine's JSON verbatim… } | null,
   "stderr_tail": "…",
+  "profile_sha256": "<hex>" | null,   // sha256 of the profile bytes the engine received, read just before spawn
   "error": { "code": "TIMEOUT" | "EXIT_<n>" | "PARSE" | "ENOENT", "message": "…" }
 }
 ```
@@ -721,13 +747,34 @@ check refused the path before anything was spawned), `PROFILE_NOT_FOUND`,
 says `No module named` → `not_supported`), `KILLED` (a signal that was
 not the deadline) and `PARSE` (stdout not a JSON object, or beyond the 4
 MiB cap — the whole output is dropped, never truncated into a report).
-`timeout_s` is 1–900. The profile the engine receives is the canonical
-realpath. Concurrency is per profile: two callers of the same profile
-share one subprocess; a different profile waits for the running one
-(one engine subprocess per agent at any time). The environment is
+Two more come from the queue below: `QUEUE_FULL` (the bound was reached,
+so the call was refused instead of queued) and `ERROR` (a shared run
+rejected unexpectedly — the joiners are answered rather than left
+hanging). `timeout_s` is 1–900. The profile the engine receives is the canonical
+realpath. Concurrency (amended 2026-09-10, validation F09): the deadline
+is absolute from the moment the RPC arrives (`now + timeout_s`), not from
+spawn; a queued run whose deadline passes before its turn is `timeout`
+without a spawn; callers are coalesced by the profile's realpath across
+the WHOLE queue (A, B, A spawns A once), each joiner keeping its own
+deadline while the shared run itself follows the LONGEST deadline among
+its participants (an initiator that gave up never cancels a run a joiner
+still wants); at most four distinct profiles wait (`QUEUE_FULL` beyond
+that); the `--sections` call is one of those four and queues, coalesces
+and times out under the same rules. The engine's own budget is that
+remaining time less a 250 ms grace (`ENGINE_GRACE_MS`), so its kill timer
+fires first and the caller receives the engine's typed `timeout` — with
+`duration_ms` and `stderr_tail` — rather than the queue's bare deadline
+answer; a call whose remaining budget is already under the grace is
+`timeout` without a spawn. The environment is
 exactly `PATH`, `LANG=C.UTF-8`, `PYTHONPATH=<module_root>`; stdin is
 `/dev/null`; the child is its own process group and the group is
-SIGKILLed at the deadline.
+SIGKILLed at the deadline. (amended 2026-09-10, validation F10) the agent
+hashes the profile immediately before it spawns the engine and returns
+`profile_sha256`; the api reports THAT digest as `profile.sha256`, marks
+`sha256_changed: true` when it differs from the catalog snapshot listed
+at startup and refreshes the snapshot, and serves a cached result only
+when the file's current digest equals the cached one — an edited profile
+is never served under an old hash (CFG-02, AC-07).
 
 ### 8.4 Api route and cache
 
@@ -759,7 +806,14 @@ the process the route asks the agent for the `--sections` list
 `health.context`, whose `baselines` object gains `sections_source:
 'engine' | 'static'` and `engine_version`. A `run_id` records the
 response digest in the ledger under tool `health.baseline` with
-`args_digest` over `{ profile, max_age_s }` (§6.3).
+`args_digest` over `{ profile, max_age_s }` (§6.3). (amended 2026-09-10,
+validation F10) the agent hashes the profile immediately before it
+spawns the engine and returns `profile_sha256`; the api reports THAT
+digest as `profile.sha256`, marks `sha256_changed: true` when it differs
+from the catalog snapshot listed at startup and refreshes the snapshot,
+and serves a cached result only when the file's current digest equals
+the cached one — an edited profile is never served under an old hash
+(CFG-02, AC-07).
 
 ### 8.5 Python-side changes (AC-06, G-03)
 
@@ -842,18 +896,27 @@ argument is not it (ARCH-03).
 
 ### 9.2 Request and response
 
-Body: `{ probe, target, run_id?, timeout_s? }`. `target` is a
-`Filesystem` id for `fs_io` (the probe runs at its observed mountpoint)
-or a `Share` id for `nfs_loopback` (the probe mounts that export's
-path). An unknown id is `NOT_FOUND`; a filesystem that is not observed
-mounted is `PRECONDITION_FAILED` (`not_mounted`).
+Body: `{ probe, target, run_id?, timeout_s? }`. `run_id`, when present,
+MUST be a run id minted by `health.context` (a UUID); any other string
+is `INVALID_ARGUMENT` on the api and `INVALID_PARAMS` on the agent — the
+id is embedded in artifact names, so it is validated before it reaches a
+path (validation F06). The probe host itself re-validates `run_id`
+against a looser shape (`[A-Za-z0-9-]{1,64}`) before embedding it in a
+path; a value that reaches the host despite the checks above is
+`error.code: 'RUN_ID_INVALID'` (`stage: 'dir'` for `fs_io`, `stage:
+'lock'` for `nfs_loopback`) — defense in depth, not the primary check
+(validation F06). `target` is a `Filesystem` id for `fs_io` (the
+probe runs at its observed mountpoint) or a `Share` id for
+`nfs_loopback` (the probe mounts that export's path). An unknown id is
+`NOT_FOUND`; a filesystem that is not observed mounted is
+`PRECONDITION_FAILED` (`not_mounted`).
 
 ```jsonc
 {
   "probe": "fs_io", "target": "fs-data", "run_id": "…" | null,
   "started_at": "…Z", "completed_at": "…Z", "ok": true,
   "operation": { "kind": "write_read_unlink", "bytes": 4096, "fsync": true, "path": "<mountpoint>/.xinas-health/probe-<run>-<rand>" },
-  "error": null | { "code": "…", "message": "…", "stage": "open" | "write" | "fsync" | "read" | "unlink" | "mount" | "readdir" | "umount" },
+  "error": null | { "code": "…", "message": "…", "stage": "open" | "dir" | "write" | "fsync" | "read" | "unlink" | "lock" | "mount" | "readdir" | "umount" },
   "cleanup": { "status": "clean" | "failed", "detail": "…" | null },     // failed is a finding, never swallowed (PROBE-03)
   "proves": "a 4 KiB write, fsync, read-back and unlink succeeded on this mountpoint from the node itself; not client connectivity, not RDMA, not durability beyond fsync"   // PROBE-04, fixed text per probe kind
 }
@@ -866,13 +929,20 @@ removed, not kept as a fallback.
 
 **`fs_io`**
 
-1. Resolve the mountpoint from the observed row; `open(mountpoint,
-   O_DIRECTORY | O_NOFOLLOW)`; `fstat` and record `st_dev`.
+1. Before anything else, `run_id` is re-checked against
+   `[A-Za-z0-9-]{1,64}`; a mismatch is `error.code: 'RUN_ID_INVALID'`,
+   `stage: 'dir'` (validation F06) — defense in depth behind the api's
+   stricter UUID check (§9.2). Resolve the mountpoint from the observed
+   row; `open(mountpoint, O_DIRECTORY | O_NOFOLLOW)`; `fstat` and record
+   `st_dev`.
 2. `mkdirat(dirfd, '.xinas-health', 0700)` unless it exists;
    `openat(dirfd, '.xinas-health', O_DIRECTORY | O_NOFOLLOW)`; `fstat`
    MUST report the same `st_dev` and a directory owned by root, else
    `PRECONDITION_FAILED` (`probe_dir_untrusted`) — a symlink or a
-   foreign mount under that name never receives the probe.
+   foreign mount under that name never receives the probe. The directory
+   MUST NOT be group- or world-writable either (`mode & 0o022 === 0`) —
+   a root-owned 0777 directory is also `probe_dir_untrusted` (validation
+   F07).
 3. `openat(probedirfd, 'probe-<run_id|none>-<16 hex random>',
    O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW, 0600)`; `EEXIST` retries the
    random part twice, then fails.
@@ -883,7 +953,15 @@ removed, not kept as a fallback.
    result is `error: TIMEOUT` with `cleanup` reflecting what the unlink
    returned.
 6. Only the file this run created is ever unlinked; the directory is
-   left in place.
+   left in place. The unlink is preceded by an `lstat` of the name; if
+   the inode or device differs from the file this run created, nothing
+   is unlinked and `cleanup` is `failed` with `detail: 'probe file was
+   replaced; not removed'` (validation F07). The unlink requires the
+   identity `fstat` recorded at create time; without it (the create
+   step's own `fstat` never completed, or the `nlink !== 1` guard
+   rejected first) the file is left too — an unverified inode is not
+   this run's own object (PROBE-03) — reported as `cleanup: failed`,
+   `detail: 'probe file identity unknown; not removed'`.
 
 > **Implemented (S19a, `agent/health/probe-host.ts`).** Node has no
 > `openat`/`mkdirat`/`unlinkat`: the host opens the mountpoint and the
@@ -898,25 +976,78 @@ removed, not kept as a fallback.
 > unhandled rejection. The unlink is attempted whenever the file was
 > created — after a timeout too — and its failure is `cleanup.status:
 > 'failed'` with the errno.
+>
+> **Execution boundary (2026-09-10, validation B01).** `xinas-agent.service`
+> runs under `ProtectSystem=strict`; every filesystem mounted before the
+> agent started is read-only inside its mount namespace (observed on
+> xinas-box: `nsenter -t <agent pid> -m findmnt /mnt/data` → `ro` while
+> the host has `rw`), so an in-process `fs_io` fails with `EROFS` on every
+> installed node. The write therefore runs OUTSIDE the agent's namespace,
+> the way the loopback mount already does: the host spawns
+> `systemd-run --wait --pipe --collect --quiet --unit xinas-health-fsio-<random>
+> -p ProtectSystem=strict -p ReadWritePaths=<mountpoint> -p PrivateTmp=true
+> -p ProtectHome=true -p NoNewPrivileges=true -p RuntimeMaxSec=<timeout_s + 3>
+> /usr/bin/node <dist>/agent/health/fsio-child.js <mountpoint> <run_id|none> <timeout_ms>`.
+> The transient unit runs the SAME hardened `fs_io` (steps 1–6 above) as
+> root with exactly one writable path and prints the `ProbeOutcome` as
+> JSON on stdout; the agent parses it. The helper's outer bounds sit
+> inside the api's `timeout_s + 5 s` wait — systemd stops the unit at
+> `timeout_s + 3 s` and the agent's own `execFile` kills it at
+> `timeout_s + CLEANUP_GRACE_MS` (4 s) — so a wedged helper is reported as
+> `FSIO_HELPER_FAILED` with `cleanup: failed`, never as an api timeout
+> (amended 2026-09-10, final review). A mountpoint path that is not
+> absolute, or that contains whitespace, is refused before the unit is
+> ever spawned (`error.code: MOUNTPOINT_UNSUPPORTED`): `systemd-run`'s
+> `ReadWritePaths=` splits its value on whitespace, reads a leading `-` as
+> "optional" and a leading `+` as root-relative, so such a path could
+> never be granted safely. A helper that exits non-zero or prints no
+> outcome is `ok: false`, `error.code: FSIO_HELPER_FAILED`,
+> `cleanup: failed` ("artifact state unknown") — never `clean`. Tests and
+> fixture mode run the in-process implementation (`fsIoMode: 'in_process'`);
+> production wiring (`makeProbeHost`) selects `'pid1'`. Verified on
+> xinas-box (systemd 255.4-1ubuntu8.17, 2026-09-10) with `systemd-run
+> --wait --pipe --collect --quiet -p ProtectSystem=strict -p
+> ReadWritePaths=/mnt/data findmnt -no TARGET,OPTIONS /mnt/data`: the
+> mountpoint is `rw` inside the transient unit, `rw` with
+> `ReadWritePaths=/mnt` too, and `ro` without a grant. The full probe
+> path on an installed node is the B01 row of `hardware-smoke-runbook.md`
+> (pending).
 
 **`nfs_loopback`**
 
-1. `flock` on `/run/xinas/health-probe/.lock` (non-blocking); a held
-   lock is `CONFLICT` (`PROBE_IN_PROGRESS`) — loopback probes are
-   serialized per node. *Implemented (S19a):* Node has no `flock`; the
-   host uses an in-process guard plus an `O_CREAT | O_EXCL` lock file
-   carrying the agent's pid, reclaimed once when that pid is gone
-   (`ESRCH`). A refused lock is a result with `error.stage: 'lock'`.
+1. Before anything else, `run_id` is re-checked against
+   `[A-Za-z0-9-]{1,64}`; a mismatch is `error.code: 'RUN_ID_INVALID'`,
+   `stage: 'lock'` (validation F06) — defense in depth behind the api's
+   stricter UUID check (§9.2). `flock` on
+   `/run/xinas/health-probe/.lock` (non-blocking); a held lock is
+   `CONFLICT` (`PROBE_IN_PROGRESS`) — loopback probes are serialized per
+   node. *Implemented (S19a):* Node has no `flock`; the host uses an
+   in-process guard plus an `O_CREAT | O_EXCL` lock file carrying the
+   agent's pid, reclaimed once when that pid is gone (`ESRCH`). A
+   refused lock is a result with `error.stage: 'lock'`.
 2. Mountpoint `/run/xinas/health-probe/<run_id|none>-<random>/mnt`,
    created 0700; `systemd-mount --collect localhost:<export> <mnt>`
-   bounded by `timeout_s`; `readdir`; `systemd-umount <mnt>`; the
-   directory is removed after a successful umount.
-3. A failed umount leaves the directory, reports `cleanup.status:
-   failed` with the unit name, and the next probe uses a new directory —
-   nothing is ever retried onto a busy mountpoint.
+   bounded by `timeout_s`; `readdir`; `systemd-umount <mnt>`.
+3. After the mount step ends in ANY way other than success (timeout,
+   error, killed client) the host still runs `systemd-umount <mnt>`,
+   bounded by whatever remains of the run's own deadline plus a 4 s
+   grace (`CLEANUP_GRACE_MS`) — never less than 1 s and never more than
+   `UMOUNT_TIMEOUT_MS` (20 s) — so this cleanup step cannot itself push
+   the agent's answer past the api's wait; the client's death does not
+   prove PID1 did not
+   mount. An umount that still exceeds that bound is `cleanup: failed`
+   with `detail: 'mountpoint still mounted (systemd-umount: …)'` and the
+   directory is left for the operator (the next probe uses a new
+   directory, step 2). The host then compares `st_dev` of `<mnt>` with
+   its parent: a differing device means something is mounted and the
+   directory is left in place with `cleanup: failed` (`detail:
+   'mountpoint still mounted'`); otherwise the two directories are
+   removed with `rmdir` (never recursively). Nothing under a probe
+   mountpoint is ever deleted (validation F05, PROBE-03).
 4. The agent kills the `systemd-mount` subprocess at `timeout_s`; the
-   api's own timeout is `timeout_s + 5 s` so the agent, not the api wait,
-   is what stops the work.
+   cleanup umount is bounded the same way (step 3); the api's own
+   timeout is `timeout_s + 5 s` so the agent, not the api wait, is what
+   stops the work — for the mount step and for cleanup alike.
 
 The same host serves the legacy `health.check profile=deep` path (§9.4).
 
@@ -934,9 +1065,12 @@ prompt text already forbids it.
 
 - `active_probes_per_node` (default 1): one probe in flight per agent,
   any kind; a second concurrent request is `CONFLICT`
-  (`PROBE_IN_PROGRESS`). *Implemented (S19a):* the `health.probe.run`
-  RPC handler's in-flight guard, plus the loopback lock shared with the
-  deep profile; the api maps the agent's `PROBE_IN_PROGRESS` to `409`.
+  (`PROBE_IN_PROGRESS`). *Implemented (S19a; amended 2026-09-10,
+  validation F08):* the `ProbeHost` itself is the admission point — both
+  verbs share one in-flight record, so the legacy deep path
+  (`health.check profile=deep`) and `health.probe.run` can never overlap;
+  the RPC handler asks `busy()` first and maps a refusal to `-32000`
+  `PROBE_IN_PROGRESS`; the api maps that to `409`.
 - `probes_per_run` (default 4): counted in the run ledger per `run_id`;
   exceeded → `PRECONDITION_FAILED` (`probe_budget_exhausted`).
   *Implemented (S19b):* the route counts the probe against the run
@@ -1051,22 +1185,33 @@ report. Response:
   "valid": false,
   "schema_errors": [ { "path": "/checks/3/outcome", "message": "…" } ],
   "reference_errors": [ { "path": "/findings/0/evidence_refs/1", "ref": "ev-17", "message": "unknown evidence id" } ],
-  "integrity": { "status": "verified" | "mismatch" | "unverifiable", "mismatches": [ { "raw_report_index": 1, "expected_digest": "…", "actual_digest": "…" } ] },
+  "integrity": { "status": "verified" | "mismatch" | "unverifiable",
+                 "mismatches": [ { "raw_report_index": 1, "expected_digest": "…", "actual_digest": "…" } ],
+                 "omitted": [ { "tool": "health.check", "args_digest": "sha256:…", "collected_at": "…" } ] },
   "computed": { "health_status": "degraded", "coverage_status": "partial" },
+  "adjustments": [ { "id": "HC-03.arrays", "from": "pass", "to": "fail", "severity": "critical",
+                     "reason": "floor", "detail": "health.check xiraid.arrays: critical" } ],
   "status_errors": [ "health_status 'ok' does not match computed 'degraded'" ]
 }
 ```
 
-`valid` is true iff there are no schema, reference or status errors and
-`integrity.status !== 'mismatch'`. `unverifiable` (unknown or expired
-`run_id`) does not invalidate — it is reported (SAFE-04, AC-18).
+`valid` is true iff there are no schema, reference, status or
+run-identity errors and `integrity.status !== 'mismatch'`. `unverifiable`
+(unknown or expired `run_id`) does not invalidate — it is reported
+(SAFE-04, AC-18).
 
 *Implemented (S19c, `lib/health/report-validate.ts`,
 `api/health/report-integrity.ts`, `routes/health.ts`):* the response
 also carries `run_id` (the report's, or null when schema errors kept it
-unread), `rewritten_to_unknown` (the `not_applicable` rows step 3
-rewrote), `integrity.checked` (how many raw reports were checkable) and
-`report_digest` (`sha256:<hex>` over the canonical JSON of the body);
+unread), `adjustments` (every row the verdict raised or rewrote — §11.3
+steps 3, 5–8 — each with the outcome it came from, the outcome it was
+given, the reason and a detail naming the evidence), and
+`rewritten_to_unknown` (the ids of the rows whose *effective* outcome
+became `unknown` from some other outcome, whatever the reason: an
+uncited `not_applicable`, a `no_source` row, stale evidence or an
+`unknown` floor), `integrity.checked` (how many raw reports were
+checkable) and `report_digest` (`sha256:<hex>` over the canonical JSON
+of the body);
 each mismatch names its `reason` (`report_rehash_mismatch`,
 `not_in_ledger`, `digest_mismatch`). Schema errors are Ajv 2020-12
 instance paths; when the schema fails, `computed` is null and no
@@ -1077,7 +1222,11 @@ catalog) and `findings[].evidence_refs`, then `not_checked[].check_id`.
 A body that is not a JSON object is `INVALID_ARGUMENT`; a report that
 fails validation is still a 200 with `valid: false`. The body is
 subject to the api-wide 1 MB JSON limit. An unknown run also yields the
-`RUN_UNKNOWN` warning of §6.3.
+`RUN_UNKNOWN` warning of §6.3. A report whose `run.principal` or
+`run.versions` do not match the ledger entry lists that mismatch under
+`status_errors` (§11.4, validation F03); a run this principal did not
+mint is unknown to it (§6.3), so no identity error is possible there —
+the mismatch can only be reported against the caller's own run.
 
 ### 11.3 Deterministic verdict (REPORT-03, D-12)
 
@@ -1090,12 +1239,63 @@ catalog, not from the report's own `mandatory` flag, which must agree):
 2. `health_status`: `critical` if any `fail` with severity `critical`;
    else `degraded` if any `fail`; else `warning` if any `warn`; else `ok`
    iff `coverage_status === 'complete'`; else `unknown`.
-3. A `not_applicable` outcome MUST cite a `declared_absent` component or
-   a scope exclusion in `reason`; otherwise it is rewritten to `unknown`
-   before step 1 (REPORT-02).
+3. A `not_applicable` outcome on a MANDATORY row MUST cite, in `reason`,
+   a component the run's ledger proved absent (`health.context.topology.
+   declared_absent`, recorded in the ledger entry — §6.3); the report's own
+   `scope.declared_absent` is checked against that record and a component
+   it lists without proof is a status error. A scope-exclusion phrase
+   satisfies a non-mandatory row only. Anything else is rewritten to
+   `unknown` before step 1 (REPORT-02, AC-04; validation F02). A run with
+   no ledger entry — an unknown, expired or restarted run — proves
+   nothing either way, so the report's own `scope.declared_absent` is
+   taken as is (SAFE-04: a restart must not invalidate a report).
 4. `run_status` `failed` or `cancelled` cannot coexist with
    `health_status: ok` (the client must have completed the mandatory
    set): a status error.
+5. **Evidence floor** (REPORT-03, AC-01, AC-19; validation F01). For every
+   check row, each catalog input that appears in a raw report the report
+   carries and that integrity did not reject contributes a floor:
+   `mcp:health.check` — the raw check row with that id, mapped through
+   the catalog's `outcome_map`/`severity_map` (`ok` → none, `warning` →
+   warn, `degraded`/`critical` → fail with the mapped severity, `skipped`
+   → unknown), except that a raw row whose `evidence.collection.status`
+   is `error`, `timeout` or `permission_denied` contributes `unknown`
+   (AC-03: a collection failure is never a finding by itself); `baseline`
+   — the engine row with that section and check (`PASS` → none, `WARN` →
+   warn, `FAIL` → fail/critical, `SKIP` → unknown; a baseline whose
+   `collection.status` is not `success` contributes `unknown` to every
+   baseline input); `probe:health.probe.run` — the probe result of that
+   kind (`ok` + clean → none, `ok` + cleanup failed → warn, not ok →
+   fail/degraded). Inputs absent from every raw report contribute
+   nothing. The row's floor is the most severe contribution; the row's
+   effective outcome is the more severe of the model's outcome and the
+   floor (ordering `pass`/`not_applicable` < `unknown` < `warn` <
+   `fail`/warning < `fail`/degraded < `fail`/critical). A row raised by
+   the floor is listed under `adjustments` (`reason: floor`) and is a
+   status error. A validly cited `not_applicable` row (step 3) waives an
+   `unknown` floor — absence explains a skipped input — but not a `warn`
+   or `fail` floor. A catalog row ABSENT from `checks[]` whose floor is
+   `warn` or worse is synthesized at that floor (`adjustments` with
+   `from: unknown`, and a status error naming the missing row), counts in
+   the verdict like any other row, and is covered iff it is mandatory:
+   dropping the damning row is no cheaper than over-claiming it, and
+   listing it under `not_checked[]` does not excuse it — the evidence is
+   in the report.
+6. **Compromised sources** (validation F01b). A ledger tool whose latest
+   row is missing from `raw_reports` (`integrity.omitted`) or present but
+   tampered (`mismatch`) makes every input of that tool contribute
+   `unknown`: a check fed by evidence the model hid or edited cannot be
+   `pass` or `not_applicable`. A validly cited `not_applicable` (step 3)
+   still waives this level-1 floor; the report is invalid anyway, because
+   a compromised source is an integrity `mismatch`.
+7. **No source** (CHECK-01; validation F02). A catalog row with
+   `no_source: true` may only be `unknown` or `not_applicable`; `pass`,
+   `warn` or `fail` is rewritten to `unknown` (`reason: no_source`, a
+   status error) — the release must not claim a measurement it cannot
+   make.
+8. **Stale evidence** (REPORT-02). A row whose `evidence_refs` cite any
+   manifest entry with `stale: true` cannot be `pass`: it floors to
+   `unknown` (`reason: stale_evidence`).
 
 ### 11.4 Integrity (AC-19)
 
@@ -1104,7 +1304,27 @@ For every `raw_reports[i]` with a `run_id` known to the ledger (§6.3):
 digest; `report` re-hashed MUST equal `digest`. A model that edits a raw
 FAIL, or invents a report, produces `mismatch`. Reports from tools that
 do not write the ledger (`arrays.list`, `system.logs`, …) are
-`unverifiable` individually and do not affect `valid`.
+`unverifiable` individually and do not affect `valid`. The report's
+`run.principal` and `run.versions` MUST equal the ledger entry's (status
+errors otherwise).
+
+**Completeness.** For every `(tool, args)` the ledger holds, its LATEST
+digest must appear in `raw_reports`; a missing one is listed under
+`integrity.omitted` and makes `integrity.status` `mismatch` — a report
+that hides a result xiNAS produced is invalid (REPORT-06; validation
+F01b). Earlier rows of the same `(tool, args)` are superseded and need
+not appear.
+
+**Nothing to check is not `verified`** (amended 2026-09-10, final
+review). A report that carries no raw report from a ledger-writing tool
+(`integrity.checked === 0`) verified nothing, so its status is
+`unverifiable`, not `verified` — `verified` is a claim about a check that
+was actually performed. `unverifiable` never invalidates on its own
+(SAFE-04), so a run with no evidence still answers `valid: true` unless
+the verdict finds a status error; what it must not do is present an
+unchecked report as checked. The completeness rule above still comes
+first: when the ledger holds a row the report left out, the status is
+`mismatch` whatever `checked` says.
 
 ### 11.5 Storage
 
@@ -1226,9 +1446,9 @@ validate --file`) from the catalog without CLI code.
 | Unit — `standard.ts` | every `CollectionStatus` maps per §7.2; `not_supported` is the only `skipped`; `success` + empty keeps the old symptom with `collection.status: success` (AC-03) |
 | Unit — `routes-health` | `coverage_status` and `collection` per §7.3; a v1-shaped probe result maps to `LEGACY_AGENT`; `overall` semantics unchanged (REPORT-01) |
 | Unit — `probe-host` (fake fs via the existing file-backed fakes plus a real `tmpdir` case) | unique names, `EEXIST` retry, symlinked `.xinas-health` refused, foreign-device refused, cleanup failure surfaced, timeout stops the step, two concurrent loopbacks → one `PROBE_IN_PROGRESS` (AC-15) |
-| Unit — `agent/health/baseline-host.test.ts`, `agent/rpc/health-baseline.test.ts`, `agent/config-health-baseline.test.ts` (S19c) | against real stub interpreters: command line, cwd, env sanitization, realpath allow-list (path and symlink), SIGKILL of the process group at the timeout, `EXIT_<n>` / `MODULE_ABSENT` / `PARSE` / `ENOENT`, the stdout cap, concurrent callers share one run and a different profile is serialized, `--sections` parsing and caching; the RPC's parameter validation; the config block's defaults and validation |
+| Unit — `agent/health/baseline-host.test.ts`, `agent/rpc/health-baseline.test.ts`, `agent/config-health-baseline.test.ts` (S19c) | against real stub interpreters: command line, cwd, env sanitization, realpath allow-list (path and symlink), SIGKILL of the process group at the timeout, `EXIT_<n>` / `MODULE_ABSENT` / `PARSE` / `ENOENT`, the stdout cap, concurrent callers share one run and a different profile is serialized, `--sections` parsing and caching; the F09 queue rules (a queued caller times out on its own deadline without a spawn, A-B-A spawns A once, a joiner keeps its own deadline, a joiner with a LONGER deadline keeps the shared run alive, a sequential second call spawns again, `QUEUE_FULL` past the bound, `sections()` times out on the caller deadline without a spawn and concurrent `sections()` callers share one run), the engine's own typed timeout (its `duration_ms`, its stderr tail and its message) reaching the caller instead of the queue's deadline answer; the RPC's parameter validation; the config block's defaults and validation |
 | Unit — `api/routes-health-baseline.test.ts` (S19c) | the capped timeout per profile, the live section list, the per-profile cache (`from_cache`, `age_s`, a failed run never cached), profile and `max_age_s` validation, the ledger digest under a `run_id`, `RUN_UNKNOWN`, `EXECUTOR_UNAVAILABLE` without an agent |
-| Unit — `lib/health/report-validate.test.ts`, `api/routes-health-report.test.ts` (S19c) | the schema on a minimal valid report and each error path; the verdict table of §11.3 row by row (AC-01, AC-02, REPORT-02 rewrite, AC-08 service_path); reference errors with paths; status errors; over the route: `verified`, an edited raw FAIL → `mismatch` (AC-19), an invented report → `not_in_ledger`, non-ledger tools skipped, `unverifiable` on an unknown run, a malformed body |
+| Unit — `lib/health/report-validate.test.ts`, `lib/health/report-floor.test.ts`, `api/routes-health-report.test.ts` (S19c) | the schema on a minimal valid report and each error path; the verdict table of §11.3 row by row (AC-01, AC-02, REPORT-02 rewrite, AC-08 service_path); the evidence floor per input family and per compromised tool (steps 5–6), `no_source` and stale rows (steps 7–8); reference errors with paths; status errors; over the route: `verified`, an edited raw FAIL → `mismatch` (AC-19), an invented report → `not_in_ledger` plus the omitted ledger row, non-ledger tools skipped, `unverifiable` on an unknown run, a malformed body |
 | Contract — `mcp-wire.test.ts` (S19b) | `prompts/list` and `prompts/get` responses validate against the pinned `2026-07-28` schema on the modern era (`ListPromptsResult`, `Prompt`, `GetPromptResult`, `JSONRPCErrorResponse`); `mcp-integration.test.ts` drives the legacy shapes over the wire (no `resultType`, `initialize` advertises `prompts`) and the audit row. The stdio adapter forwards every method unchanged, so it is covered by the HTTP contract (AC-16) |
 | Integration — `rbac.test.ts`, `mcp-dispatch.test.ts`, `mcp-integration.test.ts` | the §13 matrix per entry; viewer `health.probe.run` denied on REST and MCP; operator with `allow_apply` on a legacy client → `MCP_CONFIRMATION_UNSUPPORTED`; modern → confirmation flow, consumed once (AC-14) |
 | e2e — `health-support.test.ts` extension | deep through the hardened host: artifact names differ per call, none left behind; *(S19c, cases 4c/4d/5)* `health.baseline` against a stub engine (`health_baseline.python` → a shell script printing a canned report and a `--sections` list) through the agent's real sandboxed subprocess, the cache on `max_age_s`, `sections_source: engine` in `health.context`; the report schema served and a report over the run's raw quick report `verified` while an edited raw report is a `mismatch`; `health.context` while the agent is SIGSTOPped still answers with a non-healthy heartbeat (AC-18). The missing-interpreter case (`not_supported`/`ENOENT`) is a unit test |
@@ -1244,14 +1464,14 @@ tests that shipped with S19a–c.*
 
 | AC | Where |
 |---|---|
-| AC-01 | §11.3 step 2 (a `fail` outranks everything); fixture `ac-01-raid-degraded-baseline-pass` — the RAID fail is kept as `critical` while the baseline says PASS, the finding names `arr-data`; `report-validate.test.ts` "a critical fail is critical … regardless of other rows" |
-| AC-02 | §7.3 (`coverage_status: partial`), §11.3 step 1; fixture `ac-02-collector-missing-stale` — collector in error + stale rows → `unknown`/`partial`, no false ok; `routes-health.test.ts` (S19a) |
+| AC-01 | §11.3 step 2 (a `fail` outranks everything); fixture `ac-01-raid-degraded-baseline-pass` — the RAID fail is kept as `critical` while the baseline says PASS, the finding names `arr-data`; `report-validate.test.ts` "a critical fail is critical … regardless of other rows"; the floor forces `fail`/critical on HC-03 whenever the raw row says critical (`report-floor.test.ts`) |
+| AC-02 | §7.3 (`coverage_status: partial`), §11.3 steps 1 and 5; fixture `ac-02-collector-missing-stale` — collector degraded (collection success) → HC-01 `fail`/degraded by the floor, stale rows → `unknown`; `degraded`/`partial`, no false ok; `routes-health.test.ts` (S19a) |
 | AC-03 | §7.1/§7.2 status enum and mapping; fixture `ac-03-probe-failures-not-absence` — timeout, permission_denied and PARSE are three `unknown`s, never `not_applicable`; `standard.test.ts`, `collect.test.ts` (S19a) |
-| AC-04 | §6.2 `declared_absent` derivation, §11.3 step 3; fixture `ac-04-no-nfs-no-raid-by-inventory` — cited `not_applicable` rows keep `ok`/`complete`, the uncited variant is rewritten to `unknown`; `routes-health-context.test.ts` `declaredAbsent` |
+| AC-04 | §6.2 `declared_absent` derivation, §11.3 step 3; fixture `ac-04-no-nfs-no-raid-by-inventory` — cited `not_applicable` rows keep `ok`/`complete`, the uncited variant is rewritten to `unknown`; `routes-health-context.test.ts` `declaredAbsent`; `declared_absent` is checked against the ledger's proven set, and a self-declared absence is a status error (`routes-health-report.test.ts` F02b) |
 | AC-05 | §8 (baseline profiles) vs §9 (probes) are different tools; fixture `ac-05-observe-only-no-mcp-deep` — the deep baseline profile runs, `health.check profile=deep` and `health.probe.run` are forbidden calls; `mcp-prompts.test.ts` (probe_policy capped) |
 | AC-06 | §8.5 (S19c: the SKIP `checker` row and `--sections`); fixture `ac-06-section-without-checker` — kerberos under `not_checked`, the SKIP row preserved in the ledger; `tests/test_health_engine_sections.py`, `routes-health-baseline.test.ts` |
 | AC-07 | §10 `expected_source` order; overrides live in `config.json` (survive updates) — provenance in `evidence_manifest.source`; `agentic-catalog.test.ts` (expectation keys, source order) |
-| AC-08 | §9.2 `proves` text; fixture `ac-08-loopback-passes-client-unreachable` — HC-12 passes, HC-11 stays `unknown`, `service_path` coverage `partial`; `probe-host.test.ts` (S19a) |
+| AC-08 | §9.2 `proves` text; fixture `ac-08-loopback-passes-client-unreachable` — HC-12 passes, HC-11 stays `unknown`, `service_path` coverage `partial`; `probe-host.test.ts` (S19a); §11.3 step 7 — the `no_source` row HC-11 cannot be `pass` |
 | AC-09 | HC-03/HC-09 rows in §10.2; fixture `ac-09-counter-without-series` — the trend row is `unknown` with a `data_gap` finding and a `next_check`, never `fail`/`warn` |
 | AC-10 | HC-10 rows produce `hypothesis` findings; fixture `ac-10-change-with-alternative` — a `hypothesis` with alternatives and a discriminating check; `report-validate.test.ts` (a hypothesis without alternatives is a schema error) |
 | AC-11 | schema `findings.kind: conflict`; fixture `ac-11-subagents-disagree` — `execution.roles_ran` of length 2, a `conflict` finding kept next to the observation, `run_status: partial`, the confirmed `warn` outranks the missing role |
@@ -1262,7 +1482,7 @@ tests that shipped with S19a–c.*
 | AC-16 | §4, §5.6, §4.4; `mcp-wire.test.ts`, `mcp-integration.test.ts` (S19b) |
 | AC-17 | §5.5 (ledger keeps the run's versions), §6.3; `run-ledger.test.ts`, `health-prompt-context.test.ts` (S19b) |
 | AC-18 | §8.4 cache + §11.2 `unverifiable`; fixture `ac-18-budget-exhausted` — `run_status: partial`, the deterministic reports kept, nine rows under `not_checked`, no tool called twice; `routes-health-report.test.ts` (`unverifiable` stays valid) |
-| AC-19 | §11.4; fixture `ac-19-invented-evidence-corrected-fail` — a dangling evidence id and a tampered raw report → reference error + `mismatch`, the ledger still holds the critical row; `routes-health-report.test.ts` |
+| AC-19 | §11.4 and §11.3 step 6; fixture `ac-19-invented-evidence-corrected-fail` — a tampered raw report is `mismatch` AND compromises every check it feeds (`unknown`/`partial`), the invented evidence id is a reference error, the ledger still holds the critical row; `routes-health-report.test.ts` |
 | AC-20 | §11.5 (nothing overwritten server-side); fixture `ac-20-repeat-after-fix` — the run after the fix is a new run with fresh digests and the earlier report still verifies against its own ledger |
 
 ## 17. Deferred (to `docs/TODO.md` when each slice lands)

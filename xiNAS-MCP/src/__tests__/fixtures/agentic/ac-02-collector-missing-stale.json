@@ -1,6 +1,6 @@
 {
   "id": "AC-02",
-  "title": "Baseline PASS, but a collector is missing and the array rows are stale: coverage partial, no false ok",
+  "title": "Baseline PASS, but a collector is missing and the array rows are stale: coverage partial, no false ok; the degraded collector is a fail, the stale rows are unknown",
   "scope": "node",
   "declared_absent": [],
   "ledger": {
@@ -78,15 +78,15 @@
   "report": {
     "run": { "run_id": "$run" },
     "run_status": "completed",
-    "health_status": "unknown",
+    "health_status": "degraded",
     "coverage_status": "partial",
     "raw_reports": [{ "$ledger": "standard" }, { "$ledger": "baseline" }],
     "checks": [
       {
         "id": "HC-01.agent-trust",
-        "outcome": "unknown",
-        "severity": null,
-        "reason": "the XiraidArray collector is in error (agent.collectors degraded); every array observation it feeds is untrusted until it runs again",
+        "outcome": "fail",
+        "severity": "degraded",
+        "reason": "the XiraidArray collector is in error (agent.collectors degraded, collection success): the trust criterion fails, and every array observation it feeds is untrusted until it runs again",
         "mandatory": true,
         "evidence_refs": ["ev-collectors"]
       },
@@ -125,16 +125,16 @@
     "not_checked": [
       { "check_id": "HC-03.rebuild-progress", "reason": "array state unknown; no reconstruction to follow" }
     ],
-    "human_readable": "Result: unknown. Scope: nas-01. Coverage: partial — the array collector is in error and the array rows are 48 minutes old, so RAID health is not confirmed; the baseline PASS does not change that."
+    "human_readable": "Result: degraded. Scope: nas-01. Coverage: partial — the array collector is in error, so agent trust fails; the array rows are 48 minutes old, so RAID health is not confirmed; the baseline PASS does not change that."
   },
   "expected": {
     "valid": true,
-    "computed": { "health_status": "unknown", "coverage_status": "partial" },
+    "computed": { "health_status": "degraded", "coverage_status": "partial" },
     "integrity": "verified",
     "reference_errors": 0,
     "status_errors": 0,
     "rewritten_to_unknown": [],
-    "checks": { "HC-01.agent-trust": "unknown", "HC-03.arrays": "unknown" },
+    "checks": { "HC-01.agent-trust": "fail", "HC-03.arrays": "unknown" },
     "checks_forbid_outcomes": { "ids": ["HC-03.arrays"], "outcomes": ["pass", "not_applicable"] },
     "findings": { "min": 1, "kinds_include": ["data_gap"], "check_ids_include": ["HC-03.arrays"] },
     "forbidden_calls": [{ "tool": "health.probe.run" }, { "tool": "*", "args": { "mode": "apply" } }, { "tool": "health.check", "args": { "profile": "deep" } }],

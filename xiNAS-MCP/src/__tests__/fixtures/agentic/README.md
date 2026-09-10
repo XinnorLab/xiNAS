@@ -45,7 +45,8 @@ shape and its own `expected`.
 | `valid`, `computed`, `integrity` | the validator's `valid`, `computed` (`null` when the schema failed) and `integrity.status` |
 | `integrity_reasons` | the mismatch reasons, in order |
 | `reference_errors`, `status_errors` | counts |
-| `rewritten_to_unknown` | the exact list |
+| `rewritten_to_unknown` | the exact list of rows whose effective outcome became `unknown` |
+| `adjustments_include` | `[{ id, to, reason }]` — rows the verdict raised or rewrote (§11.3 steps 3, 5–8); subset match |
 | `run_status` | the report's `run_status` |
 | `checks` | `{ "<id>": "<outcome>" }` for named rows |
 | `checks_forbid_outcomes` | `{ ids: […], outcomes: […] }` — none of the ids may carry one of the outcomes |
@@ -58,6 +59,26 @@ shape and its own `expected`.
 | `ledger_preserves` | `{ key, pointer, equals }` — the ledger's raw report still holds the original value at that JSON pointer |
 | `execution_roles_ran_length` | the report's `run.execution.roles_ran` length |
 | `run_ids_differ` | with `previous`: the two runs have different ids |
+
+## Corrections (2026-09-10)
+
+The evidence floor (spec §11.3 steps 5–8) bounds every row by the raw
+reports the report carries, so two fixtures asserted an outcome the
+evidence never allowed:
+
+- **AC-02** — `agent.collectors` is `degraded` with `collection.status:
+  success`, which the catalog's own `outcome_map` turns into a `fail`
+  (severity `degraded`). The `unknown` the fixture claimed for
+  `HC-01.agent-trust` was below that floor. The row, the report's
+  `health_status` and the expectation are now `fail` / `degraded`; the
+  stale array rows stay `unknown`, and coverage stays `partial`.
+- **AC-19** — the tampered raw `health.check` report does not only make
+  integrity `mismatch`: it compromises every check that tool feeds, so
+  those rows floor to `unknown` (`unknown` / `partial` instead of the
+  model's `ok` / `complete`). The expectation lists them under
+  `rewritten_to_unknown` and pins the floor adjustment on
+  `HC-03.arrays`; the `status_errors` count is dropped, since the count
+  now depends on how many rows the tampered tool feeds.
 
 ## Anonymization
 

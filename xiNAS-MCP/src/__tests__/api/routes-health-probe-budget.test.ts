@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { OPERATOR_TOKEN, buildTestAppWithMockAgent } from './_helpers.js';
@@ -68,11 +69,14 @@ describe('POST /api/v1/health/probe — probes_per_run budget (S19b)', () => {
     setup.mockAgent.respondToRpc(TOOL, () => ({
       result: { probe: 'fs_io', path: '/mnt/data', ...okOutcome },
     }));
-    const res = await post({ probe: 'fs_io', target: 'fs-data', run_id: 'after-restart' });
+    // A UUID that health.context never minted (e.g. from before an api
+    // restart) — still the right *shape*, just unknown to this ledger.
+    const runId = randomUUID();
+    const res = await post({ probe: 'fs_io', target: 'fs-data', run_id: runId });
     expect(res.status).toBe(200);
-    expect(res.body.result.run_id).toBe('after-restart');
+    expect(res.body.result.run_id).toBe(runId);
     expect(res.body.warnings).toEqual([
-      expect.objectContaining({ code: 'RUN_UNKNOWN', details: { run_id: 'after-restart' } }),
+      expect.objectContaining({ code: 'RUN_UNKNOWN', details: { run_id: runId } }),
     ]);
   });
 });

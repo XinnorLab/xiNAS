@@ -63,7 +63,7 @@ export interface HealthProbeDeps {
    * PARSED before return.
    */
   readLicenseText(): Promise<string | null>;
-  /** `rdma link show -j` JSON text ('' = no links). Rejects on failure. */
+  /** Rejects on failure; '' = no links. */
   rdmaLinkShow(): Promise<string>;
   getCollectorHealth(): Record<string, string>;
   /** Helper dry render (T1c). Rejects with HELPER_UNREACHABLE when the helper cannot answer. */
@@ -82,10 +82,23 @@ interface ProbeParams {
   first_export_path?: unknown;
 }
 
-/** `rdma link show -j` text → rows; '' is an empty list, non-object rows are dropped. */
+const errMessage = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+
+/**
+ * `rdma link show -j` text → rows; '' is an empty list; anything that is not
+ * a JSON array is PARSE; non-object array elements are dropped.
+ */
 export function parseRdmaLinks(raw: string): RdmaLink[] {
-  const parsed = raw.trim().length > 0 ? (JSON.parse(raw) as unknown) : [];
-  if (!Array.isArray(parsed)) return [];
+  if (raw.trim().length === 0) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new ProbeCollectionError('error', 'PARSE', `rdma link show: ${errMessage(err)}`);
+  }
+  if (!Array.isArray(parsed)) {
+    throw new ProbeCollectionError('error', 'PARSE', 'rdma link show: payload is not a JSON array');
+  }
   return parsed.filter((e): e is RdmaLink => typeof e === 'object' && e !== null);
 }
 
@@ -164,10 +177,16 @@ export interface HealthProbeWiring {
   probeHost?: ProbeHost;
 }
 
-/** The process-wide ProbeHost: file-backed in fixture mode, real otherwise. */
+/**
+ * The process-wide ProbeHost: file-backed in fixture mode, real
+ * otherwise. Production runs `fs_io` in a PID1 transient unit
+ * (`fsIoMode: 'pid1'`), because the agent's own `ProtectSystem=strict`
+ * namespace has every pre-existing filesystem read-only (validation B01,
+ * spec §9.3 "Execution boundary").
+ */
 export function makeProbeHost(fixture?: string | null): ProbeHost {
   const fdir = fixture !== undefined ? fixture : fixtureDir();
-  return fdir !== null ? createFakeProbeHost(fdir) : createRealProbeHost();
+  return fdir !== null ? createFakeProbeHost(fdir) : createRealProbeHost({ fsIoMode: 'pid1' });
 }
 
 /**
@@ -234,11 +253,7 @@ export function makeHealthProbeDeps(wiring: HealthProbeWiring): HealthProbeDeps 
       try {
         return await helper.renderNfsProfileDry(spec);
       } catch (err) {
-        throw new ProbeCollectionError(
-          'error',
-          'HELPER_UNREACHABLE',
-          err instanceof Error ? err.message : String(err),
-        );
+        throw new ProbeCollectionError('error', 'HELPER_UNREACHABLE', errMessage(err));
       }
     },
     runDeepProbes: makeDeepProbeRunner({
@@ -270,11 +285,15 @@ export function makeDeepProbeRunner(opts: {
   listMountedManaged(): Promise<string[]>;
 }): (firstExportPath: string | null) => Promise<DeepProbeResults> {
   return async (firstExportPath) => {
-    let mountpoints: string[] = [];
+    let mountpoints: string[];
     try {
       mountpoints = await opts.listMountedManaged();
-    } catch {
-      mountpoints = [];
+    } catch (err) {
+      throw new ProbeCollectionError(
+        'error',
+        'INVENTORY_UNAVAILABLE',
+        `managed filesystem inventory failed: ${errMessage(err)}`,
+      );
     }
 
     const fsIo: DeepProbeResults['fs_io'] = [];

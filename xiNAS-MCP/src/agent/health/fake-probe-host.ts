@@ -87,5 +87,8 @@ export function createFakeProbeHost(dir: string): ProbeHost {
         record(`loopback-umount:${exportPath}`);
       }
     },
+
+    /** The fake never holds a probe: its verbs are synchronous file writes. */
+    busy: () => null,
   };
 }

@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { AGENTIC_CATALOG } from '../../../lib/health/agentic-catalog.js';
 import {
+  type CheckOutcome,
   REPORT_SCHEMA,
   REPORT_SCHEMA_VERSION,
   type ReportCheck,
+  type VerdictInput,
   computeVerdict,
   validateReportShape,
 } from '../../../lib/health/report-validate.js';
@@ -198,18 +200,27 @@ describe('agentic report schema', () => {
   });
 });
 
+/** The neutral verdict input: no floor, nothing proven absent, nothing stale. */
+const NO_EVIDENCE: VerdictInput = {
+  floors: new Map(),
+  provenAbsent: null,
+  staleEvidenceIds: new Set(),
+};
+
 describe('computeVerdict (spec §11.3)', () => {
   const mandatory = new Set(mandatoryFor('node'));
   const all = (mutate: (c: ReportCheck) => ReportCheck) =>
     mandatoryFor('node').map((id) => mutate(check(id)));
   const verdict = (checks: ReportCheck[], declaredAbsent: string[] = []) =>
-    computeVerdict(checks, mandatory, declaredAbsent, 'node');
+    computeVerdict(checks, mandatory, declaredAbsent, 'node', AGENTIC_CATALOG, NO_EVIDENCE);
 
   it('every mandatory row passing is ok and complete', () => {
-    expect(verdict(all((c) => c))).toEqual({
+    expect(verdict(all((c) => c))).toMatchObject({
       health_status: 'ok',
       coverage_status: 'complete',
       rewritten_to_unknown: [],
+      adjustments: [],
+      errors: [],
     });
   });
 
@@ -232,7 +243,7 @@ describe('computeVerdict (spec §11.3)', () => {
       if (c.id === 'HC-08.host-services') return { ...c, outcome: 'unknown' };
       return c;
     });
-    expect(verdict(mixed)).toEqual({
+    expect(verdict(mixed)).toMatchObject({
       health_status: 'critical',
       coverage_status: 'partial',
       rewritten_to_unknown: [],
@@ -241,7 +252,7 @@ describe('computeVerdict (spec §11.3)', () => {
 
   it('an unknown mandatory row makes coverage partial and health unknown when nothing failed (AC-02)', () => {
     const one = all((c) => (c.id === 'HC-01.agent-trust' ? { ...c, outcome: 'unknown' } : c));
-    expect(verdict(one)).toEqual({
+    expect(verdict(one)).toMatchObject({
       health_status: 'unknown',
       coverage_status: 'partial',
       rewritten_to_unknown: [],
@@ -259,7 +270,7 @@ describe('computeVerdict (spec §11.3)', () => {
     const bare = all((c) =>
       c.id === 'HC-06.nfs-exports' ? { ...c, outcome: 'not_applicable', reason: 'no shares' } : c,
     );
-    expect(verdict(bare)).toEqual({
+    expect(verdict(bare)).toMatchObject({
       health_status: 'unknown',
       coverage_status: 'partial',
       rewritten_to_unknown: ['HC-06.nfs-exports'],
@@ -269,19 +280,30 @@ describe('computeVerdict (spec §11.3)', () => {
         ? { ...c, outcome: 'not_applicable', reason: 'nfs is declared absent by the inventory' }
         : c,
     );
-    expect(verdict(cited, ['nfs'])).toEqual({
+    expect(verdict(cited, ['nfs'])).toMatchObject({
       health_status: 'ok',
       coverage_status: 'complete',
       rewritten_to_unknown: [],
     });
     // the component must actually be declared absent, naming it is not enough
     expect(verdict(cited, []).rewritten_to_unknown).toEqual(['HC-06.nfs-exports']);
+    // a scope-exclusion phrase excuses a non-mandatory row only (§11.3 step 3)
     const excluded = all((c) =>
       c.id === 'HC-06.nfs-exports'
         ? { ...c, outcome: 'not_applicable', reason: 'shares are out of scope for this run' }
         : c,
     );
-    expect(verdict(excluded).coverage_status).toBe('complete');
+    expect(verdict(excluded).coverage_status).toBe('partial');
+    expect(verdict(excluded).rewritten_to_unknown).toEqual(['HC-06.nfs-exports']);
+    const optional = [
+      ...all((c) => c),
+      check('HC-09.trend', {
+        mandatory: false,
+        outcome: 'not_applicable',
+        reason: 'trends are out of scope for this run',
+      }),
+    ];
+    expect(verdict(optional).rewritten_to_unknown).toEqual([]);
   });
 
   it('service_path scope makes HC-11.client-path mandatory, so v1 coverage is partial (AC-08)', () => {
@@ -290,11 +312,213 @@ describe('computeVerdict (spec §11.3)', () => {
     const checks = mandatoryFor('service_path')
       .filter((id) => id !== 'HC-11.client-path')
       .map((id) => check(id));
-    expect(computeVerdict(checks, sp, [], 'service_path')).toEqual({
+    expect(
+      computeVerdict(checks, sp, [], 'service_path', AGENTIC_CATALOG, NO_EVIDENCE),
+    ).toMatchObject({
       health_status: 'unknown',
       coverage_status: 'partial',
       rewritten_to_unknown: [],
     });
+  });
+});
+
+describe('computeVerdict with floors (spec §11.3 steps 3, 5–8)', () => {
+  const mandatory = new Set(
+    AGENTIC_CATALOG.checks.filter((c) => c.mandatory_for.includes('node')).map((c) => c.id),
+  );
+  const row = (
+    id: string,
+    outcome: CheckOutcome,
+    over: Partial<ReportCheck> = {},
+  ): ReportCheck => ({
+    id,
+    outcome,
+    severity: null,
+    reason: 'r',
+    mandatory: mandatory.has(id),
+    evidence_refs: [],
+    ...over,
+  });
+  const allPass = [...mandatory].map((id) => row(id, 'pass'));
+  const noFloors: VerdictInput = { ...NO_EVIDENCE, provenAbsent: [] };
+
+  it('F01: a pass row below a fail/critical floor is raised, listed and a status error', () => {
+    const floors = new Map([
+      ['HC-03.arrays', { level: 4 as const, detail: 'health.check xiraid.arrays: critical' }],
+    ]);
+    const v = computeVerdict(allPass, mandatory, [], 'node', AGENTIC_CATALOG, {
+      ...noFloors,
+      floors,
+    });
+    expect(v.health_status).toBe('critical');
+    expect(v.adjustments).toEqual([
+      {
+        id: 'HC-03.arrays',
+        from: 'pass',
+        to: 'fail',
+        severity: 'critical',
+        reason: 'floor',
+        detail: 'health.check xiraid.arrays: critical',
+      },
+    ]);
+    expect(v.errors[0]).toContain(
+      "check 'HC-03.arrays' outcome 'pass' is below the evidence floor",
+    );
+  });
+
+  it('a fail row above the floor is untouched', () => {
+    const floors = new Map([['HC-03.arrays', { level: 2 as const, detail: 'x' }]]);
+    const checks = allPass.map((c) =>
+      c.id === 'HC-03.arrays' ? row(c.id, 'fail', { severity: 'critical' }) : c,
+    );
+    const v = computeVerdict(checks, mandatory, [], 'node', AGENTIC_CATALOG, {
+      ...noFloors,
+      floors,
+    });
+    expect(v.adjustments).toEqual([]);
+    expect(v.health_status).toBe('critical');
+  });
+
+  it('F02: a no_source row cannot be pass', () => {
+    const sp = new Set(
+      AGENTIC_CATALOG.checks
+        .filter((c) => c.mandatory_for.includes('service_path'))
+        .map((c) => c.id),
+    );
+    const checks = [...sp].map((id) => ({ ...row(id, 'pass'), mandatory: true }));
+    const v = computeVerdict(checks, sp, [], 'service_path', AGENTIC_CATALOG, noFloors);
+    expect(v.adjustments).toContainEqual(
+      expect.objectContaining({ id: 'HC-11.client-path', to: 'unknown', reason: 'no_source' }),
+    );
+    expect(v.coverage_status).toBe('partial');
+    expect(v.health_status).toBe('unknown');
+  });
+
+  it('F02b: a self-declared absence is not a citation; a scope-exclusion phrase does not excuse a mandatory row', () => {
+    const checks = allPass.map((c) =>
+      c.id === 'HC-03.arrays'
+        ? row(c.id, 'not_applicable', { reason: 'raid absent' })
+        : row(c.id, 'not_applicable', { reason: 'scope exclusion' }),
+    );
+    const v = computeVerdict(checks, mandatory, ['raid'], 'node', AGENTIC_CATALOG, noFloors);
+    expect(v.errors).toContainEqual(expect.stringContaining("scope.declared_absent 'raid' is not"));
+    expect(v.rewritten_to_unknown).toEqual([...mandatory]);
+    expect(v.health_status).toBe('unknown');
+  });
+
+  it('AC-04: a proven absence waives an unknown floor but not a warn floor', () => {
+    const floors = new Map([
+      ['HC-03.arrays', { level: 1 as const, detail: 'health.check xiraid.arrays: skipped' }],
+      ['HC-06.nfs-service', { level: 2 as const, detail: 'health.check nfs.server: warning' }],
+    ]);
+    const checks = allPass.map((c) =>
+      c.id === 'HC-03.arrays'
+        ? row(c.id, 'not_applicable', { reason: 'raid is declared absent' })
+        : c.id === 'HC-06.nfs-service'
+          ? row(c.id, 'not_applicable', { reason: 'nfs declared absent' })
+          : c,
+    );
+    const v = computeVerdict(checks, mandatory, ['raid', 'nfs'], 'node', AGENTIC_CATALOG, {
+      ...noFloors,
+      floors,
+      provenAbsent: ['raid', 'nfs'],
+    });
+    expect(v.adjustments.map((a) => a.id)).toEqual(['HC-06.nfs-service']);
+    expect(v.health_status).toBe('warning');
+  });
+
+  it('an unverifiable run takes the declared_absent of the report as is (SAFE-04)', () => {
+    const checks = allPass.map((c) =>
+      c.id === 'HC-03.arrays' ? row(c.id, 'not_applicable', { reason: 'raid is absent' }) : c,
+    );
+    const v = computeVerdict(checks, mandatory, ['raid'], 'node', AGENTIC_CATALOG, NO_EVIDENCE);
+    expect(v.errors).toEqual([]);
+    expect(v.adjustments).toEqual([]);
+    expect(v.health_status).toBe('ok');
+  });
+
+  it('F01: a mandatory row missing from checks[] cannot dodge its floor', () => {
+    const floors = new Map([
+      ['HC-03.arrays', { level: 4 as const, detail: 'health.check xiraid.arrays: critical' }],
+    ]);
+    const checks = allPass.filter((c) => c.id !== 'HC-03.arrays');
+    const v = computeVerdict(checks, mandatory, [], 'node', AGENTIC_CATALOG, {
+      ...noFloors,
+      floors,
+    });
+    expect(v.adjustments).toEqual([
+      {
+        id: 'HC-03.arrays',
+        from: 'unknown',
+        to: 'fail',
+        severity: 'critical',
+        reason: 'floor',
+        detail: 'health.check xiraid.arrays: critical',
+      },
+    ]);
+    expect(v.errors).toEqual([
+      "check 'HC-03.arrays' is missing from checks[] but the evidence floor is 'fail' (health.check xiraid.arrays: critical)",
+    ]);
+    expect(v.health_status).toBe('critical');
+    // the synthesized row is an outcome in the covered set
+    expect(v.coverage_status).toBe('complete');
+  });
+
+  it('a non-mandatory row missing from checks[] is synthesized too', () => {
+    const floors = new Map([
+      ['HC-12.active-probe', { level: 3 as const, detail: 'health.probe.run fs_io: failed' }],
+    ]);
+    const v = computeVerdict(allPass, mandatory, [], 'node', AGENTIC_CATALOG, {
+      ...noFloors,
+      floors,
+    });
+    expect(v.adjustments).toEqual([
+      {
+        id: 'HC-12.active-probe',
+        from: 'unknown',
+        to: 'fail',
+        severity: 'degraded',
+        reason: 'floor',
+        detail: 'health.probe.run fs_io: failed',
+      },
+    ]);
+    expect(v.health_status).toBe('degraded');
+    expect(v.coverage_status).toBe('complete');
+  });
+
+  it('an unknown floor on a missing row changes nothing (the row is already unknown)', () => {
+    const floors = new Map([
+      ['HC-03.arrays', { level: 1 as const, detail: 'health.check xiraid.arrays: skipped' }],
+    ]);
+    const v = computeVerdict(
+      allPass.filter((c) => c.id !== 'HC-03.arrays'),
+      mandatory,
+      [],
+      'node',
+      AGENTIC_CATALOG,
+      { ...noFloors, floors },
+    );
+    expect(v.adjustments).toEqual([]);
+    expect(v.errors).toEqual([]);
+    expect(v).toMatchObject({ health_status: 'unknown', coverage_status: 'partial' });
+  });
+
+  it('stale evidence cannot back a pass', () => {
+    const checks = allPass.map((c) =>
+      c.id === 'HC-05.filesystems' ? row(c.id, 'pass', { evidence_refs: ['ev-old'] }) : c,
+    );
+    const v = computeVerdict(checks, mandatory, [], 'node', AGENTIC_CATALOG, {
+      ...noFloors,
+      staleEvidenceIds: new Set(['ev-old']),
+    });
+    expect(v.adjustments).toContainEqual(
+      expect.objectContaining({
+        id: 'HC-05.filesystems',
+        to: 'unknown',
+        reason: 'stale_evidence',
+      }),
+    );
+    expect(v.coverage_status).toBe('partial');
   });
 });
 

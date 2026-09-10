@@ -20,9 +20,10 @@
  *   4c. baseline (S19c) — GET /health/baseline runs a stub engine through
  *      the agent's sandboxed subprocess; max_age_s serves the cache; the
  *      engine's --sections list drives sections_without_checker.
- *   4d. report (S19c) — the schema is served; a report built on the run's
- *      raw quick report validates `verified`; an edited raw report is a
- *      `mismatch`.
+ *   4d. report (S19c) — the schema is served; a report that agrees with the
+ *      run's raw quick report validates `verified`; one that claims every
+ *      row passes gets the same computed verdict and is invalid (the
+ *      evidence floor, §11.3 step 5); an edited raw report is a `mismatch`.
  *   5. agent down — SIGSTOP: standard degrades ONLY probe-backed
  *      checks with EXECUTOR_UNAVAILABLE; health.context still answers;
  *      SIGCONT recovers.
@@ -46,6 +47,9 @@ import * as http from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { AGENTIC_CATALOG } from '../../lib/health/agentic-catalog.js';
+import { computeFloors, outcomeAt } from '../../lib/health/report-floor.js';
+import type { AgenticReport } from '../../lib/health/report-validate.js';
 import { renderNetplan } from '../../lib/net/render.js';
 import { XINAS_NETPLAN } from '../../lib/parse/netplan.js';
 import { digestOf } from '../../api/health/run-ledger.js';
@@ -590,10 +594,12 @@ describe.sequential('e2e: S7 health/drift/support (fixture mode)', () => {
 
   it('4b. S19a: POST /health/probe runs ONE fs_io probe through the same host (REST operator, no confirmation)', async () => {
     writeFileSync(join(fixtureDir, 'probe-host-state.json'), JSON.stringify({ ops: [] }));
+    const ctx = await requestJson(apiSockPath, '/api/v1/health/context', ADMIN_TOKEN, 'GET');
+    const runId = (ctx.body.result as { run: { run_id: string } }).run.run_id;
     const res = await requestJson(apiSockPath, '/api/v1/health/probe', ADMIN_TOKEN, 'POST', {
       probe: 'fs_io',
       target: 'mnt-data.mount',
-      run_id: 'e2e-run-1',
+      run_id: runId,
     });
     expect(res.status).toBe(200);
     const result = res.body.result as {
@@ -610,11 +616,11 @@ describe.sequential('e2e: S7 health/drift/support (fixture mode)', () => {
       probe: 'fs_io',
       target: 'mnt-data.mount',
       path: '/mnt/data',
-      run_id: 'e2e-run-1',
+      run_id: runId,
       ok: true,
       cleanup: { status: 'clean' },
     });
-    expect(result.artifact?.path).toContain('e2e-run-1');
+    expect(result.artifact?.path).toContain(runId);
     expect(result.proves).toContain('not client connectivity');
     const state = JSON.parse(readFileSync(join(fixtureDir, 'probe-host-state.json'), 'utf8')) as {
       ops: string[];
@@ -680,9 +686,15 @@ describe.sequential('e2e: S7 health/drift/support (fixture mode)', () => {
     );
   });
 
-  it('4d. S19c: a report built on the run’s raw quick report validates verified; an edited raw report is a mismatch', async () => {
+  it('4d. S19c: a report built on the run’s raw quick report validates verified; an over-claiming report is bounded by the same evidence; an edited raw report is a mismatch', async () => {
     const ctx = await requestJson(apiSockPath, '/api/v1/health/context', ADMIN_TOKEN, 'GET');
-    const runId = (ctx.body.result as { run: { run_id: string } }).run.run_id;
+    // F03: the report's run block must be the one the ledger minted.
+    const run = (
+      ctx.body.result as {
+        run: { run_id: string; principal: string; versions: Record<string, unknown> };
+      }
+    ).run;
+    const runId = run.run_id;
     const quick = await requestJson(
       apiSockPath,
       `/api/v1/health?profile=quick&run_id=${runId}`,
@@ -708,21 +720,15 @@ describe.sequential('e2e: S7 health/drift/support (fixture mode)', () => {
       .filter((c) => c.mandatory_for.includes('node'))
       .map((c) => c.id);
     const T = '2026-09-09T10:00:00.000Z';
-    const report = (rawReport: Record<string, unknown>) => ({
+    const report = (rawReport: Record<string, unknown>, over: Record<string, unknown> = {}) => ({
       report_schema_version: '1',
       run: {
         run_id: runId,
         started_at: T,
         completed_at: T,
-        principal: 'admin:e2e',
+        principal: run.principal,
         node: { hostname: 'e2e', controller_id: CONTROLLER_ID, xinas_version: '1.0.0' },
-        versions: {
-          prompt: '1.0.0',
-          template_sha256: 'b'.repeat(64),
-          policy: '1',
-          catalog: '1',
-          report_schema: '1',
-        },
+        versions: run.versions,
         execution: {
           mode: 'sequential',
           roles_ran: [],
@@ -764,20 +770,109 @@ describe.sequential('e2e: S7 health/drift/support (fixture mode)', () => {
       ],
       not_checked: [],
       human_readable: 'ok',
+      ...over,
     });
+
+    // §11.3 steps 5–6: what this run's own raw quick report forces on each
+    // row (scenario 2 left drift degraded), so the honest report below can
+    // agree with its own evidence.
+    const floors = computeFloors(
+      {
+        raw_reports: [
+          {
+            tool: 'health.check',
+            args: { profile: 'quick' },
+            collected_at: String(raw.completed_at),
+            digest: digestOf(raw),
+            report: raw,
+          },
+        ],
+      } as unknown as AgenticReport,
+      AGENTIC_CATALOG,
+      { usableRawReports: new Set([0]), compromisedTools: new Set() },
+    );
+    // Not self-consistency: scenario 2's netplan drift is still in place, so
+    // this run's own quick report says `drift.netplan: degraded`, and
+    // HC-02.drift consumes it — that row must come back fail/degraded.
+    const rawChecks = raw.checks as Array<{ id: string; status: string }>;
+    expect(rawChecks.find((c) => c.id === 'drift.netplan')?.status).toBe('degraded');
+    expect(floors.get('HC-02.drift')?.level).toBe(3);
+    const honest = mandatory.map((id) => {
+      const floor = floors.get(id);
+      const forced =
+        floor === undefined
+          ? ({ outcome: 'pass', severity: null } as const)
+          : outcomeAt(floor.level);
+      return {
+        id,
+        outcome: forced.outcome,
+        severity: forced.severity,
+        reason: 'as measured',
+        mandatory: true,
+        evidence_refs: ['ev-1'],
+      };
+    });
+    expect(honest.find((c) => c.id === 'HC-02.drift')).toMatchObject({
+      outcome: 'fail',
+      severity: 'degraded',
+    });
+    const covered = honest.every((c) => c.outcome !== 'unknown');
+    const coverage_status = covered
+      ? 'complete'
+      : honest.some((c) => c.outcome !== 'unknown')
+        ? 'partial'
+        : 'none';
+    const health_status = honest.some((c) => c.outcome === 'fail' && c.severity === 'critical')
+      ? 'critical'
+      : honest.some((c) => c.outcome === 'fail')
+        ? 'degraded'
+        : honest.some((c) => c.outcome === 'warn')
+          ? 'warning'
+          : covered
+            ? 'ok'
+            : 'unknown';
+
     const verified = await requestJson(
+      apiSockPath,
+      '/api/v1/health/report/validate',
+      ADMIN_TOKEN,
+      'POST',
+      report(raw, { checks: honest, health_status, coverage_status }),
+    );
+    expect(verified.status).toBe(200);
+    expect(verified.body.result).toMatchObject({
+      valid: true,
+      integrity: { status: 'verified', checked: 1, omitted: [] },
+      computed: { health_status, coverage_status },
+      adjustments: [],
+      status_errors: [],
+      reference_errors: [],
+      schema_errors: [],
+    });
+
+    // F01: the same evidence bounds a report that claims every row passes —
+    // the computed verdict is identical, and the report is invalid.
+    const overclaimed = await requestJson(
       apiSockPath,
       '/api/v1/health/report/validate',
       ADMIN_TOKEN,
       'POST',
       report(raw),
     );
-    expect(verified.status).toBe(200);
-    expect(verified.body.result).toMatchObject({
-      valid: true,
-      integrity: { status: 'verified', checked: 1 },
-      computed: { health_status: 'ok', coverage_status: 'complete' },
+    expect(overclaimed.body.result).toMatchObject({
+      valid: false,
+      integrity: { status: 'verified' },
+      computed: { health_status, coverage_status },
     });
+    expect((overclaimed.body.result as { adjustments: unknown[] }).adjustments).toContainEqual(
+      expect.objectContaining({
+        id: 'HC-02.drift',
+        from: 'pass',
+        to: 'fail',
+        severity: 'degraded',
+        reason: 'floor',
+      }),
+    );
     const tampered = await requestJson(
       apiSockPath,
       '/api/v1/health/report/validate',

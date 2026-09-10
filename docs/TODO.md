@@ -1020,3 +1020,75 @@ model would test nothing.
 **What done looks like.** A `captured/` subset of fixtures per host and
 release (`ac-NN-<host>-<n>.json`), produced by the runbook procedure and
 committed with the release notes; the runner already accepts them.
+
+## Health — the fs_io PID1 delegation is not yet proven on hardware
+
+*Deferred 2026-09-10, from the S19 validation remediation
+(`fix/s19-validation-findings`); spec §9.3 "Execution boundary", B01.*
+
+**What is missing.** The `systemd-run` delegation of `fs_io` was designed
+from the `ReadWritePaths` semantics observed on xinas-box (systemd 255) and
+is covered by unit and e2e tests with a stubbed `systemd-run`; no node has
+run the built code yet.
+
+**What the code does instead.** Nothing different — the delegation is the
+shipped path; a `systemd-run` failure is an honest `FSIO_HELPER_FAILED`
+outcome with `cleanup: failed`, never a false `clean`.
+
+**Why it was cut.** No installed 3.14 node existed on 2026-09-10.
+
+**Done looks like.** The two B01 rows of `hardware-smoke-runbook.md` ticked
+on a real node and this entry deleted.
+
+## Health — a `pass` needs carried evidence for ledger-tool-only checks
+
+*Deferred 2026-09-10, from the S19 validation remediation final review
+(`fix/s19-validation-findings`); spec §11.3 step 5, §11.4.*
+
+**What is missing.** A catalog row whose inputs are ONLY ledger-tool
+sources — today `HC-02.baseline-expectations` (a `baseline` input) and
+`HC-12.active-probe` (a `probe:health.probe.run` input) — can be `pass`
+while the report carries no raw report of that family at all. The evidence
+floor bounds what a row may claim about evidence the report CARRIES; it
+says nothing about a row whose evidence was never taken.
+
+**What the code does instead.** Inputs absent from every raw report
+contribute no floor, so such a row keeps the model's own outcome. The
+response is honest about the gap at the report level:
+`integrity.status` is `unverifiable` with `checked: 0` when the report
+carries nothing from a ledger-writing tool, and `integrity.omitted`
+catches a ledger row the report left out.
+
+**Why it was cut.** Five hand-authored acceptance fixtures — AC-04, AC-09,
+AC-10, AC-11 and AC-20 — expand `HC-02.baseline-expectations` to `pass`
+carrying only a quick `health.check` report, so the rule needs a fixture
+pass before it can land; correcting those five is its own review.
+
+**Done looks like.** A rule in §11.3 step 5: a row whose catalog inputs are
+all ledger-tool sources floors to `unknown` when the report carries no raw
+report of that family; the five fixtures corrected; a regression test that
+a `pass` on such a row without its evidence is adjusted and a status error.
+
+## Health — the prompt and the tool description do not name the evidence floor
+
+*Deferred 2026-09-10, from the S19 validation remediation final review
+(`fix/s19-validation-findings`); spec §11.3 steps 5–8, §10.*
+
+**What is missing.** The `xinas_health_check` template and the
+`health.report.validate` catalog description both predate §11.3 steps 5–8.
+Neither says that the host raises a row to its evidence floor, lists the
+raise under `adjustments` and records a status error for it — a model
+learns about the floor only by getting a `valid: false` response back.
+
+**What the code does instead.** The template already tells the model never
+to suppress a raw failure and that the host computes the final status, so a
+model that follows it does not trip the floor; the floor itself is enforced
+server-side regardless of what the model was told.
+
+**Why it was cut.** The template constant is pinned to the docs body by a
+test and is versioned: changing its text is a `prompt_version` bump with
+its own review and its own fixture pass, not a wording fix.
+
+**Done looks like.** A template paragraph and a `health.report.validate`
+catalog description that name `adjustments` and the floor, `prompt_version`
+bumped, and the template pin test updated to the new body.

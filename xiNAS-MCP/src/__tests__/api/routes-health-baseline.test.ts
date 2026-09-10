@@ -1,9 +1,12 @@
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { loadProfileCatalog } from '../../api/health/profiles.js';
 import { digestOf } from '../../api/health/run-ledger.js';
+import { sha256Hex } from '../../api/mcp/prompts/health-check.js';
 import {
   OPERATOR_TOKEN,
   VIEWER_TOKEN,
@@ -80,6 +83,7 @@ describe('GET /api/v1/health/baseline (S19c)', () => {
         name: 'standard',
         path: join(REPO_PROFILES, 'standard.yml'),
         sha256: expect.stringMatching(/^[0-9a-f]{64}$/),
+        sha256_changed: false,
         timeout_seconds: 180,
         sections_without_checker: [],
       },
@@ -199,6 +203,69 @@ describe('GET /api/v1/health/baseline (S19c)', () => {
     expect(stale.status).toBe(200);
     expect(stale.body.result.run_id).toBe('gone');
     expect(stale.body.warnings.map((w: { code: string }) => w.code)).toEqual(['RUN_UNKNOWN']);
+  });
+
+  it('F10: an edited profile runs under its new digest, is flagged, and is not served from the old cache', async () => {
+    const profilesDir = mkdtempSync(join(tmpdir(), 'xinas-baseline-profiles-'));
+    try {
+      const profilePath = join(profilesDir, 'standard.yml');
+      const OLD = 'profile: standard\n';
+      const CHANGED = 'profile: standard\nedited: true\n';
+      writeFileSync(profilePath, OLD);
+      if (setup.ctx.healthPrompt === undefined) throw new Error('health prompt context missing');
+      setup.ctx.healthPrompt.profiles = loadProfileCatalog(profilesDir);
+      setup.mockAgent.respondToRpc('health.baseline', (params) => {
+        seen.push(params);
+        const p = params as { sections?: boolean; profile_path?: string };
+        if (p.sections === true) {
+          return {
+            result: {
+              status: 'success',
+              collected_at: '2026-09-09T11:59:00.000Z',
+              sections: ENGINE_SECTIONS,
+              version: '3.13.2',
+            },
+          };
+        }
+        const bytes = readFileSync(p.profile_path as string, 'utf8');
+        return {
+          result: {
+            status: 'success',
+            collected_at: '2026-09-09T12:00:00.000Z',
+            duration_ms: 10,
+            engine: { module: 'xinas_menu.health.engine', version: '3.13.2' },
+            report: {
+              metadata: { profile: 'standard' },
+              overall: 'PASS',
+              checks: [],
+              executed_profile: bytes,
+            },
+            stderr_tail: '',
+            profile_sha256: sha256Hex(bytes),
+          },
+        };
+      });
+
+      const first = await get('?profile=standard&max_age_s=0');
+      expect(first.body.result.profile.sha256_changed).toBe(false);
+
+      writeFileSync(profilePath, CHANGED);
+      const cached = await get('?profile=standard&max_age_s=3600');
+      expect(cached.body.result.collection.from_cache).toBe(false); // digest differs → miss
+      expect(cached.body.result.report.executed_profile).toBe(CHANGED);
+      expect(cached.body.result.profile.sha256).toBe(sha256Hex(CHANGED));
+      expect(cached.body.result.profile.sha256_changed).toBe(true);
+
+      const ctxRes = await request(setup.app)
+        .get('/api/v1/health/context')
+        .set('Authorization', OPERATOR_TOKEN);
+      const listed = ctxRes.body.result.baselines.profiles.find(
+        (p: { name: string }) => p.name === 'standard',
+      );
+      expect(listed.sha256).toBe(sha256Hex(CHANGED));
+    } finally {
+      rmSync(profilesDir, { recursive: true, force: true });
+    }
   });
 
   it('answers UNSUPPORTED when the prompt feature is disabled', async () => {
