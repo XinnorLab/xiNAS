@@ -712,6 +712,7 @@ Result:
   "engine": { "module": "xinas_menu.health.engine", "version": "<XINAS_MENU_VERSION>" | null },
   "report": { …the engine's JSON verbatim… } | null,
   "stderr_tail": "…",
+  "profile_sha256": "<hex>" | null,   // sha256 of the profile bytes the engine received, read just before spawn
   "error": { "code": "TIMEOUT" | "EXIT_<n>" | "PARSE" | "ENOENT", "message": "…" }
 }
 ```
@@ -755,7 +756,13 @@ answer; a call whose remaining budget is already under the grace is
 `timeout` without a spawn. The environment is
 exactly `PATH`, `LANG=C.UTF-8`, `PYTHONPATH=<module_root>`; stdin is
 `/dev/null`; the child is its own process group and the group is
-SIGKILLed at the deadline.
+SIGKILLed at the deadline. (amended 2026-09-10, validation F10) the agent
+hashes the profile immediately before it spawns the engine and returns
+`profile_sha256`; the api reports THAT digest as `profile.sha256`, marks
+`sha256_changed: true` when it differs from the catalog snapshot listed
+at startup and refreshes the snapshot, and serves a cached result only
+when the file's current digest equals the cached one — an edited profile
+is never served under an old hash (CFG-02, AC-07).
 
 ### 8.4 Api route and cache
 
@@ -787,7 +794,14 @@ the process the route asks the agent for the `--sections` list
 `health.context`, whose `baselines` object gains `sections_source:
 'engine' | 'static'` and `engine_version`. A `run_id` records the
 response digest in the ledger under tool `health.baseline` with
-`args_digest` over `{ profile, max_age_s }` (§6.3).
+`args_digest` over `{ profile, max_age_s }` (§6.3). (amended 2026-09-10,
+validation F10) the agent hashes the profile immediately before it
+spawns the engine and returns `profile_sha256`; the api reports THAT
+digest as `profile.sha256`, marks `sha256_changed: true` when it differs
+from the catalog snapshot listed at startup and refreshes the snapshot,
+and serves a cached result only when the file's current digest equals
+the cached one — an edited profile is never served under an old hash
+(CFG-02, AC-07).
 
 ### 8.5 Python-side changes (AC-06, G-03)
 

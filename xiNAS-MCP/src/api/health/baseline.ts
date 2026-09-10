@@ -21,6 +21,7 @@
 
 import { ApiException } from '../errors.js';
 import type { BaselineProfile } from './profiles.js';
+import { sha256OfFile } from './profiles.js';
 import type { HealthPromptContext } from './prompt-context.js';
 
 /** What the agent's `health.baseline` answers (structural copy — api/ never imports agent/). */
@@ -31,6 +32,12 @@ export interface AgentBaselineRun {
   engine: { module: string; version: string | null } | null;
   report: Record<string, unknown> | null;
   stderr_tail?: string;
+  /**
+   * sha256 of the profile bytes the agent actually read just before spawn
+   * (F10). Optional/nullable: an older agent build doesn't send it, in
+   * which case the api falls back to its own fresh read of the file.
+   */
+  profile_sha256?: string | null;
   error?: { code: string; message: string };
 }
 
@@ -57,7 +64,10 @@ export interface BaselineResponse {
   profile: {
     name: string;
     path: string | null;
+    /** sha256 of the profile bytes the engine actually ran; the api's own fresh read when the agent is older. */
     sha256: string | null;
+    /** True when `sha256` differs from the catalog snapshot listed at startup; that snapshot is then refreshed. */
+    sha256_changed: boolean;
     timeout_seconds: number;
     sections_without_checker: string[];
   };
@@ -161,11 +171,14 @@ function profileBlock(
   profile: BaselineProfile,
   timeoutS: number,
   engine: EngineSections | null,
+  sha256: string | null,
+  changed: boolean,
 ): BaselineResponse['profile'] {
   return {
     name: profile.name,
     path: profile.path,
-    sha256: profile.sha256,
+    sha256,
+    sha256_changed: changed,
     timeout_seconds: timeoutS,
     sections_without_checker: sectionsWithoutChecker(profile, engine),
   };
@@ -195,13 +208,24 @@ export async function runBaseline(deps: RunBaselineDeps): Promise<BaselineRespon
   const cap = capFor(hp, profile.name);
   const timeoutS = effectiveTimeoutS(profile, cap);
 
+  // F10: the file's digest right now — never the catalog's startup-time
+  // snapshot — is what decides both cache freshness and `sha256_changed`.
+  const current = profile.path === null ? null : sha256OfFile(profile.path);
+  const changedFromListed =
+    current !== null && profile.sha256 !== null && current !== profile.sha256;
+
   const cached = hp.baselineCache.get(profile.name);
-  if (deps.maxAgeS > 0 && cached !== undefined) {
+  if (
+    deps.maxAgeS > 0 &&
+    cached !== undefined &&
+    current !== null &&
+    cached.result.profile.sha256 === current
+  ) {
     const ageS = Math.floor((now() - cached.stored_at_ms) / 1000);
     if (ageS <= deps.maxAgeS) {
       return {
         ...cached.result,
-        profile: profileBlock(profile, timeoutS, hp.engineSections),
+        profile: profileBlock(profile, timeoutS, hp.engineSections, current, changedFromListed),
         collection: { ...cached.result.collection, from_cache: true, age_s: Math.max(0, ageS) },
         run_id: null,
       };
@@ -210,13 +234,15 @@ export async function runBaseline(deps: RunBaselineDeps): Promise<BaselineRespon
 
   const nowIso = new Date(now()).toISOString();
   if (deps.client === undefined) {
-    return failed(profileBlock(profile, timeoutS, hp.engineSections), nowIso, 'error', {
-      code: 'EXECUTOR_UNAVAILABLE',
-      message: 'no agent RPC client configured',
-    });
+    return failed(
+      profileBlock(profile, timeoutS, hp.engineSections, current, changedFromListed),
+      nowIso,
+      'error',
+      { code: 'EXECUTOR_UNAVAILABLE', message: 'no agent RPC client configured' },
+    );
   }
   const engine = await ensureEngineSections(hp, deps.client);
-  const block = profileBlock(profile, timeoutS, engine);
+  const block = profileBlock(profile, timeoutS, engine, current, changedFromListed);
   if (profile.path === null) {
     return failed(block, nowIso, 'error', {
       code: 'PROFILE_NOT_FOUND',
@@ -249,8 +275,16 @@ export async function runBaseline(deps: RunBaselineDeps): Promise<BaselineRespon
       message: 'the agent answered health.baseline with an unexpected shape',
     });
   }
+  // The digest of the bytes that actually ran: the agent's own report when
+  // present, else the api's fresh read (an older agent that never sent
+  // `profile_sha256`). Refresh the startup catalog snapshot when it changed
+  // so `health.context` lists the current one (`profile` is the live
+  // BaselineProfile object from `hp.profiles.profiles`).
+  const executed = typeof run.profile_sha256 === 'string' ? run.profile_sha256 : current;
+  const changed = executed !== null && profile.sha256 !== null && executed !== profile.sha256;
+  if (changed) profile.sha256 = executed;
   const result: BaselineResponse = {
-    profile: block,
+    profile: profileBlock(profile, timeoutS, engine, executed, changed),
     collection: {
       status: run.status,
       collected_at: run.collected_at,

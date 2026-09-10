@@ -36,7 +36,8 @@
  */
 
 import { spawn } from 'node:child_process';
-import { realpathSync, statSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { readFileSync, realpathSync, statSync } from 'node:fs';
 import { sep } from 'node:path';
 import type { HealthBaselineConfig } from '../config.js';
 
@@ -68,6 +69,13 @@ export interface BaselineRunResult {
   /** The engine's JSON verbatim; null unless `status` is `success`. */
   report: Record<string, unknown> | null;
   stderr_tail: string;
+  /**
+   * sha256 hex of the profile bytes read immediately before spawn (F10: the
+   * digest of the bytes that actually ran, not a startup-time snapshot);
+   * null when the file could not be read at that moment, or the job never
+   * reached that point (e.g. it timed out queued, or the queue was full).
+   */
+  profile_sha256: string | null;
   error?: BaselineError;
 }
 
@@ -403,6 +411,7 @@ export function makeBaselineHost(
     engine: { module: BASELINE_ENGINE_MODULE, version },
     report: null,
     stderr_tail: '',
+    profile_sha256: null,
     error,
   });
 
@@ -440,6 +449,16 @@ export function makeBaselineHost(
   };
 
   const runOnce = async (real: string, timeoutMs: number): Promise<BaselineRunResult> => {
+    // F10: hash the exact bytes about to be handed to the engine, right
+    // before spawn — not the catalog's startup-time snapshot — so the
+    // result always reflects what actually ran even if the file was
+    // edited after the api last listed it.
+    let profileSha256: string | null = null;
+    try {
+      profileSha256 = createHash('sha256').update(readFileSync(real)).digest('hex');
+    } catch {
+      profileSha256 = null;
+    }
     const exec = await runEngine(
       config,
       ['-m', BASELINE_MODULE, real, config.log_dir, '--json', '--no-save'],
@@ -452,6 +471,7 @@ export function makeBaselineHost(
       duration_ms: exec.duration_ms,
       engine: { module: BASELINE_ENGINE_MODULE, version },
       stderr_tail: tail(exec.stderr),
+      profile_sha256: profileSha256,
     };
     if (exec.status !== 'success') {
       return {

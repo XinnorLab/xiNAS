@@ -195,6 +195,16 @@ describe('BaselineHost', () => {
     expect(readFileSync(counter, 'utf8').trim().split('\n')).toHaveLength(2);
   });
 
+  it('F10: the result carries the sha256 of the bytes the engine received', async () => {
+    const python = stub('echo.sh', 'echo "{}"');
+    const h = host(python);
+    const first = await h.run(quick, 1_000);
+    writeFileSync(quick, 'profile: quick\nexpectations: {net_mtu: 1500}\n');
+    const second = await h.run(quick, 1_000);
+    expect(first.profile_sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(second.profile_sha256).not.toBe(first.profile_sha256);
+  });
+
   it('sections(): parses the --sections JSON, caches it, and stamps the engine version on later runs', async () => {
     const counter = join(dir, 'sections.txt');
     const python = stub(

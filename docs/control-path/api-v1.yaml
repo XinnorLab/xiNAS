@@ -1886,7 +1886,13 @@ components:
           properties:
             name: { type: string }
             path: { type: string, nullable: true }
-            sha256: { type: string, nullable: true }
+            sha256:
+              type: string
+              nullable: true
+              description: sha256 of the profile bytes the engine actually ran (from the agent); the catalog snapshot when the agent is older.
+            sha256_changed:
+              type: boolean
+              description: True when the executed digest differs from the snapshot the api listed at startup; the snapshot is refreshed.
             timeout_seconds:
               type: integer
               description: The effective timeout — the profile's own `timeout_seconds` capped per profile.
