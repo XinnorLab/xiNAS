@@ -12,6 +12,65 @@ Requires-Rebuild: xinas_node_build
 
 ### Added
 
+- **MCP apply confirmation (MRTR, S15).** An `apply` requested over `/mcp`
+  is held until a human confirms the persisted plan through a channel the
+  model does not control — after `mcp.allow_apply`, RBAC and the
+  `dangerous` flag, never instead of them. Non-disruptive and
+  access-changing plans are confirmed in-band with an MCP `2026-07-28`
+  `input_required` form. Destructive plans are approved out of band by a
+  distinct admin, on a cookie-free approval page or over REST
+  (`mcp.confirmation.approval_url_base` must be set, otherwise
+  `CONFIRMATION_URL_UNAVAILABLE`); `xinasctl mcp_confirmations approve`
+  over the UDS is refused unless `mcp.confirmation.allow_uds_approval` is
+  on. The confirmation is bound to the principal, tool, arguments, plan
+  and idempotency key, is single-use, and is consumed inside the
+  transaction that creates the apply task. A legacy-era client gets
+  `MCP_CONFIRMATION_UNSUPPORTED`. New with it: the `mcp.confirmation`
+  config section, an HMAC key ring beside the state database, a token
+  `surface` scope (`mcp` | `rest` | `any`, default `any`) and
+  `GET /api/v1/metrics` (Prometheus, viewer). **Scope the agent's token
+  with `"surface": "mcp"`** — an unscoped bearer also applies over REST,
+  unconfirmed. See `docs/control-path/s15-mcp-mrtr-confirmation-spec.md`.
+- **MCP Tasks extension (`io.modelcontextprotocol/tasks`, S16).** A
+  modern MCP client that declares the extension on an apply request now
+  receives a task handle (`resultType: "task"`, `taskId` = the xiNAS
+  `task_id`) instead of holding the call open, and follows the operation
+  with `tasks/get`, `tasks/update` and `tasks/cancel` — the handle
+  survives client and api restarts because it *is* the durable task. The
+  `fs.create` contract is corrected on the way: every filesystem create
+  plan is `rollback_model: unsupported` (so it is confirmed out-of-band
+  over MCP), and a cancel that arrives after `mkfs` started is refused
+  (`cancel_refused_reason: irreversible_stage_started`) instead of
+  reporting a formatted device as `cancelled`. Clients without the
+  extension keep the `task_id` + `tasks.wait` flow unchanged. See
+  `docs/control-path/s16-mcp-tasks-spec.md`.
+- **MCP Resources and `subscriptions/listen` event feeds (S17).** A modern
+  client learns about RAID, filesystem, NFS and node events without
+  polling. Six `xinas://events/<feed>` resources (`raid`, `raid/progress`,
+  `storage`, `nfs`, `nfs/sessions`, `system`) read a durable,
+  cursor-addressable journal (`{?after,limit}`), and `subscriptions/listen`
+  over Streamable HTTP sends `notifications/resources/updated` as a
+  wake-up only; `xinas-mcp-stdio` demultiplexes the stream. Events are
+  derived from committed observed-state transitions, so a failed or stale
+  source never reads as a removal, an outage or a recovery. `GET /events`
+  gains `feed` / `after` / `limit` (admin), `XiraidArray.status` gains
+  `raw_states` and four progress fields, and the `mcp.subscriptions`
+  config section sets the switch, thresholds and limits. Event families
+  with no periodic source today (media, license, replacement-failed, disk
+  wear) are defined but off, reported as `producers.inactive`. See
+  `docs/control-path/s17-mcp-subscriptions-spec.md`.
+- **RAID Create MCP App (S18).** `mcp_apps.raid_create` (admin) opens
+  `ui://xinas/raid-create`, an MCP Apps (`io.modelcontextprotocol/ui`,
+  2026-01-26) wizard served as one self-contained HTML file with no
+  external origins. It reads the observed inventory through the ordinary
+  tools, offers the RAID level / strip / block choices generated from the
+  xiRAID validator tables (`GET /api/v1/mcp/apps/raid-create`), blocks
+  unsuitable disks with the reason, requests the existing `arrays.create`
+  plan, shows its diff and affected resources, and hands the apply to the
+  host-owned S15 confirmation — the App can neither confirm its own
+  operation nor bypass the gate. Text-only clients keep calling
+  `arrays.create` directly. `npm run build` now also runs `vite build`.
+  See `docs/control-path/s18-mcp-raid-create-app-spec.md`.
 - **Typed collection status on health checks (S19a).** The agent's
   `health.probe` reports each source as `success`, `error`, `timeout`,
   `permission_denied` or `not_supported` with its own `observed_at`; every
@@ -132,12 +191,48 @@ Requires-Rebuild: xinas_node_build
   whose rollback is also unsupported requires `DATA MAY BE PERMANENTLY
   LOST` (it accepted `ROLLBACK IS NOT SUPPORTED` before); one table drives
   the service, the approval page, `xinasctl` and `api-v1.yaml`.
+- **The modern `/mcp` path refuses a malformed JSON-RPC `id`.** A request
+  carrying `id: null`, `true`, `{}` or `[]` was executed — `tools/call`
+  really ran the tool — and answered with `id: null`, which a client
+  cannot correlate with what it sent (two such in-flight requests come
+  back indistinguishable, and over the stdio bridge every reply shares
+  one stream). The envelope is now validated after the notification
+  check (an absent `id` is the one legitimate absence) and before any
+  method branch, so no handler runs for it: HTTP 400 with `-32600`
+  (invalid request). Both protocol eras now refuse the same message; the
+  legacy path already did.
 - **RAID Create App.** Typing into the array name keeps focus and caret; a
   failed or `DEGRADED_*` inventory refresh blocks planning and handoff and
   keeps the old rows visible as not current; spare-pool drives are excluded
   by device path; the handoff message tells the host to follow either the
   native task handle or the `tasks.wait` fallback. A Playwright/Chromium
   suite now runs in `test:e2e`.
+- **A xiRAID array volume is refused as an array member or pool drive.**
+  `lsblk` reports `/dev/xi_<name>` as `TYPE=disk`, and an array serving as
+  an XFS external journal has no mountpoint, so it read `safe_for_use` and
+  passed every check below the TUI's picker: an `arrays.create` over
+  `/dev/xi_log` from REST, `/mcp` or `xinasctl` overwrote a live
+  filesystem's journal. Plan validation (blocker `disk_is_raid_volume`),
+  the pool provider and both executors now refuse the `/dev/xi_` prefix —
+  structurally, so it fails closed before the first collector cycle too.
+  Removing such a drive from a pool stays allowed; it is the repair path.
+- **`share.update` and `config.rollback` keep the `ShareFsid` markers in
+  step.** Changing a share's `fsid` left the old marker orphaned and never
+  wrote the new one, so a later `share.create` that drew the orphaned
+  number failed `PRECONDITION_FAILED` on every retry, and a second share
+  could take the same fsid. An fsid change now moves the marker (blocked
+  `FSID_IN_USE` when another share holds the number), an orphaned marker
+  is reclaimed, and rollback adoption reconciles the markers against the
+  final Share set.
+- **A manual preset's own layout is no longer `FOREIGN` on a re-run.** The
+  installer's storage-state detection spelled `MATCH` with the literals
+  `data`, `log` and `/dev/xi_data`, so a preset with
+  `nvme_auto_namespace: false` and other array names failed fast on its
+  own healthy arrays — and the only way past that, `xinas_storage_reset`,
+  drive-cleans them. The expected arrays now come from `xiraid_arrays` and
+  the probed volume from `xfs_filesystems[0].data_device`; the auto path
+  falls back to `data` + `log` on `/dev/xi_data`. See
+  `docs/Installer/raid-spec.md` §11.
 - **Specs.** S15 §3.5 names the two MRTR trust models (form: host-mediated;
   url: server-verified distinct credential) instead of one guarantee; S17
   §8.2/§8.5 carry the tri-state rules; S18 §8 depends on S16.
@@ -158,20 +253,6 @@ it offers to destroy it. The `doca_ofed` role changed, hence the trailer
 above.
 
 ### Added
-
-- **MCP Tasks extension (`io.modelcontextprotocol/tasks`, S16).** A
-  modern MCP client that declares the extension on an apply request now
-  receives a task handle (`resultType: "task"`, `taskId` = the xiNAS
-  `task_id`) instead of holding the call open, and follows the operation
-  with `tasks/get`, `tasks/update` and `tasks/cancel` — the handle
-  survives client and api restarts because it *is* the durable task. The
-  `fs.create` contract is corrected on the way: every filesystem create
-  plan is `rollback_model: unsupported` (so it is confirmed out-of-band
-  over MCP), and a cancel that arrives after `mkfs` started is refused
-  (`cancel_refused_reason: irreversible_stage_started`) instead of
-  reporting a formatted device as `cancelled`. Clients without the
-  extension keep the `task_id` + `tasks.wait` flow unchanged. See
-  `docs/control-path/s16-mcp-tasks-spec.md`.
 
 - **`install.sh` can install one named published release, so a release
   candidate can go onto a fresh host.** `XINAS_RELEASE_TAG=vX.Y.Z-rc.N`
