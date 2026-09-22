@@ -264,6 +264,13 @@ export const CATALOG: CatalogEntry[] = [
   // ── filesystems ──
   read('filesystems.list', 'GET', '/filesystems', 'List managed filesystems.'),
   read('filesystems.get', 'GET', '/filesystems/{id}', 'Get one managed filesystem.'),
+  // ── S20 placement observations (the pNFS placement connector's source) ──
+  read(
+    'placement.observations',
+    'GET',
+    '/placement/observations',
+    'Placement observations (S20): every share with its filesystem, xiRAID array, export and NFS-service evidence, with evidence ages; 503 when the source is not ready, stale or oversize.',
+  ),
   planApply(
     'filesystems.create',
     'POST',

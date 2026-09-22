@@ -188,6 +188,72 @@ describe('snapshot enrichment', () => {
   });
 });
 
+// ---- S20 §3.2 (API-06, API-09, SRC-14): the mountinfo cross-reference is
+//      exact (mountpoint AND source), the mount-table facts a placement
+//      consumer needs are published, and "could not read mountinfo" is
+//      distinguishable from "not mounted".
+
+describe('S20: exact mount cross-reference and mount-table facts', () => {
+  const mountContent = readFileSync(join(fixtureDir, 'srv-share01.mount'), 'utf8');
+  const MATCH =
+    '36 25 0:32 / /srv/share01 rw,noatime shared:5 - xfs /dev/md/xinas-data rw,logdev=/dev/xi_log\n';
+  // Same mountpoint, served by a different device than the unit's What=.
+  const OTHER_DEVICE_AT_MOUNTPOINT =
+    '36 25 0:32 / /srv/share01 rw,noatime shared:5 - xfs /dev/sdz1 rw\n';
+  // The unit's device is mounted, but somewhere else.
+  const DEVICE_ELSEWHERE =
+    '36 25 0:32 / /mnt/elsewhere rw,noatime shared:5 - xfs /dev/md/xinas-data rw\n';
+
+  function probeWith(readMountinfo: () => Promise<string>) {
+    return createFilesystemProbe({
+      systemdDir: '/etc/systemd/system',
+      readdir: fakeReaddir(mountContent) as any,
+      readFile: fakeReadFile(mountContent) as any,
+      execFile: fakeExecFile('enabled') as any,
+      enrich: {
+        blkid: async () => null,
+        statfs: async () => ({ size_bytes: 1000, free_bytes: 900 }),
+        readMountinfo,
+      },
+    });
+  }
+
+  it('a match publishes super_options and mount_source next to mounted: true', async () => {
+    const [fs] = await probeWith(async () => MATCH).snapshot();
+    expect(fs?.status.mounted).toBe(true);
+    expect(fs?.status.mountinfo_readable).toBe(true);
+    expect(fs?.status.mount_source).toBe('/dev/md/xinas-data');
+    expect(fs?.status.super_options).toEqual(['rw', 'logdev=/dev/xi_log']);
+    expect(fs?.status.mount_source_mismatch).toBeUndefined();
+  });
+
+  it('the mountpoint served by another device is NOT mounted for the unit; the mismatch is named', async () => {
+    const [fs] = await probeWith(async () => OTHER_DEVICE_AT_MOUNTPOINT).snapshot();
+    expect(fs?.status.mounted).toBe(false);
+    expect(fs?.status.mount_source_mismatch).toBe('/dev/sdz1');
+    expect(fs?.status.mount_source).toBeUndefined();
+    expect(fs?.status.super_options).toBeUndefined();
+    expect(fs?.status.size_bytes).toBeUndefined(); // no statfs on a foreign mount
+  });
+
+  it("the unit's device mounted elsewhere is not a match either (the pre-S20 `source` fallback is gone)", async () => {
+    const [fs] = await probeWith(async () => DEVICE_ELSEWHERE).snapshot();
+    expect(fs?.status.mounted).toBe(false);
+    expect(fs?.status.mount_source_mismatch).toBeUndefined();
+    expect(fs?.status.mount_source).toBeUndefined();
+  });
+
+  it('an unreadable mountinfo leaves `mounted` ABSENT and sets mountinfo_readable: false', async () => {
+    const [fs] = await probeWith(async () => {
+      throw new Error('EACCES');
+    }).snapshot();
+    expect(fs?.status.mountinfo_readable).toBe(false);
+    expect(fs?.status).not.toHaveProperty('mounted');
+    expect(fs?.status.mount_source).toBeUndefined();
+    expect(fs?.status.mountpoint).toBe('/srv/share01'); // row intact
+  });
+});
+
 // ---- Regression: probe output must satisfy the control-path Filesystem
 //      schema, or the api's /internal/v1/observed ingest 400s the whole batch
 //      and the publisher drops it silently — the "No XFS filesystems found"

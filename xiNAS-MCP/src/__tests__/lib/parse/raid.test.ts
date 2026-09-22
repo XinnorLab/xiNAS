@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseRaidShow } from '../../../lib/parse/raid.js';
+import { parseRaidShow, isValidStateShape } from '../../../lib/parse/raid.js';
 
 const DISK_IDS = new Map([
   ['/dev/nvme1n1', 'disk-1'],
@@ -573,8 +573,14 @@ describe('parseRaidShow', () => {
         DISK_IDS,
       )[0]?.status;
       expect(status?.member_states).toEqual([
-        { index: 0, device: 'disk-1', states: ['online'] },
-        { index: 1, device: 'disk-2', states: ['degraded'] },
+        { index: 0, device: 'disk-1', device_present: true, states: ['online'], state_valid: true },
+        {
+          index: 1,
+          device: 'disk-2',
+          device_present: true,
+          states: ['degraded'],
+          state_valid: true,
+        },
       ]);
     });
 
@@ -594,8 +600,14 @@ describe('parseRaidShow', () => {
         DISK_IDS,
       )[0]?.status;
       expect(status?.member_states).toEqual([
-        { index: 0, device: 'disk-1', states: ['online'] },
-        { index: 1, device: 'disk-2', states: ['offline'] },
+        { index: 0, device: 'disk-1', device_present: true, states: ['online'], state_valid: true },
+        {
+          index: 1,
+          device: 'disk-2',
+          device_present: true,
+          states: ['offline'],
+          state_valid: true,
+        },
       ]);
     });
 
@@ -612,8 +624,8 @@ describe('parseRaidShow', () => {
         DISK_IDS,
       )[0]?.status;
       expect(status?.member_states).toEqual([
-        { index: 0, device: 'disk-1', states: [] },
-        { index: 1, device: 'disk-2', states: [] },
+        { index: 0, device: 'disk-1', device_present: true, states: [], state_valid: false },
+        { index: 1, device: 'disk-2', device_present: true, states: [], state_valid: false },
       ]);
     });
 
@@ -634,12 +646,18 @@ describe('parseRaidShow', () => {
       )[0];
       expect(array?.spec.member_disk_ids).toEqual(['disk-1', '/dev/unknownX']);
       expect(array?.status.member_states).toEqual([
-        { index: 0, device: 'disk-1', states: ['online'] },
-        { index: 1, device: '/dev/unknownX', states: ['online'] },
+        { index: 0, device: 'disk-1', device_present: true, states: ['online'], state_valid: true },
+        {
+          index: 1,
+          device: '/dev/unknownX',
+          device_present: true,
+          states: ['online'],
+          state_valid: true,
+        },
       ]);
     });
 
-    it('drops path-less device entries so member_states stays aligned', () => {
+    it('keeps path-less device entries with device: null (S20); member_disk_ids still skips them', () => {
       const array = parseRaidShow(
         [
           {
@@ -656,9 +674,76 @@ describe('parseRaidShow', () => {
       )[0];
       expect(array?.spec.member_disk_ids).toEqual(['disk-1']);
       expect(array?.status.member_states).toEqual([
-        { index: 0, device: 'disk-1', states: ['online'] },
+        { index: 0, device: 'disk-1', device_present: true, states: ['online'], state_valid: true },
+        { index: 1, device: null, device_present: false, states: ['offline'], state_valid: true },
       ]);
     });
+  });
+});
+
+// S20 §3.1 (API-16): the daemon's state field must have a valid SHAPE before
+// a placement consumer trusts it. A malformed payload is still published
+// (the words that are there stay in raw_states) but flagged, so the consumer
+// reports UNKNOWN instead of guessing from a half-parsed list.
+describe('S20: state_valid — shape validity of the daemon state field', () => {
+  const status = (state: unknown) =>
+    parseRaidShow([{ name: 'a', level: '5', devices: [], state }], DISK_IDS)[0]?.status;
+
+  it('a non-empty string or a non-empty array of non-empty strings is valid', () => {
+    expect(status('online')?.state_valid).toBe(true);
+    expect(status(['online'])?.state_valid).toBe(true);
+    expect(status(['online', 'initing'])?.state_valid).toBe(true);
+  });
+
+  it('a mixed-type array is flagged but its string words are kept', () => {
+    const s = status(['online', 42]);
+    expect(s?.state_valid).toBe(false);
+    expect(s?.raw_states).toEqual(['online']);
+  });
+
+  it.each([
+    ['null', null],
+    ['undefined', undefined],
+    ['empty string', ''],
+    ['blank string', '   '],
+    ['empty array', []],
+    ['array with an empty word', ['online', '']],
+    ['object', { state: 'online' }],
+    ['number', 3],
+  ])('%s → state_valid false', (_label, state) => {
+    expect(status(state)?.state_valid).toBe(false);
+  });
+
+  it('per-member state_valid follows the same rule', () => {
+    const s = parseRaidShow(
+      [
+        {
+          name: 'a',
+          level: '5',
+          devices: [
+            [0, '/dev/nvme1n1', ['online', 5]],
+            [1, '/dev/nvme2n1', 'online'],
+            { path: '/dev/nvme3n1', state: null },
+          ],
+          state: ['online'],
+        },
+      ],
+      DISK_IDS,
+    )[0]?.status;
+    expect(s?.member_states.map((m) => [m.device, m.state_valid, m.states])).toEqual([
+      ['disk-1', false, ['online']],
+      ['disk-2', true, ['online']],
+      ['disk-3', false, []],
+    ]);
+  });
+
+  it('isValidStateShape is the single rule (exported for the collector)', () => {
+    expect(isValidStateShape('online')).toBe(true);
+    expect(isValidStateShape(['online'])).toBe(true);
+    expect(isValidStateShape([])).toBe(false);
+    expect(isValidStateShape(['online', 1])).toBe(false);
+    expect(isValidStateShape('')).toBe(false);
+    expect(isValidStateShape(undefined)).toBe(false);
   });
 });
 

@@ -8,7 +8,16 @@ export type ErrorCode =
   | 'CONFLICT'
   | 'TIMEOUT'
   | 'UNSUPPORTED'
-  | 'INTERNAL';
+  | 'INTERNAL'
+  /**
+   * S20 (API-03, API-20) — GET /placement/observations answers HTTP 503 with
+   * `result: null` and one of these typed codes; distinct from
+   * EXECUTOR_UNAVAILABLE (the agent RPC is down), which is not what a stale
+   * or absent source is.
+   */
+  | 'SOURCE_NOT_READY'
+  | 'SOURCE_STALE'
+  | 'SNAPSHOT_TOO_LARGE';
 
 /**
  * Phase 0 simplification: PERMISSION_DENIED maps to 401, not 403.
@@ -27,6 +36,9 @@ const STATUS_MAP: Record<ErrorCode, number> = {
   PRECONDITION_FAILED: 412,
   UNSUPPORTED: 422,
   INTERNAL: 500,
+  SOURCE_NOT_READY: 503,
+  SOURCE_STALE: 503,
+  SNAPSHOT_TOO_LARGE: 503,
   TIMEOUT: 504,
 };
 

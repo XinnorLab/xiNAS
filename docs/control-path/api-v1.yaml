@@ -81,6 +81,11 @@ tags:
     description: >-
       MCP apply confirmations (S15): the approval records behind MCP
       `mode=apply`, for operators. Admin only; never exposed as MCP tools.
+  - name: placement
+    description: >-
+      Placement observations (S20): the read-only source the pNFS placement
+      connector polls — every share with its filesystem, xiRAID array,
+      export and NFS-service evidence and evidence ages.
 
 # ---------------------------------------------------------------------------
 # Security
@@ -192,7 +197,20 @@ components:
         - TIMEOUT
         - UNSUPPORTED
         - INTERNAL
-      description: Stable, machine-readable error code per reqs §1.
+        - SOURCE_NOT_READY
+        - SOURCE_STALE
+        - SNAPSHOT_TOO_LARGE
+      description: |
+        Stable, machine-readable error code per reqs §1. The three S20 codes
+        belong to `GET /placement/observations` only and always carry HTTP
+        503 with `result: null` (API-03, API-20): `SOURCE_NOT_READY` — no
+        agent push has reached this api process yet; `SOURCE_STALE` — the
+        last push is older than `2 × collection_period_ms + 2 s`
+        (`details.age_ms`); `SNAPSHOT_TOO_LARGE` — more than 256 shares or
+        16 MiB serialized (`details.shares`, `details.bytes`) — the snapshot
+        is refused, never truncated. They are distinct from
+        `EXECUTOR_UNAVAILABLE` (a `details.reason` of `INTERNAL`), which
+        means the agent RPC is down.
 
     Metadata:
       type: object
@@ -728,20 +746,29 @@ components:
             discard_active:
               type: [boolean, "null"]
               description: "raid_show `discard_active`: the array is processing discard requests right now. Distinct from spec.tuning.discard (`discard_allowed`), which is only what it is configured to accept — an array can read allowed=true, active=false. Absent when not observed."
+            state_valid:
+              type: boolean
+              description: "S20 (API-16): whether the daemon's `state` field had a valid shape (a non-empty string, or a non-empty array of non-empty strings). `false` means `raw_states` is evidence of a malformed payload; placement consumers treat the array as UNKNOWN."
             member_states:
               type: array
               description: >-
                 Per-member device state as reported by raid_show, one object
                 per array member. Keys: `index` (member index the daemon
                 reports, else position), `device` (member in the same
-                control-path Disk identity as spec.member_disk_ids), `states`
-                (lower-cased state words; [] when the daemon reported none).
+                control-path Disk identity as spec.member_disk_ids; null since
+                S20 when the daemon entry carried no readable path — such a
+                member is kept so the list stays complete, `device_present`
+                false), `states` (lower-cased state words; [] when the daemon
+                reported none), `state_valid` (S20: shape validity of the
+                per-member state).
               items:
                 type: object
                 additionalProperties: true
                 properties:
                   index: { type: integer }
-                  device: { type: string }
+                  device: { type: [string, "null"] }
+                  device_present: { type: boolean }
+                  state_valid: { type: boolean }
                   states:
                     type: array
                     items: { type: string }
@@ -822,6 +849,19 @@ components:
             effective_mount_options:
               type: array
               items: { type: string }
+            super_options:
+              type: array
+              items: { type: string }
+              description: "S20 (API-09): the mount's filesystem super options — the last /proc/self/mountinfo field, where XFS names `logdev=` / `rtdev=`. Present only when the unit's mountpoint is in the mount table with the unit's device."
+            mount_source:
+              type: string
+              description: "S20 (API-06): the mount table's source for the matched entry (exact device identity as mounted). Present with `mounted: true` only."
+            mount_source_mismatch:
+              type: string
+              description: "S20 (API-06): set when the unit's mountpoint IS in the mount table but served by a different device than the unit's What=; `mounted` is then false. Placement consumers treat this as UNKNOWN topology."
+            mountinfo_readable:
+              type: boolean
+              description: "S20 (SRC-14): false when /proc/self/mountinfo could not be read this sweep; `mounted` is then absent (unknown), not false."
             mount_options:
               type: array
               items:
@@ -2297,6 +2337,243 @@ components:
   # -------------------------------------------------------------------------
   # Reusable responses
   # -------------------------------------------------------------------------
+    # -------------------------------------------------------------------
+    # S20 — placement observations (docs/control-path/s20-placement-observations-spec.md)
+    # The source package's Appendix Д schema in OpenAPI 3.1 form. Inter-record
+    # invariants (a SUCCESS share has non-null refs and times; a non-SUCCESS
+    # record has at least one reason code) are enforced by the producer and
+    # checked at runtime by the connector.
+    # -------------------------------------------------------------------
+    PlacementObservations:
+      type: object
+      description: The `result` of `GET /placement/observations` (schema_version 1.0).
+      required:
+        - schema_version
+        - controller_id
+        - server_epoch
+        - source_generation
+        - snapshot_status
+        - generated_at
+        - collection_period_ms
+        - capabilities
+        - coverage
+        - shares
+        - resources
+      additionalProperties: true
+      properties:
+        schema_version: { type: string, const: "1.0" }
+        controller_id: { type: string, minLength: 1 }
+        server_epoch:
+          type: string
+          minLength: 1
+          description: Publisher incarnation (`<controller_id>:<agent boot ISO>:<pid>`); changes on every agent restart.
+        source_generation:
+          type: integer
+          minimum: 0
+          description: Per-process monotonic cycle counter; compare as the pair (server_epoch, source_generation).
+        snapshot_status: { type: string, enum: [COMPLETE, PARTIAL, FAILED] }
+        generated_at: { type: string, format: date-time }
+        collection_period_ms: { type: integer, minimum: 1 }
+        capabilities:
+          type: array
+          maxItems: 64
+          items: { type: string, minLength: 1 }
+        coverage:
+          type: array
+          maxItems: 64
+          items: { $ref: '#/components/schemas/PlacementCoverageRow' }
+        shares:
+          type: array
+          maxItems: 256
+          items: { $ref: '#/components/schemas/PlacementShare' }
+        resources:
+          type: array
+          maxItems: 8192
+          items: { $ref: '#/components/schemas/PlacementResource' }
+        sources:
+          type: object
+          description: Per-source outcome of the cycle (`ok`, `failed`, `timeout`); diagnostic, additive.
+          additionalProperties:
+            type: object
+            properties:
+              status: { type: string, enum: [ok, failed, timeout] }
+        collector:
+          type: object
+          description: Cycle diagnostics (`cycle_ms`, `deadline_hit`, `skipped_ticks`); additive.
+          additionalProperties: true
+    PlacementCoverageRow:
+      type: object
+      required: [check, required, status]
+      additionalProperties: true
+      properties:
+        check: { type: string, minLength: 1 }
+        required: { type: boolean }
+        status: { type: string, enum: [EVALUATED, NOT_IMPLEMENTED, NOT_APPLICABLE, ERROR] }
+        reason:
+          type: string
+          minLength: 1
+          description: Required when status is not EVALUATED.
+        details: { type: object, additionalProperties: true }
+    PlacementShare:
+      type: object
+      required:
+        - share_id
+        - incarnation
+        - export_path
+        - collection_status
+        - observed_at
+        - evidence_age_ms
+        - filesystem_ref
+        - export_ref
+        - service_ref
+        - reason_codes
+      additionalProperties: true
+      properties:
+        share_id: { type: string, minLength: 1 }
+        incarnation: { type: string, minLength: 1 }
+        export_path: { type: string, minLength: 1 }
+        collection_status: { type: string, enum: [SUCCESS, ERROR, UNKNOWN] }
+        observed_at: { type: [string, "null"], format: date-time }
+        evidence_age_ms: { type: [integer, "null"], minimum: 0 }
+        filesystem_ref: { type: [string, "null"] }
+        export_ref: { type: [string, "null"] }
+        service_ref: { type: [string, "null"] }
+        reason_codes:
+          type: array
+          maxItems: 16
+          items: { type: string, minLength: 1 }
+    PlacementResource:
+      type: object
+      required: [id, incarnation, collection_status, observed_at, evidence_age_ms, reason_codes, details]
+      additionalProperties: true
+      properties:
+        id: { type: string, minLength: 1 }
+        incarnation: { type: string, minLength: 1 }
+        collection_status: { type: string, enum: [SUCCESS, ERROR, UNKNOWN] }
+        observed_at: { type: [string, "null"], format: date-time }
+        evidence_age_ms: { type: [integer, "null"], minimum: 0 }
+        reason_codes:
+          type: array
+          maxItems: 16
+          items: { type: string, minLength: 1 }
+        details:
+          description: Typed by `kind`; an ERROR record carries `kind` only.
+          oneOf:
+            - { $ref: '#/components/schemas/PlacementArrayDetails' }
+            - { $ref: '#/components/schemas/PlacementFilesystemDetails' }
+            - { $ref: '#/components/schemas/PlacementExportDetails' }
+            - { $ref: '#/components/schemas/PlacementNfsServiceDetails' }
+    PlacementArrayDetails:
+      type: object
+      required: [kind]
+      additionalProperties: true
+      properties:
+        kind: { type: string, const: ARRAY }
+        name: { type: string, minLength: 1 }
+        volume_path: { type: string, minLength: 1 }
+        edition: { type: string, const: Classic }
+        version: { type: string, minLength: 1 }
+        build: { type: string, minLength: 1 }
+        raid_level: { type: string, minLength: 1 }
+        state_valid: { type: boolean }
+        raw_states:
+          type: array
+          maxItems: 32
+          items: { type: string, minLength: 1 }
+        members:
+          type: array
+          maxItems: 1024
+          items:
+            type: object
+            required: [id, index, group, device_path, state_valid, raw_states]
+            additionalProperties: true
+            properties:
+              id: { type: string, minLength: 1 }
+              index: { type: integer, minimum: 0 }
+              group: { type: [integer, "null"], minimum: 0 }
+              device_path: { type: string, minLength: 1 }
+              state_valid: { type: boolean }
+              raw_states:
+                type: array
+                maxItems: 16
+                items: { type: string, minLength: 1 }
+    PlacementFilesystemDetails:
+      type: object
+      required: [kind]
+      additionalProperties: true
+      properties:
+        kind: { type: string, const: FILESYSTEM }
+        uuid: { type: string, minLength: 1 }
+        incarnation: { type: string, minLength: 1 }
+        mountpoint: { type: string, minLength: 1 }
+        source_device: { type: string, minLength: 1 }
+        fs_type: { type: string, minLength: 1 }
+        mounted: { type: [boolean, "null"] }
+        writable: { type: [boolean, "null"] }
+        mount_options:
+          type: array
+          maxItems: 128
+          items: { type: string, minLength: 1 }
+        super_options:
+          type: array
+          maxItems: 128
+          items: { type: string, minLength: 1 }
+        external_dependencies_resolved: { type: boolean }
+        array_refs:
+          type: array
+          maxItems: 8
+          items:
+            type: object
+            required: [role, resource_id]
+            additionalProperties: true
+            properties:
+              role: { type: string, enum: [DATA, LOG, REALTIME] }
+              resource_id: { type: string, minLength: 1 }
+        log_mode: { type: string, enum: [INTERNAL, EXTERNAL, UNKNOWN] }
+    PlacementExportDetails:
+      type: object
+      required: [kind]
+      additionalProperties: true
+      properties:
+        kind: { type: string, const: EXPORT }
+        export_path: { type: string, minLength: 1 }
+        present: { type: [boolean, "null"] }
+        source:
+          type: string
+          description: Where the rules were read (`/etc/exports` in the prototype — the labelled gap of spec §6).
+        rules:
+          type: array
+          maxItems: 512
+          items:
+            type: object
+            required: [client, writable, security, options]
+            additionalProperties: true
+            properties:
+              client: { type: string, minLength: 1 }
+              writable: { type: [boolean, "null"] }
+              security:
+                type: array
+                maxItems: 8
+                items: { type: string, minLength: 1 }
+              options:
+                type: array
+                maxItems: 64
+                items: { type: string, minLength: 1 }
+    PlacementNfsServiceDetails:
+      type: object
+      required: [kind]
+      additionalProperties: true
+      properties:
+        kind: { type: string, const: NFS_SERVICE }
+        running: { type: [boolean, "null"] }
+        protocols:
+          type: array
+          maxItems: 8
+          items: { type: string, minLength: 1 }
+        reason_codes:
+          type: array
+          maxItems: 16
+          items: { type: string, minLength: 1 }
   responses:
     PlanReturned:
       description: Plan returned (mode=plan). No system mutation occurred.
@@ -2367,6 +2644,14 @@ components:
           schema: { $ref: '#/components/schemas/Envelope' }
     Unsupported:
       description: '`UNSUPPORTED` — write to an inert Phase 0 field or unsupported operation.'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Envelope' }
+    Unavailable:
+      description: >-
+        HTTP 503 with `result: null` and one typed error (S20 §5.4):
+        `SOURCE_NOT_READY`, `SOURCE_STALE` (`details.age_ms`) or
+        `SNAPSHOT_TOO_LARGE` (`details.shares`, `details.bytes`).
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Envelope' }
@@ -2695,6 +2980,40 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
         '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /placement/observations:
+    get:
+      tags: [placement]
+      operationId: getPlacementObservations
+      summary: Placement observations for the pNFS placement connector (S20).
+      description: |
+        The agent's last 5 s placement cycle, projected at read time: the
+        `result` is a `PlacementObservations` object (schema_version 1.0).
+        `evidence_age_ms` is computed from the api's own receipt clock plus
+        the agent-reported intra-cycle offset, so repeated reads show
+        growing ages. `state_revision` is the stored row's KV revision, not
+        a snapshot generation — that is `source_generation`, to be compared
+        together with `server_epoch`. Shares are the node's `/etc/exports`
+        entries on managed filesystems reconciled with the desired Share
+        rows: a desired share without an export line is `UNKNOWN` /
+        `EXPORT_ABSENT` (with an `EXPORT` resource `present: false` as
+        proof of absence); an export xiNAS did not create carries
+        `SHARE_UNMANAGED`. Viewer rank; read-only; exposed as the MCP tool
+        `placement.observations`.
+      responses:
+        '200':
+          description: OK — `result` is a `PlacementObservations` object.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/Envelope' }
+                  - type: object
+                    properties:
+                      result: { $ref: '#/components/schemas/PlacementObservations' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503': { $ref: '#/components/responses/Unavailable' }
         '500': { $ref: '#/components/responses/Internal' }
 
   /filesystems:

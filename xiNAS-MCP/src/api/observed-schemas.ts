@@ -57,6 +57,7 @@ const OBSERVED_KINDS = [
   'Pool',
   'managed_files',
   'inventory',
+  'PlacementObservations', // S20 singleton (permissive: see FLAT_SCHEMA_KINDS)
 ] as const;
 
 /**
@@ -193,7 +194,9 @@ export function loadObservedSchemas(): {
     // poison the whole batch (the exact S0/S1-review failure mode; enums
     // survive stripRequired). These get the permissive validator; their
     // public shape is enforced at the READ routes.
-    const FLAT_SCHEMA_KINDS = new Set(['ConfigSnapshot', 'Pool']);
+    // S20: the PlacementObservations component describes the ROUTE result
+    // (schema-v1 object); the stored row is `{ kind, id, status: {...} }`.
+    const FLAT_SCHEMA_KINDS = new Set(['ConfigSnapshot', 'Pool', 'PlacementObservations']);
 
     const schemas: Record<string, ValidateFn> = {};
     for (const kind of OBSERVED_KINDS) {

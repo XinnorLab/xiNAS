@@ -35,6 +35,7 @@ import { type ObservedDisk, parseLsblkOutput } from '../../lib/parse/disk.js';
 import { parseIpJson } from '../../lib/parse/network.js';
 import type { ParsedPasswdLine } from '../../lib/parse/passwd.js';
 import { createFakeNetHost } from '../net/fake-host.js';
+import type { PlacementFilesystemRow } from './filesystem.js';
 import { createSystemctlProbe } from './systemd.js';
 import type { IdmapSnapshot } from './idmap.js';
 import {
@@ -103,6 +104,8 @@ export interface FixtureFilesystem {
 
 interface FixtureFilesystemProbe {
   snapshot(): Promise<FixtureFilesystem[]>;
+  /** S20: the lean placement rows, projected from the same fixture rows. */
+  snapshotForPlacement(): Promise<PlacementFilesystemRow[]>;
 }
 
 /** Entries for <dir>/nfs-sessions.json (parse/nfs ObservedNfsSession shape). */
@@ -349,10 +352,39 @@ export function createFixtureNetworkProbe(dir?: string): FixtureNetworkProbe {
  * complete-snapshot sweep will NOT wipe.
  */
 export function createFixtureFilesystemProbe(dir?: string): FixtureFilesystemProbe {
+  const rows = (): FixtureFilesystem[] =>
+    dir !== undefined ? readFixture<FixtureFilesystem[]>(dir, 'filesystems.json', []) : [];
   return {
-    snapshot: () =>
+    snapshot: () => Promise.resolve(rows()),
+    snapshotForPlacement: () =>
       Promise.resolve(
-        dir !== undefined ? readFixture<FixtureFilesystem[]>(dir, 'filesystems.json', []) : [],
+        rows().map((r) => {
+          const st = r.status;
+          const str = (k: string): string | undefined =>
+            typeof st[k] === 'string' ? (st[k] as string) : undefined;
+          const strs = (k: string): string[] | undefined =>
+            Array.isArray(st[k])
+              ? (st[k] as unknown[]).filter((x): x is string => typeof x === 'string')
+              : undefined;
+          const fsType = str('fs_type');
+          const mountSource = str('mount_source');
+          const superOptions = strs('super_options');
+          const effective = strs('effective_mount_options');
+          const mismatch = str('mount_source_mismatch');
+          return {
+            id: r.id,
+            mountpoint: str('mountpoint') ?? '',
+            backing_device: str('backing_device') ?? '',
+            ...(fsType !== undefined ? { fs_type: fsType } : {}),
+            mount_options: strs('mount_options') ?? [],
+            ...(typeof st.mounted === 'boolean' ? { mounted: st.mounted } : {}),
+            mountinfo_readable: st.mountinfo_readable !== false,
+            ...(mountSource !== undefined ? { mount_source: mountSource } : {}),
+            ...(superOptions !== undefined ? { super_options: superOptions } : {}),
+            ...(effective !== undefined ? { effective_mount_options: effective } : {}),
+            ...(mismatch !== undefined ? { mount_source_mismatch: mismatch } : {}),
+          };
+        }),
       ),
   };
 }
@@ -375,6 +407,31 @@ export function createFixtureNfsProbe(dir?: string): FixtureNfsProbe {
         dir !== undefined ? readFixture<FixtureExportRule[]>(dir, 'nfs-exports.json', []) : [],
       ),
   };
+}
+
+/**
+ * S20: `<dir>/xiraid-version.json` → `{ "version": "4.4.0", "build": "4.4.0-43861" }`;
+ * absent → null (published as XIRAID_VERSION_UNAVAILABLE).
+ */
+export function fixtureXiraidVersion(dir: string): { version: string; build: string } | null {
+  const v = readFixture<{ version?: unknown; build?: unknown } | null>(
+    dir,
+    'xiraid-version.json',
+    null,
+  );
+  if (v === null || typeof v.version !== 'string' || typeof v.build !== 'string') return null;
+  return { version: v.version, build: v.build };
+}
+
+/**
+ * S20: `<dir>/nfsd-versions.json` → `{ "text": "-2 +3 +4 +4.1 +4.2" }` (the raw
+ * /proc/fs/nfsd/versions line). Absent → rejects, like an unreadable file.
+ */
+export function fixtureNfsdVersions(dir: string): Promise<string> {
+  const v = readFixture<{ text?: unknown } | null>(dir, 'nfsd-versions.json', null);
+  return v !== null && typeof v.text === 'string'
+    ? Promise.resolve(v.text)
+    : Promise.reject(new Error('fixture nfsd-versions.json absent'));
 }
 
 /** The boot id a fixture host reports unless <dir>/inventory.json overrides it (S17). */

@@ -73,11 +73,96 @@ export interface FilesystemSnapshot extends ObservedFilesystem {
     size_bytes?: number;
     free_bytes?: number;
     effective_mount_options?: string[];
+    /**
+     * S20 (API-09): the mount's super options — the last mountinfo field,
+     * where XFS names its external devices (`logdev=`, `rtdev=`). Present
+     * only when the unit's mountpoint is in the mount table.
+     */
+    super_options?: string[];
+    /**
+     * S20 (API-06): the mount table's `source` for the matched entry — the
+     * device identity as mounted, not the unit's `What=`. Present with
+     * `mounted: true` only.
+     */
+    mount_source?: string;
+    /**
+     * S20 (API-06): set when the unit's mountpoint IS in the mount table but
+     * served by a different device than `What=`; `mounted` is then false and
+     * a placement consumer reports MOUNT_SOURCE_MISMATCH instead of guessing.
+     */
+    mount_source_mismatch?: string;
+    /**
+     * S20 (SRC-14): false when /proc/self/mountinfo could not be read this
+     * sweep. In that case `mounted` is ABSENT (unknown), not false.
+     */
+    mountinfo_readable: boolean;
   };
+}
+
+/**
+ * S20 §4.1: the lean row the placement cycle reads every 5 s — unit files
+ * + one mountinfo read, no systemctl, no blkid, no statfs. Enablement and
+ * ActiveState are deliberately absent (they cost two subprocesses per unit
+ * and the 60 s Filesystem row carries them).
+ */
+export interface PlacementFilesystemRow {
+  id: string;
+  mountpoint: string;
+  backing_device: string;
+  fs_type?: string;
+  mount_options: string[];
+  mounted?: boolean;
+  mountinfo_readable: boolean;
+  mount_source?: string;
+  super_options?: string[];
+  effective_mount_options?: string[];
+  mount_source_mismatch?: string;
 }
 
 export interface FilesystemProbe {
   snapshot(): Promise<FilesystemSnapshot[]>;
+  /** S20: the subprocess-free sweep for the placement collector. */
+  snapshotForPlacement(): Promise<PlacementFilesystemRow[]>;
+}
+
+/**
+ * S20 (API-06): the exact mountinfo cross-reference — the entry at THIS
+ * mountpoint must be served by THIS device. A mountpoint served by another
+ * device, or the device mounted elsewhere, is not "mounted" for the unit;
+ * the mismatch is reported so a consumer can name it. With mountinfo
+ * unreadable, `mounted` is left undefined (unknown), never false (SRC-14).
+ */
+export function crossReferenceMount(
+  mountpoint: string,
+  backingDevice: string,
+  mounts: readonly MountEntry[],
+  mountinfoReadable: boolean,
+): {
+  mounted?: boolean;
+  mountinfo_readable: boolean;
+  effective_mount_options?: string[];
+  super_options?: string[];
+  mount_source?: string;
+  mount_source_mismatch?: string;
+} {
+  const atMountpoint = mounts.find((m) => m.mountpoint === mountpoint);
+  const entry =
+    atMountpoint !== undefined && atMountpoint.source === backingDevice ? atMountpoint : undefined;
+  const mounted = mountinfoReadable ? entry !== undefined : undefined;
+  return {
+    ...(mounted !== undefined ? { mounted } : {}),
+    mountinfo_readable: mountinfoReadable,
+    ...(entry !== undefined
+      ? {
+          effective_mount_options: entry.options,
+          super_options: entry.super_options,
+          mount_source: entry.source,
+        }
+      : {}),
+    ...(atMountpoint !== undefined && entry === undefined
+      ? { mount_source_mismatch: atMountpoint.source }
+      : {}),
+  };
 }
 
 /** Wrap an execFile-style callback fn into a Promise returning { stdout, stderr }. */
@@ -141,12 +226,15 @@ export function createFilesystemProbe(opts: FilesystemProbeOptions = {}): Filesy
       const results: FilesystemSnapshot[] = [];
 
       // One mountinfo read per sweep; an unreadable mountinfo degrades the
-      // mounted/effective-options fields, never the rows.
+      // mounted/effective-options fields, never the rows. S20: the failure is
+      // recorded (`mountinfo_readable: false`) and `mounted` is left ABSENT so
+      // "could not tell" is distinguishable from "not mounted" (SRC-14).
       let mounts: MountEntry[] = [];
+      let mountinfoReadable = true;
       try {
         mounts = parseMountinfo(await enrich.readMountinfo());
       } catch {
-        /* degraded: no mounted flag this sweep */
+        mountinfoReadable = false;
       }
 
       for (const unitName of mountUnits) {
@@ -186,10 +274,14 @@ export function createFilesystemProbe(opts: FilesystemProbeOptions = {}): Filesy
         const fs = mountUnitToFilesystem(parsed, unitName, enabledState === 'enabled');
 
         // --- S5 T6 enrichment (each field degrades independently) ---
-        const mountEntry = mounts.find(
-          (m) => m.mountpoint === fs.status.mountpoint || m.source === fs.status.backing_device,
+        // S20 (API-06): exact mountpoint + source cross-reference.
+        const xref = crossReferenceMount(
+          fs.status.mountpoint,
+          fs.status.backing_device,
+          mounts,
+          mountinfoReadable,
         );
-        const mounted = mountEntry !== undefined;
+        const mounted = xref.mounted;
         let blkidInfo: { fstype?: string; label?: string; uuid?: string } | null = null;
         try {
           blkidInfo = await enrich.blkid(fs.status.backing_device);
@@ -197,7 +289,7 @@ export function createFilesystemProbe(opts: FilesystemProbeOptions = {}): Filesy
           /* degraded: no uuid/label */
         }
         let sizes: { size_bytes: number; free_bytes: number } | undefined;
-        if (mounted) {
+        if (mounted === true) {
           try {
             sizes = await enrich.statfs(fs.status.mountpoint);
           } catch {
@@ -209,8 +301,7 @@ export function createFilesystemProbe(opts: FilesystemProbeOptions = {}): Filesy
           ...fs,
           status: {
             ...fs.status,
-            mounted,
-            ...(mountEntry !== undefined ? { effective_mount_options: mountEntry.options } : {}),
+            ...xref,
             ...(blkidInfo?.uuid !== undefined ? { uuid: blkidInfo.uuid } : {}),
             ...(blkidInfo?.label !== undefined ? { label: blkidInfo.label } : {}),
             ...(sizes !== undefined ? { size_bytes: sizes.size_bytes } : {}),
@@ -221,6 +312,37 @@ export function createFilesystemProbe(opts: FilesystemProbeOptions = {}): Filesy
       }
 
       return results;
+    },
+
+    async snapshotForPlacement(): Promise<PlacementFilesystemRow[]> {
+      const entries = await rd(sysDir);
+      const mountUnits = entries.filter((e) => typeof e === 'string' && e.endsWith('.mount'));
+      let mounts: MountEntry[] = [];
+      let mountinfoReadable = true;
+      try {
+        mounts = parseMountinfo(await enrich.readMountinfo());
+      } catch {
+        mountinfoReadable = false;
+      }
+      const rows: PlacementFilesystemRow[] = [];
+      for (const unitName of mountUnits) {
+        const content = await rf(join(sysDir, unitName), 'utf8');
+        const fs = mountUnitToFilesystem(parseSystemdUnit(content), unitName, false);
+        rows.push({
+          id: fs.id,
+          mountpoint: fs.status.mountpoint,
+          backing_device: fs.status.backing_device,
+          ...(fs.status.fs_type !== undefined ? { fs_type: fs.status.fs_type } : {}),
+          mount_options: fs.status.mount_options ?? [],
+          ...crossReferenceMount(
+            fs.status.mountpoint,
+            fs.status.backing_device,
+            mounts,
+            mountinfoReadable,
+          ),
+        });
+      }
+      return rows;
     },
   };
 }

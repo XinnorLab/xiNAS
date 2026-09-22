@@ -43,6 +43,7 @@
  *               Adapter renames snapshot()->read() and flattens.
  */
 
+import { readFile } from 'node:fs/promises';
 import { runBootSequence } from './boot.js';
 import { CollectorRegistry } from './collectors/base.js';
 import { DiskCollector } from './collectors/disk.js';
@@ -61,6 +62,7 @@ import { execFileRunSubprocess } from './task/wiring.js';
 import { UsersCollector } from './collectors/users.js';
 import { XiraidArrayCollector } from './collectors/xiraid.js';
 import { PoolCollector } from './collectors/pool.js';
+import { PlacementObservationCollector } from './collectors/placement.js';
 import type { AgentConfig } from './config.js';
 import { log } from './log.js';
 import { PollDriver } from './poll.js';
@@ -79,6 +81,8 @@ import {
   createFixtureTuningProbe,
   createFixtureUsersProbe,
   fixtureDir,
+  fixtureNfsdVersions,
+  fixtureXiraidVersion,
 } from './probe/fixture.js';
 import { createIdmapProbe } from './probe/idmap.js';
 import { createInventoryProbe } from './probe/inventory.js';
@@ -88,6 +92,7 @@ import { createNfsProbe } from './probe/nfs.js';
 import { createTuningProbe } from './probe/tuning.js';
 import { createSystemctlProbe } from './probe/systemd.js';
 import { createUsersProbe } from './probe/users.js';
+import { createXiraidVersionSource, fixedXiraidVersionSource } from './probe/xiraid-version.js';
 import { Publisher } from './publisher.js';
 import { XiraidClient, createGrpcTransport } from './xiraid/client.js';
 import { createFakeXiraidTransport } from './xiraid/fake-transport.js';
@@ -137,18 +142,28 @@ export function buildConvergence(config: AgentConfig): Convergence {
   // null and the real-probe path is taken unchanged.
   const fdir = fixtureDir();
 
+  // S20: identity caches the 5 s placement cycle reads instead of re-running
+  // the slow sweeps (API-12): device path → Disk id from the disk sweep, and
+  // Filesystem row id → XFS UUID from the 60 s filesystem sweep's blkid.
+  const diskIdByPath = new Map<string, string>();
+  const fsUuidById = new Map<string, string>();
+
   // --- Disk: real probe matches; bridge async stop -> sync stop. ---
   const diskProbe = fdir !== null ? createFixtureDiskProbe(fdir) : createDiskProbe();
   registry.register(
     new DiskCollector({
       probe: {
         snapshot: () =>
-          diskProbe.snapshot().then((disks) =>
-            disks.map((d) => ({
+          diskProbe.snapshot().then((disks) => {
+            for (const d of disks) {
+              const path = (d.status as { device_path?: string }).device_path;
+              if (path !== undefined) diskIdByPath.set(path, d.id);
+            }
+            return disks.map((d) => ({
               ...d,
               status: { ...d.status, observed_at: new Date().toISOString() },
-            })),
-          ),
+            }));
+          }),
         startEventStream(onDelta) {
           const handle = diskProbe.startEventStream(onDelta);
           return {
@@ -217,13 +232,17 @@ export function buildConvergence(config: AgentConfig): Convergence {
       ...pollOverride('XINAS_AGENT_FILESYSTEM_POLL_MS'),
       probe: {
         snapshot: () =>
-          filesystemProbe.snapshot().then((rows) =>
-            rows.map((r) => ({
+          filesystemProbe.snapshot().then((rows) => {
+            for (const r of rows) {
+              const uuid = (r.status as { uuid?: string }).uuid;
+              if (uuid !== undefined) fsUuidById.set(r.id, uuid);
+            }
+            return rows.map((r) => ({
               kind: 'Filesystem' as const,
               id: r.id,
               status: { ...r.status, observed_at: new Date().toISOString() },
-            })),
-          ),
+            }));
+          }),
         watchMountUnits(): SyncStopHandle {
           return NOOP_HANDLE;
         },
@@ -380,6 +399,34 @@ export function buildConvergence(config: AgentConfig): Convergence {
     new PoolCollector({
       source: { poolShow: () => xiraidClient.poolShow() },
       ...(Number.isFinite(poolPollMs) && poolPollMs > 0 ? { pollIntervalMs: poolPollMs } : {}),
+    }),
+  );
+
+  // --- PlacementObservations (S20): the 5 s placement cycle over the SAME
+  //     probe instances (one raidShow, one lean filesystem sweep, one
+  //     listExports, one nfs-server unit read, one nfsd versions read per
+  //     cycle). Fixture mode: xiraid-version.json + nfsd-versions.json. ---
+  const xiraidVersionSource =
+    fdir !== null
+      ? fixedXiraidVersionSource(fixtureXiraidVersion(fdir))
+      : createXiraidVersionSource();
+  registry.register(
+    new PlacementObservationCollector({
+      controllerId: config.controller_id,
+      ...pollOverride('XINAS_AGENT_PLACEMENT_POLL_MS'),
+      sources: {
+        raidShow: () => xiraidClient.raidShow(),
+        filesystems: () => filesystemProbe.snapshotForPlacement(),
+        listExports: () => nfsProbe.listExports(),
+        nfsServiceState: () => systemdProbe.getUnitState('nfs-server.service'),
+        nfsdVersions:
+          fdir !== null
+            ? () => fixtureNfsdVersions(fdir)
+            : () => readFile('/proc/fs/nfsd/versions', 'utf8'),
+        xiraidVersion: () => xiraidVersionSource.get(),
+        diskIdByPath: () => diskIdByPath,
+        filesystemUuid: (id) => fsUuidById.get(id),
+      },
     }),
   );
 

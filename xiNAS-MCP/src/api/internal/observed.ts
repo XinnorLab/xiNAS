@@ -156,6 +156,9 @@ export function observedHandler(ctx: ApiContext) {
       let deletedByReconcile = 0;
       let skippedUnchanged = 0;
       const revisions: number[] = [];
+      // S20 §5.2: (kind, id, revision) of every stored/unchanged upsert, stamped
+      // on the api's receipt clock AFTER the transaction commits.
+      const receipts: Array<[string, string, number]> = [];
 
       // Derive the KV path segment through observedSegment(kind) (base.ts) so
       // writer and reader never disagree on singletons (NfsIdmap → nfs_idmap,
@@ -194,12 +197,16 @@ export function observedHandler(ctx: ApiContext) {
             ) {
               skippedUnchanged++;
               revisions.push(current.revision);
+              receipts.push([delta.kind, delta.id, current.revision]);
               continue;
             }
             const result = tx.put(key, value);
             // No expected_revision → put always commits (ok: true). Guard
             // anyway so a future CAS variant can't silently push undefined.
-            if (result.ok) revisions.push(result.value.revision);
+            if (result.ok) {
+              revisions.push(result.value.revision);
+              receipts.push([delta.kind, delta.id, result.value.revision]);
+            }
             accepted++;
             engine?.onChange({
               kind: delta.kind,
@@ -271,6 +278,11 @@ export function observedHandler(ctx: ApiContext) {
 
       // 4. Notify the tracker that an observation push happened.
       ctx.tracker?.recordObservationPush(new Date());
+      // S20: stamp the receipt clock for every row this push carried.
+      if (ctx.observed_receipts !== undefined) {
+        for (const [kind, id, revision] of receipts)
+          ctx.observed_receipts.record(kind, id, revision);
+      }
 
       const stateRevision = revisions.length > 0 ? Math.max(...revisions) : 0;
       sendOk(

@@ -50,6 +50,8 @@ export interface ObservedXiraidArray {
      * not the compressed `state`.
      */
     raw_states: string[];
+    /** S20 (API-16): shape validity of the daemon's `state` field. */
+    state_valid: boolean;
     /** S17: the four progress values, kept apart (a finite 0–100, else null). */
     init_progress_pct: number | null;
     recon_progress_pct: number | null;
@@ -152,28 +154,47 @@ function readPools(pools: unknown): Map<string, string[]> {
 export interface RaidShowMember {
   /** Member index the daemon reports (tuple `[0]` / object `index`), else position. */
   index: number;
-  /** Member /dev path — always present (path-less entries are dropped). */
-  device: string;
+  /**
+   * Member /dev path. `null` when the entry carried no readable path — such
+   * a member is KEPT here (S20 API-16: completeness must survive) and only
+   * excluded from the aligned `devices[]` / `member_disk_ids` lists.
+   */
+  device: string | null;
   /** Lower-cased per-member state words; `[]` when the daemon reported none. */
   states: string[];
+  /**
+   * S20 (API-16, XMOD-06): whether the daemon's per-member state field had a
+   * valid shape — a non-empty string or a non-empty array of non-empty
+   * strings. `false` for missing/null/empty/mixed-type payloads; the string
+   * words that were present are still in `states`.
+   */
+  state_valid: boolean;
 }
 
-/** `readMember`'s pre-filter result: `device` may be null (dropped downstream). */
-interface RawMember {
-  index: number;
-  device: string | null;
-  states: string[];
-}
+/** `readMember`'s result; identical to RaidShowMember since S20 keeps path-less members. */
+type RawMember = RaidShowMember;
 
 /** One array as raid_show describes it, with both payload shapes flattened. */
 export interface RaidShowEntry {
   name: string;
   /** Member device paths, tuple/object entries unwrapped. */
   devices: string[];
-  /** Per-member records (index/device/states), aligned with `devices`. */
+  /**
+   * Per-member records (index/device/states). Since S20 this includes members
+   * without a readable path (`device: null`), so it is NOT aligned with
+   * `devices[]`; align by filtering `device !== null`.
+   */
   members: RaidShowMember[];
   /** Lower-cased state words. */
   states: string[];
+  /**
+   * S20 (API-16, XMOD-06): whether the daemon's `state` had a valid shape —
+   * a non-empty string or a non-empty array whose every element is a
+   * non-empty string. `[online, 42]`, `[]`, `null`, an object → `false`.
+   * The string words that were present are still in `states`; a consumer
+   * that places data must treat `state_valid: false` as UNKNOWN.
+   */
+  state_valid: boolean;
   /** The remaining daemon fields (level, strip_size, sparepool, …). */
   raw: Record<string, unknown>;
 }
@@ -219,12 +240,17 @@ export function parseRaidShowEntries(payload: unknown): RaidShowEntry[] {
     // with no readable path are dropped, so `devices` and `members` stay
     // aligned with member_disk_ids. A zero-member array reads as "these
     // drives are free" to the create wizard's claimed-disk check.
-    const members: RaidShowMember[] = (
-      Array.isArray(o.devices) ? o.devices.map(readMember) : []
-    ).filter((m): m is RaidShowMember => m.device !== null);
-    const devices = members.map((m) => m.device);
+    const members: RaidShowMember[] = Array.isArray(o.devices) ? o.devices.map(readMember) : [];
+    const devices = members.map((m) => m.device).filter((d): d is string => d !== null);
 
-    out.push({ name: o.name, devices, members, states: normalizeStates(o.state), raw: o });
+    out.push({
+      name: o.name,
+      devices,
+      members,
+      states: normalizeStates(o.state),
+      state_valid: isValidStateShape(o.state),
+      raw: o,
+    });
   }
   return out;
 }
@@ -236,7 +262,14 @@ export function parseRaidShow(
 ): ObservedXiraidArray[] {
   const poolDrives = readPools(pools);
   const out: ObservedXiraidArray[] = [];
-  for (const { name, devices, members, states, raw: o } of parseRaidShowEntries(payload)) {
+  for (const {
+    name,
+    devices,
+    members,
+    states,
+    state_valid: stateValid,
+    raw: o,
+  } of parseRaidShowEntries(payload)) {
     const reconProgress = numberOrNull(o.recon_progress) ?? numberOrNull(o.init_progress);
     // S4 T5: the array's sparepool NAME (raid_show) joins to its member
     // DRIVES (pool_show) → control-path disk ids. Absent/unknown → [].
@@ -268,6 +301,9 @@ export function parseRaidShow(
         rebuild_progress_pct: reconProgress,
         check_progress_pct: null,
         raw_states: [...new Set(states)],
+        // S20 (API-16): the shape validity of `state` — false means the raw
+        // words above are evidence of a malformed payload, not a state.
+        state_valid: stateValid,
         init_progress_pct: progressPct(o.init_progress),
         recon_progress_pct: progressPct(o.recon_progress),
         restripe_progress_pct: progressPct(o.restripe_progress),
@@ -277,10 +313,14 @@ export function parseRaidShow(
         ...(discardActive !== null ? { discard_active: discardActive } : {}),
         // Per-member observation: `device` in the same control-path Disk
         // identity as member_disk_ids, so a client correlates the two by id.
+        // S20: members without a readable path are kept (device null,
+        // device_present false) so the member list stays complete.
         member_states: members.map((m) => ({
           index: m.index,
-          device: diskIdByPath.get(m.device) ?? m.device,
+          device: m.device === null ? null : (diskIdByPath.get(m.device) ?? m.device),
+          device_present: m.device !== null,
           states: m.states,
+          state_valid: m.state_valid,
         })),
       },
     });
@@ -335,19 +375,43 @@ function normalizeStates(state: unknown): string[] {
 function readMember(entry: unknown, position: number): RawMember {
   const device = devicePath(entry);
   if (Array.isArray(entry)) {
-    return { index: numberOrNull(entry[0]) ?? position, device, states: normalizeStates(entry[2]) };
+    return {
+      index: numberOrNull(entry[0]) ?? position,
+      device,
+      states: normalizeStates(entry[2]),
+      state_valid: isValidStateShape(entry[2]),
+    };
   }
   if (entry !== null && typeof entry === 'object') {
     const o = entry as Record<string, unknown>;
+    const raw = o.state ?? o.states;
     return {
       index: numberOrNull(o.index) ?? position,
       device,
-      states: normalizeStates(o.state ?? o.states),
+      states: normalizeStates(raw),
+      state_valid: isValidStateShape(raw),
     };
   }
   // Bare string (path via devicePath, no per-member state) or unreadable
-  // (device === null); the caller drops the latter.
-  return { index: position, device, states: [] };
+  // (device === null). Since S20 both are kept by the caller; a bare path
+  // has no state field at all, which is not a valid shape.
+  return { index: position, device, states: [], state_valid: false };
+}
+
+/**
+ * S20 (API-16, XMOD-06): does a raid_show `state` value have the shape the
+ * connector may trust? A non-empty string, or a non-empty array in which
+ * EVERY element is a non-empty string. Anything else — missing, null, `[]`,
+ * `''`, an object, `[online, 42]` — is `false`. `normalizeStates` still
+ * extracts the string words so the evidence is not destroyed; this flag is
+ * what tells a placement consumer that the words are not the whole story.
+ */
+export function isValidStateShape(state: unknown): boolean {
+  if (typeof state === 'string') return state.trim().length > 0;
+  if (Array.isArray(state)) {
+    return state.length > 0 && state.every((s) => typeof s === 'string' && s.trim().length > 0);
+  }
+  return false;
 }
 
 function deriveState(states: string[]): ObservedXiraidArray['status']['state'] {
@@ -358,7 +422,7 @@ function deriveState(states: string[]): ObservedXiraidArray['status']['state'] {
   return 'unknown';
 }
 
-function normalizeLevel(level: unknown): string {
+export function normalizeLevel(level: unknown): string {
   const text = String(level ?? '').toLowerCase();
   if (text === 'n+m') return 'n+m';
   return `raid${text}`;

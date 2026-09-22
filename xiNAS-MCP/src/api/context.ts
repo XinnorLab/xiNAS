@@ -73,6 +73,13 @@ export interface ApiContext {
   /** Injectable read seams for the promoted legacy read routes (S8 T5). */
   read_seams?: import('./handlers/read-seams.js').ReadSeams;
   /**
+   * S20 §5.2: the api's monotonic receipt clock for observed rows, filled by
+   * the /internal/v1/observed ingest and read by GET /placement/observations
+   * to compute evidence ages. createApp defaults it; tests may inject a
+   * fake clock.
+   */
+  observed_receipts?: import('./placement/receipts.js').ObservedReceipts;
+  /**
    * Loopback request fn (S8 T7): set by server.ts AFTER the primary
    * listener binds (it targets the api's own address); /mcp answers
    * 503 until present.

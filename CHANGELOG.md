@@ -12,6 +12,31 @@ Requires-Rebuild: xinas_node_build
 
 ### Added
 
+- **Placement observations for the pNFS placement connector (S20).**
+  `GET /api/v1/placement/observations` (viewer rank; MCP tool
+  `placement.observations`) publishes the node's placement facts in the
+  connector's schema 1.0: every share with its filesystem, xiRAID array,
+  export and NFS-service evidence, per-record `collection_status` and
+  `reason_codes`, and `evidence_age_ms` computed from the api's own
+  receipt clock so repeated reads show growing ages. The agent gains a
+  5 s `PlacementObservations` collector bounded by a 2 s deadline (one
+  `raid_show`, one subprocess-free filesystem sweep, one `list_exports`,
+  one `nfs-server.service` read and one `/proc/fs/nfsd/versions` read per
+  cycle); a late or failed source is published as `ERROR` and the
+  snapshot as `PARTIAL`, never hidden. Shares are the node's
+  `/etc/exports` entries on managed filesystems, reconciled at read time
+  with the desired Share rows (`EXPORT_ABSENT` with a `present: false`
+  export as proof of absence, `SHARE_UNMANAGED`, `FILESYSTEM_UNRESOLVED`).
+  The route answers 503 with a typed code instead of a stale or partial
+  answer: `SOURCE_NOT_READY` (no push received by this api process),
+  `SOURCE_STALE` (older than two periods plus 2 s), `SNAPSHOT_TOO_LARGE`
+  (more than 256 shares or 16 MiB). The RAID parser now keeps path-less
+  members (`device: null`, `device_present`) and flags the shape of the
+  daemon's state field (`state_valid`); the filesystem probe publishes
+  `super_options`, `mount_source`, `mount_source_mismatch` and
+  `mountinfo_readable`, matches a mount only on mountpoint **and** source,
+  and leaves `mounted` absent when mountinfo is unreadable. Spec:
+  `docs/control-path/s20-placement-observations-spec.md`, ADR-0019.
 - **Typed collection status on health checks (S19a).** The agent's
   `health.probe` reports each source as `success`, `error`, `timeout`,
   `permission_denied` or `not_supported` with its own `observed_at`; every

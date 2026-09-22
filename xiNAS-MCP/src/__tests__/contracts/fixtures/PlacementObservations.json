@@ -1,0 +1,292 @@
+{
+  "schema_version": "1.0",
+  "controller_id": "xinas-node-01",
+  "server_epoch": "xinas-node-01:2026-09-22T10:00:00.000Z:1234",
+  "source_generation": 120,
+  "generated_at": "2026-09-22T12:00:01Z",
+  "snapshot_status": "COMPLETE",
+  "collection_period_ms": 5000,
+  "capabilities": [
+    "raid.array_states",
+    "raid.member_states",
+    "topology.data_log_realtime",
+    "identity",
+    "filesystem.mounted_rw",
+    "export.effective_access",
+    "nfs.service",
+    "source.freshness"
+  ],
+  "coverage": [
+    { "check": "raid.array_states", "required": true, "status": "EVALUATED" },
+    { "check": "raid.member_states", "required": true, "status": "EVALUATED" },
+    { "check": "topology.data_log_realtime", "required": true, "status": "EVALUATED" },
+    { "check": "identity", "required": true, "status": "EVALUATED" },
+    { "check": "filesystem.mounted_rw", "required": true, "status": "EVALUATED" },
+    {
+      "check": "export.effective_access",
+      "required": true,
+      "status": "EVALUATED",
+      "details": { "source": "/etc/exports" }
+    },
+    { "check": "nfs.service", "required": true, "status": "EVALUATED" },
+    { "check": "source.freshness", "required": true, "status": "EVALUATED" },
+    {
+      "check": "filesystem.integrity",
+      "required": false,
+      "status": "NOT_IMPLEMENTED",
+      "reason": "OUT_OF_MVP"
+    },
+    { "check": "network.path", "required": false, "status": "NOT_IMPLEMENTED", "reason": "OUT_OF_MVP" },
+    {
+      "check": "network.performance",
+      "required": false,
+      "status": "NOT_IMPLEMENTED",
+      "reason": "OUT_OF_MVP"
+    }
+  ],
+  "shares": [
+    {
+      "share_id": "mnt-data-training-a",
+      "incarnation": "mnt-data-training-a:7",
+      "export_path": "/mnt/data/training-a",
+      "collection_status": "SUCCESS",
+      "observed_at": "2026-09-22T12:00:00Z",
+      "evidence_age_ms": 1000,
+      "filesystem_ref": "fs:mnt-data.mount",
+      "export_ref": "export:mnt-data-training-a",
+      "service_ref": "nfs:nfs-server",
+      "reason_codes": []
+    },
+    {
+      "share_id": "mnt-data-training-b",
+      "incarnation": "mnt-data-training-b:8",
+      "export_path": "/mnt/data/training-b",
+      "collection_status": "SUCCESS",
+      "observed_at": "2026-09-22T12:00:00Z",
+      "evidence_age_ms": 1000,
+      "filesystem_ref": "fs:mnt-data.mount",
+      "export_ref": "export:mnt-data-training-b",
+      "service_ref": "nfs:nfs-server",
+      "reason_codes": []
+    },
+    {
+      "share_id": "mnt-data-training-c",
+      "incarnation": "mnt-data-training-c:9",
+      "export_path": "/mnt/data/training-c",
+      "collection_status": "UNKNOWN",
+      "observed_at": "2026-09-22T12:00:00Z",
+      "evidence_age_ms": 1000,
+      "filesystem_ref": null,
+      "export_ref": "export:mnt-data-training-c",
+      "service_ref": "nfs:nfs-server",
+      "reason_codes": ["EXPORT_ABSENT"]
+    }
+  ],
+  "resources": [
+    {
+      "id": "array:data",
+      "incarnation": "data:/dev/xi_data:5:3",
+      "collection_status": "SUCCESS",
+      "observed_at": "2026-09-22T12:00:00Z",
+      "evidence_age_ms": 1000,
+      "reason_codes": [],
+      "details": {
+        "kind": "ARRAY",
+        "name": "data",
+        "volume_path": "/dev/xi_data",
+        "edition": "Classic",
+        "version": "4.4.0",
+        "build": "4.4.0-43861",
+        "raid_level": "5",
+        "state_valid": true,
+        "raw_states": ["online", "initialized", "degraded"],
+        "members": [
+          {
+            "id": "disk-0",
+            "index": 0,
+            "group": null,
+            "device_path": "/dev/nvme0n2",
+            "state_valid": true,
+            "raw_states": ["online"]
+          },
+          {
+            "id": "disk-1",
+            "index": 1,
+            "group": null,
+            "device_path": "/dev/nvme1n2",
+            "state_valid": true,
+            "raw_states": ["online"]
+          },
+          {
+            "id": "disk-2",
+            "index": 2,
+            "group": null,
+            "device_path": "/dev/nvme2n2",
+            "state_valid": true,
+            "raw_states": ["offline"]
+          }
+        ]
+      }
+    },
+    {
+      "id": "array:log",
+      "incarnation": "log:/dev/xi_log:10:4",
+      "collection_status": "SUCCESS",
+      "observed_at": "2026-09-22T12:00:00Z",
+      "evidence_age_ms": 1000,
+      "reason_codes": [],
+      "details": {
+        "kind": "ARRAY",
+        "name": "log",
+        "volume_path": "/dev/xi_log",
+        "edition": "Classic",
+        "version": "4.4.0",
+        "build": "4.4.0-43861",
+        "raid_level": "10",
+        "state_valid": true,
+        "raw_states": ["online", "initialized"],
+        "members": [
+          {
+            "id": "disk-3",
+            "index": 0,
+            "group": null,
+            "device_path": "/dev/nvme0n1",
+            "state_valid": true,
+            "raw_states": ["online"]
+          },
+          {
+            "id": "disk-4",
+            "index": 1,
+            "group": null,
+            "device_path": "/dev/nvme1n1",
+            "state_valid": true,
+            "raw_states": ["online"]
+          },
+          {
+            "id": "disk-5",
+            "index": 2,
+            "group": null,
+            "device_path": "/dev/nvme2n1",
+            "state_valid": true,
+            "raw_states": ["online"]
+          },
+          {
+            "id": "disk-6",
+            "index": 3,
+            "group": null,
+            "device_path": "/dev/nvme3n1",
+            "state_valid": true,
+            "raw_states": ["online"]
+          }
+        ]
+      }
+    },
+    {
+      "id": "fs:mnt-data.mount",
+      "incarnation": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0:/dev/xi_data",
+      "collection_status": "SUCCESS",
+      "observed_at": "2026-09-22T12:00:00Z",
+      "evidence_age_ms": 1000,
+      "reason_codes": [],
+      "details": {
+        "kind": "FILESYSTEM",
+        "uuid": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+        "incarnation": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0:/dev/xi_data",
+        "mountpoint": "/mnt/data",
+        "source_device": "/dev/xi_data",
+        "fs_type": "xfs",
+        "mounted": true,
+        "writable": true,
+        "mount_options": ["rw", "noatime"],
+        "super_options": ["rw", "logdev=/dev/xi_log"],
+        "external_dependencies_resolved": true,
+        "array_refs": [
+          { "role": "DATA", "resource_id": "array:data" },
+          { "role": "LOG", "resource_id": "array:log" }
+        ],
+        "log_mode": "EXTERNAL"
+      }
+    },
+    {
+      "id": "export:mnt-data-training-a",
+      "incarnation": "export:mnt-data-training-a:7",
+      "collection_status": "SUCCESS",
+      "observed_at": "2026-09-22T12:00:00Z",
+      "evidence_age_ms": 1000,
+      "reason_codes": [],
+      "details": {
+        "kind": "EXPORT",
+        "export_path": "/mnt/data/training-a",
+        "present": true,
+        "source": "/etc/exports",
+        "rules": [
+          {
+            "client": "10.10.0.0/16",
+            "writable": true,
+            "security": ["sys"],
+            "options": ["rw", "sync", "no_subtree_check", "fsid=7"]
+          }
+        ]
+      }
+    },
+    {
+      "id": "export:mnt-data-training-b",
+      "incarnation": "export:mnt-data-training-b:8",
+      "collection_status": "SUCCESS",
+      "observed_at": "2026-09-22T12:00:00Z",
+      "evidence_age_ms": 1000,
+      "reason_codes": [],
+      "details": {
+        "kind": "EXPORT",
+        "export_path": "/mnt/data/training-b",
+        "present": true,
+        "source": "/etc/exports",
+        "rules": [
+          {
+            "client": "10.10.0.0/16",
+            "writable": true,
+            "security": ["sys"],
+            "options": ["rw", "sync", "no_subtree_check", "fsid=8"]
+          }
+        ]
+      }
+    },
+    {
+      "id": "export:mnt-data-training-c",
+      "incarnation": "export:mnt-data-training-c:absent",
+      "collection_status": "SUCCESS",
+      "observed_at": "2026-09-22T12:00:00Z",
+      "evidence_age_ms": 1000,
+      "reason_codes": [],
+      "details": {
+        "kind": "EXPORT",
+        "export_path": "/mnt/data/training-c",
+        "present": false,
+        "source": "/etc/exports",
+        "rules": []
+      }
+    },
+    {
+      "id": "nfs:nfs-server",
+      "incarnation": "nfs:nfs-server:active",
+      "collection_status": "SUCCESS",
+      "observed_at": "2026-09-22T12:00:00Z",
+      "evidence_age_ms": 1000,
+      "reason_codes": [],
+      "details": {
+        "kind": "NFS_SERVICE",
+        "running": true,
+        "protocols": ["NFSv3", "NFSv4.1", "NFSv4.2"],
+        "reason_codes": []
+      }
+    }
+  ],
+  "sources": {
+    "arrays": { "status": "ok" },
+    "filesystems": { "status": "ok" },
+    "exports": { "status": "ok" },
+    "nfs_service": { "status": "ok" },
+    "nfsd_versions": { "status": "ok" }
+  },
+  "collector": { "cycle_ms": 180, "deadline_hit": false, "skipped_ticks": 0 }
+}

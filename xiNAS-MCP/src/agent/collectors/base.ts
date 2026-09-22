@@ -23,6 +23,7 @@ export type Kind =
   | 'Tuning' // internal observed singleton (id 'default'); sysctl expected-vs-actual (ADR-0009).
   | 'ConfigSnapshot' // xinas_history snapshot manifests, projected (ADR-0011).
   | 'Pool' // xiRAID spare pools (ADR-0011).
+  | 'PlacementObservations' // S20: observed singleton (id 'default'); the 5 s placement cycle's row.
   | 'managed_files'
   | 'inventory';
 

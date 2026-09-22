@@ -37,6 +37,8 @@ import { nfsRouter } from './routes/nfs.js';
 import { arraysRouter } from './routes/arrays.js';
 import { filesystemsRouter } from './routes/filesystems.js';
 import { referenceRouter } from './routes/reference.js';
+import { ObservedReceipts } from './placement/receipts.js';
+import { placementRouter } from './routes/placement.js';
 import { storageRouter } from './routes/storage.js';
 import { supportRouter } from './routes/support.js';
 import { systemRouter } from './routes/system.js';
@@ -76,6 +78,8 @@ export function createApp(ctx: ApiContext): Express {
 
   // S8 T4: the loopback token is minted per process start (ADR-0010).
   ctx.loopback_token ??= randomBytes(32).toString('hex');
+  // S20 §5.2: receipt clock for observed rows (in-memory; see receipts.ts).
+  ctx.observed_receipts ??= new ObservedReceipts();
 
   // S15 §12.2 (Task 13): the registry GET /metrics renders. server.ts sets
   // this to the SAME instance passed into buildTaskEngines (so the
@@ -194,6 +198,8 @@ export function createApp(ctx: ApiContext): Express {
   // loop; POST /filesystems is excluded from it below. PATCH/DELETE join
   // in T9-T11.
   v1.use(filesystemsRouter(ctx));
+  // S20: placement observations (read-only source for the pNFS connector).
+  v1.use(placementRouter(ctx));
 
   // Remaining mutating verbs route to the executor-unavailable stub until
   // their executor ships. Per ADR-0002 §Agent heartbeat, plan and apply

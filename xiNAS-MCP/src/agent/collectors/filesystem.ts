@@ -14,6 +14,11 @@ interface FilesystemStatus {
   size_bytes?: number;
   free_bytes?: number;
   effective_mount_options?: string[];
+  /** S20 (API-06/09) mount-table facts; see the probe's FilesystemSnapshot. */
+  super_options?: string[];
+  mount_source?: string;
+  mount_source_mismatch?: string;
+  mountinfo_readable?: boolean;
   mount_unit_name?: string;
   mount_unit_enabled?: boolean;
   mount_unit_state?: string;
@@ -159,6 +164,17 @@ export class FilesystemCollector implements Collector<'Filesystem'> {
           ...(fs.status.free_bytes !== undefined ? { free_bytes: fs.status.free_bytes } : {}),
           ...(fs.status.effective_mount_options !== undefined
             ? { effective_mount_options: fs.status.effective_mount_options }
+            : {}),
+          // S20 (API-06/09): mount-table facts for placement consumers.
+          ...(fs.status.super_options !== undefined
+            ? { super_options: fs.status.super_options }
+            : {}),
+          ...(fs.status.mount_source !== undefined ? { mount_source: fs.status.mount_source } : {}),
+          ...(fs.status.mount_source_mismatch !== undefined
+            ? { mount_source_mismatch: fs.status.mount_source_mismatch }
+            : {}),
+          ...(fs.status.mountinfo_readable !== undefined
+            ? { mountinfo_readable: fs.status.mountinfo_readable }
             : {}),
           ...(fs.status.mount_unit_name !== undefined
             ? { mount_unit_name: fs.status.mount_unit_name }
