@@ -43,7 +43,7 @@
  *               Adapter renames snapshot()->read() and flattens.
  */
 
-import { readFile } from 'node:fs/promises';
+import { readFile, realpath } from 'node:fs/promises';
 import { runBootSequence } from './boot.js';
 import { CollectorRegistry } from './collectors/base.js';
 import { DiskCollector } from './collectors/disk.js';
@@ -62,7 +62,8 @@ import { execFileRunSubprocess } from './task/wiring.js';
 import { UsersCollector } from './collectors/users.js';
 import { XiraidArrayCollector } from './collectors/xiraid.js';
 import { PoolCollector } from './collectors/pool.js';
-import { PlacementObservationCollector } from './collectors/placement.js';
+import { ETAB_PATH, PlacementObservationCollector } from './collectors/placement.js';
+import { parseEtab } from '../lib/parse/etab.js';
 import type { AgentConfig } from './config.js';
 import { log } from './log.js';
 import { PollDriver } from './poll.js';
@@ -81,6 +82,7 @@ import {
   createFixtureTuningProbe,
   createFixtureUsersProbe,
   fixtureDir,
+  fixtureNfsdThreads,
   fixtureNfsdVersions,
   fixtureXiraidVersion,
 } from './probe/fixture.js';
@@ -403,32 +405,52 @@ export function buildConvergence(config: AgentConfig): Convergence {
   );
 
   // --- PlacementObservations (S20): the 5 s placement cycle over the SAME
-  //     probe instances (one raidShow, one lean filesystem sweep, one
-  //     listExports, one nfs-server unit read, one nfsd versions read per
-  //     cycle). Fixture mode: xiraid-version.json + nfsd-versions.json. ---
-  const xiraidVersionSource =
-    fdir !== null
-      ? fixedXiraidVersionSource(fixtureXiraidVersion(fdir))
-      : createXiraidVersionSource();
-  registry.register(
-    new PlacementObservationCollector({
-      controllerId: config.controller_id,
-      ...pollOverride('XINAS_AGENT_PLACEMENT_POLL_MS'),
-      sources: {
-        raidShow: () => xiraidClient.raidShow(),
-        filesystems: () => filesystemProbe.snapshotForPlacement(),
-        listExports: () => nfsProbe.listExports(),
-        nfsServiceState: () => systemdProbe.getUnitState('nfs-server.service'),
-        nfsdVersions:
-          fdir !== null
-            ? () => fixtureNfsdVersions(fdir)
-            : () => readFile('/proc/fs/nfsd/versions', 'utf8'),
-        xiraidVersion: () => xiraidVersionSource.get(),
-        diskIdByPath: () => diskIdByPath,
-        filesystemUuid: (id) => fsUuidById.get(id),
-      },
-    }),
-  );
+  //     probe instances (one raidShow, one lean filesystem sweep, one etab
+  //     read, one nfs-server unit read, one nfsd versions + one threads read
+  //     per cycle). Opt-in (API-11): `placement.enabled` in the agent config.
+  //     Fixture mode: nfs-exports.json (labelled source 'fixture'),
+  //     nfsd-versions.json, nfsd-threads.json, xiraid-version.json, mounts.json. ---
+  if (config.placement.enabled) {
+    const xiraidVersionSource =
+      fdir !== null
+        ? fixedXiraidVersionSource(fixtureXiraidVersion(fdir))
+        : createXiraidVersionSource();
+    registry.register(
+      new PlacementObservationCollector({
+        controllerId: config.controller_id,
+        ...pollOverride('XINAS_AGENT_PLACEMENT_POLL_MS'),
+        sources: {
+          raidShow: () => xiraidClient.raidShow(),
+          filesystems: () => filesystemProbe.snapshotForPlacement(),
+          // The kernel-effective export table exportfs(8) maintains — not
+          // /etc/exports (API-10, audit F-03). Unreadable → EXPORTS_UNAVAILABLE.
+          listExports:
+            fdir !== null
+              ? () =>
+                  nfsProbe
+                    .listExports()
+                    .then((rules) => rules.map((r) => ({ ...r, source: 'fixture' })))
+              : () =>
+                  readFile(ETAB_PATH, 'utf8').then((text) =>
+                    parseEtab(text).map((e) => ({ ...e, source: 'etab' })),
+                  ),
+          nfsServiceState: () => systemdProbe.getUnitState('nfs-server.service'),
+          nfsdVersions:
+            fdir !== null
+              ? () => fixtureNfsdVersions(fdir)
+              : () => readFile('/proc/fs/nfsd/versions', 'utf8'),
+          nfsdThreads:
+            fdir !== null
+              ? () => fixtureNfsdThreads(fdir)
+              : () => readFile('/proc/fs/nfsd/threads', 'utf8'),
+          realpath: fdir !== null ? (p) => Promise.resolve(p) : (p) => realpath(p),
+          xiraidVersion: () => xiraidVersionSource.get(),
+          diskIdByPath: () => diskIdByPath,
+          filesystemUuid: (id) => fsUuidById.get(id),
+        },
+      }),
+    );
+  }
 
   // --- Tuning (S7): sysctl expected-vs-actual singleton. ---
   const tuningProbe = fdir !== null ? createFixtureTuningProbe(fdir) : createTuningProbe();

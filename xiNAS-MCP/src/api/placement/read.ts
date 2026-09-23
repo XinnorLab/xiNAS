@@ -1,7 +1,7 @@
 /**
  * S20 §5.2–§5.4: read-time projection of the stored PlacementObservations
  * row into the schema-v1 result — evidence ages from the api's receipt
- * clock, reconciliation with the desired Share rows, and the three 503
+ * clock, reconciliation with the desired Share rows, and the 503
  * conditions. Pure: the route supplies the row, the receipt, the desired
  * shares and the clock.
  */
@@ -38,6 +38,7 @@ export interface StoredShare extends StoredRecord {
   filesystem_ref: string | null;
   export_ref: string | null;
   service_ref: string | null;
+  nested_mountpoints?: string[];
 }
 
 interface SourceSummary {
@@ -69,6 +70,10 @@ export interface DesiredShare {
   id: string;
   path: string;
   fsid?: number | string;
+  /** The durable creation id (F-08); absent on rows older than the backfill. */
+  placement_incarnation?: string;
+  /** KV `modified_at` (epoch ms) of the desired row (F-13). */
+  modified_at?: number;
 }
 
 export interface ReadClock {
@@ -95,13 +100,16 @@ export interface PlacementResult {
   resources: OutRecord<StoredResource>[];
   sources: Record<string, { status: 'ok' | 'failed' | 'timeout' }>;
   collector?: Record<string, unknown>;
+  /** How old the row was when this api received it (diagnostic, additive). */
+  transfer_delay_ms: number;
 }
 
 /**
- * Age of one record's evidence: time since THIS api stored the push, plus
- * the agent-reported gap between the evidence and the row's publication.
- * Both terms count against freshness (CON-10): a slow transfer or a slow
- * cycle can only make evidence older, never fresher.
+ * Age of one record's evidence: the time since THIS api stored the push,
+ * plus the transfer delay the ingest measured (the row's `generated_at` to
+ * receipt), plus the agent-reported gap between the evidence and the row's
+ * publication. Every term counts against freshness (CON-10): a slow
+ * transfer, a retried push or a slow cycle can only make evidence older.
  */
 export function evidenceAgeMs(
   clock: ReadClock,
@@ -110,11 +118,20 @@ export function evidenceAgeMs(
 ): number | null {
   if (observedMonoMs === null) return null;
   const sinceReceipt = clock.now_mono_ms - clock.receipt.received_mono_ms;
+  const delay = clock.receipt.transfer_delay_ms ?? 0;
   const intraCycle = publishedMonoMs - observedMonoMs;
-  return Math.max(0, Math.round(sinceReceipt + Math.max(0, intraCycle)));
+  return Math.max(0, Math.round(sinceReceipt + delay + Math.max(0, intraCycle)));
 }
 
-/** The three 503 conditions of spec §5.4, in evaluation order. */
+/** Age of the whole row: time since receipt plus the measured transfer delay. */
+export function rowAgeMs(receipt: Receipt, nowMono: number): number {
+  return Math.max(
+    0,
+    Math.round(nowMono - receipt.received_mono_ms + (receipt.transfer_delay_ms ?? 0)),
+  );
+}
+
+/** The 503 conditions of spec §5.4, in evaluation order. */
 export function assertServable(
   row: { revision: number } | null,
   receipt: Receipt | undefined,
@@ -128,14 +145,40 @@ export function assertServable(
       { row_present: row !== null },
     );
   }
-  const ageMs = Math.max(0, Math.round(nowMono - receipt.received_mono_ms));
+  if (receipt.transfer_delay_ms === null) {
+    throw new ApiException(
+      'SOURCE_NOT_READY',
+      'placement observations are not available: the stored row carries no parsable generated_at',
+      { row_present: true, reason: 'generated_at_unparsable' },
+    );
+  }
+  const ageMs = rowAgeMs(receipt, nowMono);
   const period = status?.collection_period_ms ?? 5_000;
   const limit = 2 * period + PLACEMENT_STALE_SLACK_MS;
   if (ageMs > limit) {
     throw new ApiException(
       'SOURCE_STALE',
       'placement observations are stale: the agent has stopped publishing',
-      { age_ms: ageMs, limit_ms: limit, collection_period_ms: period },
+      {
+        age_ms: ageMs,
+        limit_ms: limit,
+        collection_period_ms: period,
+        transfer_delay_ms: receipt.transfer_delay_ms,
+      },
+    );
+  }
+  // API-20: a global FAILED snapshot is a source failure, not an answer —
+  // 503 with the typed code (the connector blocks every bound DS).
+  if (status?.snapshot_status === 'FAILED') {
+    throw new ApiException(
+      'SOURCE_FAILED',
+      'placement observations: every source failed in the last cycle',
+      {
+        age_ms: ageMs,
+        sources: Object.fromEntries(
+          Object.entries(status.sources ?? {}).map(([k, v]) => [k, v.status]),
+        ),
+      },
     );
   }
 }
@@ -147,6 +190,12 @@ function withAge<T extends StoredRecord>(
 ): OutRecord<T> {
   const { observed_mono_ms, ...rest } = rec;
   return { ...rest, evidence_age_ms: evidenceAgeMs(clock, publishedMonoMs, observed_mono_ms) };
+}
+
+/** The desired Share's connector-facing incarnation (F-08). */
+export function desiredIncarnation(d: DesiredShare): string {
+  const base = `${d.id}:${d.fsid ?? 'none'}`;
+  return d.placement_incarnation !== undefined ? `${base}:${d.placement_incarnation}` : base;
 }
 
 /**
@@ -172,6 +221,11 @@ export function projectPlacement(
     if (r.details.kind === 'NFS_SERVICE') nfsRef = r.id;
   }
   const desiredByPath = new Map(desired.map((d) => [d.path, d]));
+  // F-13: a desired row that changed after this observation was received
+  // (a share recreated, its path or fsid edited) cannot be joined with the
+  // older observation — the join is refused until a newer cycle lands.
+  const changedSince = (d: DesiredShare): boolean =>
+    d.modified_at !== undefined && d.modified_at > clock.receipt.received_at_ms;
 
   const shares: OutRecord<StoredShare>[] = [];
   const observedPaths = new Set<string>();
@@ -182,10 +236,19 @@ export function projectPlacement(
     if (d === undefined) {
       // An export xiNAS did not create; the connector may still bind it.
       shares.push({ ...out, reason_codes: [...out.reason_codes, 'SHARE_UNMANAGED'] });
+    } else if (changedSince(d)) {
+      shares.push({
+        ...out,
+        share_id: d.id,
+        incarnation: desiredIncarnation(d),
+        collection_status: 'UNKNOWN',
+        reason_codes: [...out.reason_codes, 'DESIRED_CHANGED_SINCE_OBSERVATION'],
+      });
     } else {
       // The desired id is the connector-facing share id; the fsid the
-      // exports role allocated is the incarnation discriminator (§4.3).
-      shares.push({ ...out, share_id: d.id, incarnation: `${d.id}:${d.fsid ?? 'none'}` });
+      // exports role allocated plus the durable creation id are the
+      // incarnation discriminators (§4.3, F-08).
+      shares.push({ ...out, share_id: d.id, incarnation: desiredIncarnation(d) });
     }
   }
 
@@ -197,15 +260,18 @@ export function projectPlacement(
     let reason: string;
     let observedAt: string | null = null;
     let age: number | null = null;
-    if (present !== undefined) {
+    if (changedSince(d)) {
+      reason = 'DESIRED_CHANGED_SINCE_OBSERVATION';
+    } else if (present !== undefined) {
       // Exported, but not on a managed filesystem (§4.4).
       exportRef = present.id;
       reason = 'FILESYSTEM_UNRESOLVED';
       observedAt = present.observed_at;
       age = present.evidence_age_ms;
     } else if (exportsSource?.status === 'ok' && exportsSource.mono_ms !== undefined) {
-      // Proof of absence (XMOD-14): the exports read succeeded and had no
-      // line for this path — published as an EXPORT resource present: false.
+      // Proof of absence (XMOD-14): the effective export table was read and
+      // had no line for this path — published as an EXPORT resource
+      // present: false.
       let id: string;
       try {
         id = `export:${encExportId(d.path)}`;
@@ -223,7 +289,7 @@ export function projectPlacement(
           kind: 'EXPORT',
           export_path: d.path,
           present: false,
-          source: '/etc/exports',
+          source: 'etab',
           rules: [],
         },
       };
@@ -240,7 +306,7 @@ export function projectPlacement(
     }
     shares.push({
       share_id: d.id,
-      incarnation: `${d.id}:${d.fsid ?? 'none'}`,
+      incarnation: desiredIncarnation(d),
       export_path: d.path,
       collection_status: 'UNKNOWN',
       observed_at: observedAt,
@@ -268,6 +334,7 @@ export function projectPlacement(
       Object.entries(status.sources).map(([k, v]) => [k, { status: v.status }]),
     ),
     ...(status.collector !== undefined ? { collector: status.collector } : {}),
+    transfer_delay_ms: clock.receipt.transfer_delay_ms ?? 0,
   };
 
   if (shares.length > PLACEMENT_MAX_SHARES) {

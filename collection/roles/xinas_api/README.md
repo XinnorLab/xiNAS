@@ -62,6 +62,9 @@ See `defaults/main.yml`. Highlights:
 | `xinas_api_socket_group` | `xinas-admin` | **See Phase 0 caveat in defaults comment** — also referenced by the unit's hardcoded `SupplementaryGroups`. |
 | `xinas_api_add_installing_operator` | `true` | Auto-add the sudo/login operator to `xinas-admin`. Set `false` to manage membership out of band. |
 | `xinas_api_admin_users` | `[]` | Extra **existing** accounts to add to `xinas-admin`; unknown names are skipped, never created. |
+| `xinas_api_mcp_http_host` | `""` | S20/ADR-0010: bind the api's dedicated TCP listener (`mcp.http`, the same app as the unix socket) on this address; empty leaves it off. |
+| `xinas_api_mcp_http_port` | `8080` | Port of that listener. |
+| `xinas_api_mcp_http_tls_cert` / `xinas_api_mcp_http_tls_key` | `""` | PEM certificate and key on the node; both set → the listener is HTTPS. Without them the api refuses a plain-http listener on a routable host at startup (`mcp.http.allow_insecure_http` is a hand-edit for isolated labs only). |
 | `xinas_api_controller_id` | `{{ ansible_machine_id \| to_uuid }}` | UUIDv5 derivation; override for pre-assigned IDs. |
 
 ### Token surface scope (S15 §3.5, §13)

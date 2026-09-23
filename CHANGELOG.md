@@ -37,6 +37,28 @@ Requires-Rebuild: xinas_node_build
   `mountinfo_readable`, matches a mount only on mountpoint **and** source,
   and leaves `mounted` absent when mountinfo is unreadable. Spec:
   `docs/control-path/s20-placement-observations-spec.md`, ADR-0019.
+- **Placement observations — audit remediation (S20, 2026-09-23).** The
+  ingest orders the placement singleton by `(server_epoch,
+  source_generation)` and drops delayed or reordered pushes; every
+  `evidence_age_ms` includes the measured transfer delay, and a push that
+  arrives later than the staleness bound is stale on arrival. Export
+  evidence comes from the kernel-effective table `/var/lib/nfs/etab`
+  (`details.source: etab`), not `/etc/exports`. A foreign mount at, under
+  or between a share path and its filesystem, a non-canonical export path,
+  or an external log/realtime device no array owns now read `UNKNOWN`
+  (`NESTED_MOUNT`, `PATH_NOT_CANONICAL`, `EXTERNAL_DEVICE_UNRESOLVED`).
+  `NFS_SERVICE.running` needs kernel nfsd threads, not just an active unit;
+  `FILESYSTEM.writable` needs `rw` in the VFS options and no `ro` in
+  either list; `ARRAY.progress` carries the daemon's four progress values.
+  A global `FAILED` snapshot answers 503 `SOURCE_FAILED`; a desired Share
+  modified after the observation was received is `UNKNOWN` /
+  `DESIRED_CHANGED_SINCE_OBSERVATION`. Every desired Share has a
+  durable placement incarnation (a `SharePlacement/<id>` marker row minted
+  at create, backfilled on boot) so a delete-and-recreate is a new
+  incarnation. The cycle is
+  opt-in (`xinas_agent_placement_enabled`), the api's dedicated listener
+  can serve HTTPS (`xinas_api_mcp_http_*`) and refuses plain http on a
+  routable host unless explicitly allowed.
 - **Typed collection status on health checks (S19a).** The agent's
   `health.probe` reports each source as `success`, `error`, `timeout`,
   `permission_denied` or `not_supported` with its own `observed_at`; every

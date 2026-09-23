@@ -59,12 +59,32 @@ export interface AgentConfig {
   nfs_helper_socket?: string; // nfs-helper UDS override (default /run/xinas-nfs-helper.sock)
   /** S19c: the baseline engine (always resolved; defaults when the file has no block). */
   health_baseline: HealthBaselineConfig;
+  /**
+   * S20 (API-11, audit F-09): the 5 s placement cycle is opt-in. Off, the
+   * collector is not registered and GET /placement/observations answers
+   * 503 SOURCE_NOT_READY; on, it runs regardless of any connector.
+   */
+  placement: PlacementConfig;
 }
 
-/** What callers may hand in inline: everything resolved except the optional S19c block. */
-export type AgentConfigInput = Omit<AgentConfig, 'health_baseline'> & {
+export interface PlacementConfig {
+  enabled: boolean;
+}
+
+/** What callers may hand in inline: everything resolved except the optional S19c/S20 blocks. */
+export type AgentConfigInput = Omit<AgentConfig, 'health_baseline' | 'placement'> & {
   health_baseline?: Partial<HealthBaselineConfig>;
+  placement?: Partial<PlacementConfig>;
 };
+
+export function resolvePlacementConfig(raw: unknown): PlacementConfig {
+  const rec = raw !== null && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  const enabled = rec.enabled;
+  if (enabled !== undefined && typeof enabled !== 'boolean') {
+    throw new Error('xinas-agent config: placement.enabled must be a boolean');
+  }
+  return { enabled: enabled === true };
+}
 
 interface AgentConfigFile {
   api_socket: string;
@@ -74,6 +94,7 @@ interface AgentConfigFile {
   socket_group: string;
   nfs_helper_socket?: string;
   health_baseline?: unknown;
+  placement?: unknown;
 }
 
 const DEFAULT_PATH = '/etc/xinas-agent/config.json';
@@ -85,6 +106,7 @@ export function loadAgentConfig(
     return {
       ...opts.inline,
       health_baseline: resolveHealthBaselineConfig(opts.inline.health_baseline),
+      placement: resolvePlacementConfig(opts.inline.placement),
     };
   }
   const path = opts.configPath ?? DEFAULT_PATH;
@@ -110,5 +132,6 @@ export function loadAgentConfig(
       ? { nfs_helper_socket: file.nfs_helper_socket }
       : {}),
     health_baseline: resolveHealthBaselineConfig(file.health_baseline),
+    placement: resolvePlacementConfig(file.placement),
   };
 }

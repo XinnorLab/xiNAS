@@ -66,10 +66,20 @@ Facts that shaped the decision (re-verified on `release/3.14` @
 ## Consequences
 
 - One new observed kind in `OBSERVED_KINDS`, `Kind`, and `api-v1.yaml`;
-  one new route, catalog entry and tag; three new `ErrorCode` values
-  (`SOURCE_NOT_READY` / `SOURCE_STALE` / `SNAPSHOT_TOO_LARGE`, all 503),
-  an in-memory receipt clock on the api context, and one out-of-cycle
+  one new route, catalog entry and tag; four new `ErrorCode` values
+  (`SOURCE_NOT_READY` / `SOURCE_STALE` / `SOURCE_FAILED` /
+  `SNAPSHOT_TOO_LARGE`, all 503), an in-memory receipt clock on the api
+  context (with the ingest's ordering guard for the singleton and the
+  measured transfer delay), a durable `placement_incarnation` on desired
+  Share rows (minted at create, backfilled on boot), and one out-of-cycle
   subprocess in the agent (the xiRAID package version, once per process).
+- The export evidence is the kernel-effective table (`/var/lib/nfs/etab`),
+  read directly by the agent; the nfs-helper's `/etc/exports` listing is
+  not a placement source.
+- The dedicated api listener (`mcp.http`) gains TLS (`mcp.http.tls`) and
+  refuses plain http on a routable host unless a lab explicitly allows it.
+- The cycle is opt-in (`placement.enabled`), so nodes that serve no pNFS
+  data server pay nothing.
 - Both daemons change → `Requires-Rebuild: xinas_node_build`.
 - Deferred to later changes (recorded in `docs/TODO.md`): HTTPS ingress
   and the dedicated connector credential (API-19), kernel-effective

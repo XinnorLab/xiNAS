@@ -8,10 +8,14 @@ import {
   type ArrayInput,
   type ExportInput,
   type FilesystemInput,
+  type FilesystemSweep,
   type GraphInputs,
+  type MountSummary,
   type Source,
   buildPlacementGraph,
   containingFilesystem,
+  foreignMountsUnder,
+  writableFromOptions,
 } from '../../lib/placement-graph.js';
 
 const AT = '2026-09-22T12:00:00.000Z';
@@ -44,6 +48,7 @@ const ARRAYS: ArrayInput[] = [
     raw_states: ['online', 'initialized'],
     state_valid: true,
     members: [member(0, '/dev/nvme0n2'), member(1, '/dev/nvme1n2'), member(2, '/dev/nvme2n2')],
+    progress: { init_pct: 100, recon_pct: null, restripe_pct: null, sdc_pct: null },
   },
   {
     name: 'log',
@@ -82,34 +87,56 @@ const FS_B: FilesystemInput = {
   super_options: ['rw'],
 };
 
+/** The node's mount table: root, the two managed filesystems, nothing foreign. */
+const MOUNTS: MountSummary[] = [
+  { mountpoint: '/', source: '/dev/sda2', fstype: 'ext4' },
+  { mountpoint: '/mnt/data', source: '/dev/xi_data', fstype: 'xfs' },
+  { mountpoint: '/mnt/scratch', source: '/dev/xi_data', fstype: 'xfs' },
+];
+
+const sweep = (
+  filesystems: FilesystemInput[],
+  mounts: MountSummary[] = MOUNTS,
+  readable = true,
+): FilesystemSweep => ({
+  filesystems,
+  mounts,
+  mountinfo_readable: readable,
+});
+
+/** FS_A minus the mount-table facts — what the probe emits when there is no exact match. */
+function unmounted(over: Partial<FilesystemInput> = {}): FilesystemInput {
+  const { mount_source: _ms, super_options: _so, effective_mount_options: _eo, ...rest } = FS_A;
+  return { ...rest, mounted: false, ...over };
+}
+
 const rule = (host = '10.10.0.0/16', options = ['rw', 'sync', 'no_subtree_check', 'fsid=7']) => ({
   host_pattern: host,
   options,
 });
 
 const EXPORTS: ExportInput[] = [
-  { export_path: '/mnt/data/training-a', rules: [rule()] },
-  { export_path: '/mnt/data/training-b', rules: [rule('10.20.0.0/16', ['ro', 'fsid=8'])] },
-  { export_path: '/mnt/scratch', rules: [rule()] },
-  { export_path: '/srv/other', rules: [rule()] }, // not on a managed filesystem
+  { export_path: '/mnt/data/training-a', rules: [rule()], source: 'etab' },
+  {
+    export_path: '/mnt/data/training-b',
+    rules: [rule('10.20.0.0/16', ['ro', 'fsid=8'])],
+    source: 'etab',
+  },
+  { export_path: '/mnt/scratch', rules: [rule()], source: 'etab' },
+  { export_path: '/srv/other', rules: [rule()], source: 'etab' }, // not on a managed filesystem
 ];
 
 function inputs(over: Partial<GraphInputs> = {}): GraphInputs {
   return {
     arrays: ok(ARRAYS),
-    filesystems: ok([FS_A, FS_B]),
+    filesystems: ok(sweep([FS_A, FS_B])),
     exports: ok(EXPORTS),
     nfs_service: ok({ active_state: 'active', sub_state: 'exited' }),
     nfsd_versions: ok(['3', '4.1', '4.2']),
+    nfsd_threads: ok(8),
     xiraid_version: { version: '4.4.0', build: '4.4.0-43861' },
     ...over,
   };
-}
-
-/** FS_A minus the mount-table facts — what the probe emits when there is no exact match. */
-function unmounted(over: Partial<FilesystemInput> = {}): FilesystemInput {
-  const { mount_source: _ms, super_options: _so, effective_mount_options: _eo, ...rest } = FS_A;
-  return { ...rest, mounted: false, ...over };
 }
 
 const graph = (over: Partial<GraphInputs> = {}) => buildPlacementGraph(inputs(over), encExportId);
@@ -127,6 +154,45 @@ describe('containingFilesystem', () => {
     expect(containingFilesystem('/mnt/data', fss)?.mountpoint).toBe('/mnt/data');
     expect(containingFilesystem('/mnt/data2', fss)?.mountpoint).toBe('/mnt');
     expect(containingFilesystem('/srv/x', fss)).toBeUndefined();
+  });
+});
+
+describe('foreignMountsUnder (T-05, API-05)', () => {
+  const table: MountSummary[] = [
+    { mountpoint: '/', source: '/dev/sda2', fstype: 'ext4' },
+    { mountpoint: '/mnt/data', source: '/dev/xi_data', fstype: 'xfs' },
+    { mountpoint: '/mnt/data/training-a/cache', source: 'tmpfs', fstype: 'tmpfs' },
+    { mountpoint: '/mnt/data/shared', source: '/dev/sdb1', fstype: 'ext4' },
+    { mountpoint: '/mnt/data/bind', source: '/dev/xi_data', fstype: 'xfs' },
+  ];
+  it('finds mounts at or under the share path', () => {
+    expect(foreignMountsUnder('/mnt/data/training-a', '/mnt/data', table)).toEqual([
+      '/mnt/data/training-a/cache',
+    ]);
+    expect(foreignMountsUnder('/mnt/data/shared', '/mnt/data', table)).toEqual([
+      '/mnt/data/shared',
+    ]);
+  });
+  it('finds a mount between the filesystem and the share path, ignores the filesystem itself and unrelated mounts', () => {
+    expect(foreignMountsUnder('/mnt/data/shared/proj', '/mnt/data', table)).toEqual([
+      '/mnt/data/shared',
+    ]);
+    expect(foreignMountsUnder('/mnt/data/training-b', '/mnt/data', table)).toEqual([]);
+    // A bind mount of the same device is still ambiguous.
+    expect(foreignMountsUnder('/mnt/data/bind/x', '/mnt/data', table)).toEqual(['/mnt/data/bind']);
+  });
+});
+
+describe('writableFromOptions (F-12)', () => {
+  it('needs rw in the VFS options and no ro anywhere', () => {
+    expect(writableFromOptions(['rw', 'noatime'], ['rw', 'logdev=/dev/xi_log'])).toBe(true);
+    expect(writableFromOptions(['rw'], [])).toBe(true);
+    expect(writableFromOptions(['rw'], undefined)).toBe(true);
+    expect(writableFromOptions(['ro'], ['rw'])).toBe(false);
+    expect(writableFromOptions(['rw', 'noatime'], ['ro', 'logdev=/dev/xi_log'])).toBe(false);
+    expect(writableFromOptions(['noatime'], ['rw'])).toBeNull();
+    expect(writableFromOptions(['rw'], ['norecovery'])).toBeNull();
+    expect(writableFromOptions(undefined, ['rw'])).toBeNull();
   });
 });
 
@@ -153,6 +219,7 @@ describe('T-04 topology: two shares on one fs with data+log arrays, one on a sec
     expect(a.observed_at).toBe(AT);
     expect(a.observed_mono_ms).toBe(1_000);
     expect(a.reason_codes).toEqual([]);
+    expect(a.nested_mountpoints).toBeUndefined();
   });
 
   it('filesystem A resolves DATA and LOG arrays with log_mode EXTERNAL; B is INTERNAL', () => {
@@ -185,7 +252,7 @@ describe('T-04 topology: two shares on one fs with data+log arrays, one on a sec
     expect(fsB?.collection_status).toBe('SUCCESS');
   });
 
-  it('arrays publish edition/version/build, states and members in the schema shape', () => {
+  it('arrays publish edition/version/build, states, progress and members in the schema shape', () => {
     const data = byId(g, 'array:data');
     expect(data?.collection_status).toBe('SUCCESS');
     expect(data?.incarnation).toBe('data:/dev/xi_data:5:3');
@@ -199,6 +266,14 @@ describe('T-04 topology: two shares on one fs with data+log arrays, one on a sec
       raid_level: '5',
       state_valid: true,
       raw_states: ['online', 'initialized'],
+      progress: { init_pct: 100, recon_pct: null, restripe_pct: null, sdc_pct: null },
+    });
+    // An array without progress values publishes nulls, never a guess (API-08).
+    expect(byId(g, 'array:log')?.details.progress).toEqual({
+      init_pct: null,
+      recon_pct: null,
+      restripe_pct: null,
+      sdc_pct: null,
     });
     expect((data?.details.members as unknown[])[1]).toEqual({
       id: 'disk-1',
@@ -210,13 +285,13 @@ describe('T-04 topology: two shares on one fs with data+log arrays, one on a sec
     });
   });
 
-  it('export rules are normalized: rw/ro, sec default sys, options kept, source labelled', () => {
+  it('export rules are normalized: rw/ro, sec default sys, options kept, source etab', () => {
     const a = byId(g, `export:${encExportId('/mnt/data/training-a')}`);
     expect(a?.details).toMatchObject({
       kind: 'EXPORT',
       export_path: '/mnt/data/training-a',
       present: true,
-      source: '/etc/exports',
+      source: 'etab',
       rules: [
         {
           client: '10.10.0.0/16',
@@ -230,7 +305,7 @@ describe('T-04 topology: two shares on one fs with data+log arrays, one on a sec
     expect((b?.details.rules as Array<{ writable: boolean }>)[0]?.writable).toBe(false);
   });
 
-  it('the NFS service is the singleton with protocols from nfsd versions', () => {
+  it('the NFS service is the singleton with protocols from nfsd versions and threads from nfsd', () => {
     const nfs = byId(g, 'nfs:nfs-server');
     expect(nfs?.collection_status).toBe('SUCCESS');
     expect(nfs?.details).toMatchObject({
@@ -238,6 +313,8 @@ describe('T-04 topology: two shares on one fs with data+log arrays, one on a sec
       running: true,
       protocols: ['NFSv3', 'NFSv4.1', 'NFSv4.2'],
       reason_codes: [],
+      unit_active_state: 'active',
+      threads: 8,
     });
   });
 });
@@ -278,6 +355,7 @@ describe('failure isolation (API-07, T-04)', () => {
       exports: failed(),
       nfs_service: failed(),
       nfsd_versions: failed(),
+      nfsd_threads: failed(),
     });
     expect(g.snapshot_status).toBe('FAILED');
     expect(g.shares).toEqual([]);
@@ -292,22 +370,43 @@ describe('failure isolation (API-07, T-04)', () => {
   });
 });
 
-describe('filesystem rules (API-06, XMOD-03, T-05)', () => {
-  it('a logdev naming a device no array owns → external_dependencies_resolved false, still SUCCESS', () => {
+describe('filesystem rules (API-06, XMOD-03, XMOD-12, T-04, T-05)', () => {
+  it('F-05: a logdev naming a device no array owns makes the filesystem UNKNOWN and its shares UNKNOWN; the other filesystem is untouched', () => {
     const g = graph({
-      filesystems: ok([{ ...FS_A, super_options: ['rw', 'logdev=/dev/sdz9'] }]),
+      filesystems: ok(sweep([{ ...FS_A, super_options: ['rw', 'logdev=/dev/sdz9'] }, FS_B])),
     });
     const fs = byId(g, 'fs:mnt-data.mount');
-    expect(fs?.collection_status).toBe('SUCCESS');
+    expect(fs?.collection_status).toBe('UNKNOWN');
     expect(fs?.reason_codes).toEqual(['EXTERNAL_DEVICE_UNRESOLVED']);
     expect(fs?.details.external_dependencies_resolved).toBe(false);
     expect(fs?.details.log_mode).toBe('EXTERNAL');
     expect(fs?.details.array_refs).toEqual([{ role: 'DATA', resource_id: 'array:data' }]);
+    expect(g.shares.map((s) => [s.export_path, s.collection_status, s.reason_codes])).toEqual([
+      ['/mnt/data/training-a', 'UNKNOWN', ['DEPENDENCY_FILESYSTEM_UNAVAILABLE']],
+      ['/mnt/data/training-b', 'UNKNOWN', ['DEPENDENCY_FILESYSTEM_UNAVAILABLE']],
+      ['/mnt/scratch', 'SUCCESS', []],
+    ]);
+  });
+
+  it('T-04: a fault on the shared log array blocks its two shares only', () => {
+    const g = graph({
+      arrays: ok([
+        ARRAYS[0] as ArrayInput,
+        { ...(ARRAYS[1] as ArrayInput), raw_states: ['online', 'reconstructing'] },
+      ]),
+    });
+    // The source publishes the words; the connector applies the veto. Here the
+    // array is still SUCCESS, so the dependency chain reads SUCCESS as well —
+    // the log array's identity is what both shares reference.
+    expect(g.shares.every((s) => s.collection_status === 'SUCCESS')).toBe(true);
+    expect(byId(g, 'array:log')?.details.raw_states).toEqual(['online', 'reconstructing']);
+    expect(g.shares[0]?.filesystem_ref).toBe(g.shares[1]?.filesystem_ref);
+    expect(g.shares[2]?.filesystem_ref).not.toBe(g.shares[0]?.filesystem_ref);
   });
 
   it('an rtdev is a REALTIME ref', () => {
     const g = graph({
-      filesystems: ok([{ ...FS_A, super_options: ['rw', 'rtdev=/dev/xi_log'] }]),
+      filesystems: ok(sweep([{ ...FS_A, super_options: ['rw', 'rtdev=/dev/xi_log'] }])),
     });
     const fs = byId(g, 'fs:mnt-data.mount');
     expect(fs?.details.log_mode).toBe('INTERNAL');
@@ -318,7 +417,9 @@ describe('filesystem rules (API-06, XMOD-03, T-05)', () => {
   });
 
   it('a mount-source mismatch is UNKNOWN / MOUNT_SOURCE_MISMATCH — no fallback to the parent', () => {
-    const g = graph({ filesystems: ok([unmounted({ mount_source_mismatch: '/dev/sdb1' })]) });
+    const g = graph({
+      filesystems: ok(sweep([unmounted({ mount_source_mismatch: '/dev/sdb1' })])),
+    });
     const fs = byId(g, 'fs:mnt-data.mount');
     expect(fs?.collection_status).toBe('UNKNOWN');
     expect(fs?.reason_codes).toContain('MOUNT_SOURCE_MISMATCH');
@@ -327,18 +428,19 @@ describe('filesystem rules (API-06, XMOD-03, T-05)', () => {
     expect(g.shares[0]?.reason_codes).toEqual(['DEPENDENCY_FILESYSTEM_UNAVAILABLE']);
   });
 
-  it('unreadable mountinfo → mounted null, writable null, UNKNOWN / MOUNTINFO_UNREADABLE', () => {
+  it('unreadable mountinfo → mounted null, writable null, UNKNOWN / MOUNTINFO_UNREADABLE; no nested-mount claim either', () => {
     const { mounted: _m, ...unreadable } = unmounted({ mountinfo_readable: false });
-    const g = graph({ filesystems: ok([unreadable]) });
+    const g = graph({ filesystems: ok(sweep([unreadable], [], false)) });
     const fs = byId(g, 'fs:mnt-data.mount');
     expect(fs?.details.mounted).toBeNull();
     expect(fs?.details.writable).toBeNull();
     expect(fs?.collection_status).toBe('UNKNOWN');
     expect(fs?.reason_codes).toContain('MOUNTINFO_UNREADABLE');
+    expect(g.shares[0]?.reason_codes).toEqual(['DEPENDENCY_FILESYSTEM_UNAVAILABLE']);
   });
 
   it('not mounted → mounted false is a proven fact (SUCCESS), log_mode UNKNOWN, unit options published', () => {
-    const g = graph({ filesystems: ok([unmounted()]) });
+    const g = graph({ filesystems: ok(sweep([unmounted()])) });
     const fs = byId(g, 'fs:mnt-data.mount');
     expect(fs?.collection_status).toBe('SUCCESS');
     expect(fs?.details).toMatchObject({
@@ -352,17 +454,87 @@ describe('filesystem rules (API-06, XMOD-03, T-05)', () => {
 
   it('a filesystem whose source no array owns → UNKNOWN / DATA_ARRAY_UNRESOLVED', () => {
     const g = graph({
-      filesystems: ok([{ ...FS_A, backing_device: '/dev/nvme9n1', mount_source: '/dev/nvme9n1' }]),
+      filesystems: ok(
+        sweep([{ ...FS_A, backing_device: '/dev/nvme9n1', mount_source: '/dev/nvme9n1' }]),
+      ),
     });
     expect(byId(g, 'fs:mnt-data.mount')?.reason_codes).toContain('DATA_ARRAY_UNRESOLVED');
     expect(byId(g, 'fs:mnt-data.mount')?.collection_status).toBe('UNKNOWN');
   });
 
-  it('a read-only mount reads writable false', () => {
-    const g = graph({
-      filesystems: ok([{ ...FS_A, effective_mount_options: ['ro', 'noatime'] }]),
+  it('F-12: read-only reads writable false from EITHER option list; contradictory lists are unproven', () => {
+    const vfsRo = graph({
+      filesystems: ok(sweep([{ ...FS_A, effective_mount_options: ['ro', 'noatime'] }])),
     });
-    expect(byId(g, 'fs:mnt-data.mount')?.details.writable).toBe(false);
+    expect(byId(vfsRo, 'fs:mnt-data.mount')?.details.writable).toBe(false);
+    const superRo = graph({
+      filesystems: ok(sweep([{ ...FS_A, super_options: ['ro', 'logdev=/dev/xi_log'] }])),
+    });
+    expect(byId(superRo, 'fs:mnt-data.mount')?.details.writable).toBe(false);
+    const neither = graph({
+      filesystems: ok(sweep([{ ...FS_A, effective_mount_options: ['noatime'] }])),
+    });
+    expect(byId(neither, 'fs:mnt-data.mount')?.details.writable).toBeNull();
+  });
+
+  it('F-04 / T-05: a foreign mount under the share path makes THAT share UNKNOWN / NESTED_MOUNT, not its neighbours', () => {
+    const g = graph({
+      filesystems: ok(
+        sweep(
+          [FS_A, FS_B],
+          [
+            ...MOUNTS,
+            { mountpoint: '/mnt/data/training-a/cache', source: 'tmpfs', fstype: 'tmpfs' },
+          ],
+        ),
+      ),
+    });
+    expect(g.shares[0]).toMatchObject({
+      export_path: '/mnt/data/training-a',
+      collection_status: 'UNKNOWN',
+      reason_codes: ['NESTED_MOUNT'],
+      nested_mountpoints: ['/mnt/data/training-a/cache'],
+      filesystem_ref: 'fs:mnt-data.mount',
+    });
+    expect(g.shares[1]?.collection_status).toBe('SUCCESS');
+    expect(g.shares[2]?.collection_status).toBe('SUCCESS');
+  });
+
+  it('F-04 / T-05: a foreign mount BETWEEN the filesystem and the share path is not resolved to the parent arrays', () => {
+    const g = graph({
+      filesystems: ok(
+        sweep(
+          [FS_A],
+          [...MOUNTS, { mountpoint: '/mnt/data/training-b', source: '/dev/sdb1', fstype: 'ext4' }],
+        ),
+      ),
+      exports: ok([{ export_path: '/mnt/data/training-b/proj', rules: [rule()], source: 'etab' }]),
+    });
+    expect(g.shares[0]).toMatchObject({
+      collection_status: 'UNKNOWN',
+      reason_codes: ['NESTED_MOUNT'],
+      nested_mountpoints: ['/mnt/data/training-b'],
+    });
+  });
+
+  it('T-05 symlink rule: a non-canonical or unresolvable export path is UNKNOWN', () => {
+    const g = graph({
+      canonical_paths: {
+        '/mnt/data/training-a': '/mnt/real/training-a',
+        '/mnt/data/training-b': null,
+      },
+    });
+    expect(g.shares[0]?.reason_codes).toEqual(['PATH_NOT_CANONICAL']);
+    expect(g.shares[1]?.reason_codes).toEqual(['PATH_UNRESOLVABLE']);
+    expect(g.shares[2]?.reason_codes).toEqual(['PATH_UNRESOLVABLE']); // not in the map
+    const fine = graph({
+      canonical_paths: {
+        '/mnt/data/training-a': '/mnt/data/training-a',
+        '/mnt/data/training-b': '/mnt/data/training-b',
+        '/mnt/scratch': '/mnt/scratch',
+      },
+    });
+    expect(fine.shares.every((s) => s.collection_status === 'SUCCESS')).toBe(true);
   });
 });
 
@@ -374,6 +546,7 @@ describe('array rules (API-16, XMOD-06)', () => {
           ...(ARRAYS[0] as ArrayInput),
           members: [member(0, '/dev/nvme0n2'), member(1, null, ['offline'])],
         },
+        ARRAYS[1] as ArrayInput,
       ]),
     });
     const a = byId(g, 'array:data');
@@ -406,11 +579,31 @@ describe('array rules (API-16, XMOD-06)', () => {
   });
 });
 
-describe('NFS service rules', () => {
-  it('inactive → running false, SUCCESS', () => {
-    const g = graph({ nfs_service: ok({ active_state: 'inactive' }) });
+describe('NFS service rules (F-06, T-08)', () => {
+  it('inactive unit → running false, SUCCESS, threads not consulted', () => {
+    const g = graph({ nfs_service: ok({ active_state: 'inactive' }), nfsd_threads: failed() });
     expect(byId(g, 'nfs:nfs-server')?.details.running).toBe(false);
     expect(byId(g, 'nfs:nfs-server')?.collection_status).toBe('SUCCESS');
+  });
+
+  it('active (exited) with zero nfsd threads → running false / NFSD_NO_THREADS, a VALID deny', () => {
+    const g = graph({ nfsd_threads: ok(0) });
+    const nfs = byId(g, 'nfs:nfs-server');
+    expect(nfs?.collection_status).toBe('SUCCESS');
+    expect(nfs?.details.running).toBe(false);
+    expect(nfs?.details.threads).toBe(0);
+    expect(nfs?.reason_codes).toEqual(['NFSD_NO_THREADS']);
+  });
+
+  it('active unit but the threads file unreadable or junk → running null, UNKNOWN', () => {
+    const unread = graph({ nfsd_threads: failed() });
+    expect(byId(unread, 'nfs:nfs-server')?.details.running).toBeNull();
+    expect(byId(unread, 'nfs:nfs-server')?.collection_status).toBe('UNKNOWN');
+    expect(byId(unread, 'nfs:nfs-server')?.reason_codes).toEqual(['NFSD_THREADS_UNAVAILABLE']);
+    const junk = graph({ nfsd_threads: ok(null) });
+    expect(byId(junk, 'nfs:nfs-server')?.reason_codes).toEqual(['NFSD_THREADS_UNAVAILABLE']);
+    const late = graph({ nfsd_threads: timeout() });
+    expect(byId(late, 'nfs:nfs-server')?.reason_codes).toEqual(['COLLECTION_TIMEOUT']);
   });
 
   it('unknown unit state → running null, UNKNOWN', () => {
@@ -435,14 +628,18 @@ describe('NFS service rules', () => {
 
 describe('export edge cases', () => {
   it('a path the id encoder rejects becomes an ERROR resource, the rest of the cycle survives', () => {
-    const g = graph({ exports: ok([{ export_path: '/', rules: [rule()] }, ...EXPORTS]) });
+    const g = graph({
+      exports: ok([{ export_path: '/', rules: [rule()], source: 'etab' }, ...EXPORTS]),
+    });
     expect(byId(g, 'export:invalid:1')?.reason_codes).toEqual(['EXPORT_PATH_INVALID']);
     expect(g.shares).toHaveLength(3);
   });
 
   it('sec= is split into the security list', () => {
     const g = graph({
-      exports: ok([{ export_path: '/mnt/data/k', rules: [rule('*', ['rw', 'sec=krb5p:sys'])] }]),
+      exports: ok([
+        { export_path: '/mnt/data/k', rules: [rule('*', ['rw', 'sec=krb5p:sys'])], source: 'etab' },
+      ]),
     });
     const e = byId(g, `export:${encExportId('/mnt/data/k')}`);
     expect((e?.details.rules as Array<{ security: string[] }>)[0]?.security).toEqual([

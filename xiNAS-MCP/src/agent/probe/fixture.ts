@@ -35,7 +35,11 @@ import { type ObservedDisk, parseLsblkOutput } from '../../lib/parse/disk.js';
 import { parseIpJson } from '../../lib/parse/network.js';
 import type { ParsedPasswdLine } from '../../lib/parse/passwd.js';
 import { createFakeNetHost } from '../net/fake-host.js';
-import type { PlacementFilesystemRow } from './filesystem.js';
+import type {
+  PlacementFilesystemRow,
+  PlacementFilesystemSweep,
+  PlacementMountSummary,
+} from './filesystem.js';
 import { createSystemctlProbe } from './systemd.js';
 import type { IdmapSnapshot } from './idmap.js';
 import {
@@ -104,8 +108,8 @@ export interface FixtureFilesystem {
 
 interface FixtureFilesystemProbe {
   snapshot(): Promise<FixtureFilesystem[]>;
-  /** S20: the lean placement rows, projected from the same fixture rows. */
-  snapshotForPlacement(): Promise<PlacementFilesystemRow[]>;
+  /** S20: the lean placement sweep, projected from the same fixture rows (+ mounts.json). */
+  snapshotForPlacement(): Promise<PlacementFilesystemSweep>;
 }
 
 /** Entries for <dir>/nfs-sessions.json (parse/nfs ObservedNfsSession shape). */
@@ -356,36 +360,57 @@ export function createFixtureFilesystemProbe(dir?: string): FixtureFilesystemPro
     dir !== undefined ? readFixture<FixtureFilesystem[]>(dir, 'filesystems.json', []) : [];
   return {
     snapshot: () => Promise.resolve(rows()),
-    snapshotForPlacement: () =>
-      Promise.resolve(
-        rows().map((r) => {
-          const st = r.status;
-          const str = (k: string): string | undefined =>
-            typeof st[k] === 'string' ? (st[k] as string) : undefined;
-          const strs = (k: string): string[] | undefined =>
-            Array.isArray(st[k])
-              ? (st[k] as unknown[]).filter((x): x is string => typeof x === 'string')
-              : undefined;
-          const fsType = str('fs_type');
-          const mountSource = str('mount_source');
-          const superOptions = strs('super_options');
-          const effective = strs('effective_mount_options');
-          const mismatch = str('mount_source_mismatch');
-          return {
-            id: r.id,
-            mountpoint: str('mountpoint') ?? '',
-            backing_device: str('backing_device') ?? '',
-            ...(fsType !== undefined ? { fs_type: fsType } : {}),
-            mount_options: strs('mount_options') ?? [],
-            ...(typeof st.mounted === 'boolean' ? { mounted: st.mounted } : {}),
-            mountinfo_readable: st.mountinfo_readable !== false,
-            ...(mountSource !== undefined ? { mount_source: mountSource } : {}),
-            ...(superOptions !== undefined ? { super_options: superOptions } : {}),
-            ...(effective !== undefined ? { effective_mount_options: effective } : {}),
-            ...(mismatch !== undefined ? { mount_source_mismatch: mismatch } : {}),
-          };
-        }),
-      ),
+    snapshotForPlacement: () => {
+      const filesystems: PlacementFilesystemRow[] = rows().map((r) => {
+        const st = r.status;
+        const str = (k: string): string | undefined =>
+          typeof st[k] === 'string' ? (st[k] as string) : undefined;
+        const strs = (k: string): string[] | undefined =>
+          Array.isArray(st[k])
+            ? (st[k] as unknown[]).filter((x): x is string => typeof x === 'string')
+            : undefined;
+        const fsType = str('fs_type');
+        const mountSource = str('mount_source');
+        const superOptions = strs('super_options');
+        const effective = strs('effective_mount_options');
+        const mismatch = str('mount_source_mismatch');
+        return {
+          id: r.id,
+          mountpoint: str('mountpoint') ?? '',
+          backing_device: str('backing_device') ?? '',
+          ...(fsType !== undefined ? { fs_type: fsType } : {}),
+          mount_options: strs('mount_options') ?? [],
+          ...(typeof st.mounted === 'boolean' ? { mounted: st.mounted } : {}),
+          mountinfo_readable: st.mountinfo_readable !== false,
+          ...(mountSource !== undefined ? { mount_source: mountSource } : {}),
+          ...(superOptions !== undefined ? { super_options: superOptions } : {}),
+          ...(effective !== undefined ? { effective_mount_options: effective } : {}),
+          ...(mismatch !== undefined ? { mount_source_mismatch: mismatch } : {}),
+        };
+      });
+      // `<dir>/mounts.json` (optional) is the mount table; absent, the table
+      // is the managed rows that read as mounted — enough for the graph's
+      // nested-mount rule to see nothing foreign.
+      const explicit =
+        dir !== undefined
+          ? readFixture<PlacementMountSummary[] | null>(dir, 'mounts.json', null)
+          : null;
+      const mounts: PlacementMountSummary[] =
+        explicit !== null
+          ? explicit.filter((m) => typeof m.mountpoint === 'string' && typeof m.source === 'string')
+          : filesystems
+              .filter((f) => f.mounted === true)
+              .map((f) => ({
+                mountpoint: f.mountpoint,
+                source: f.mount_source ?? f.backing_device,
+                fstype: f.fs_type ?? 'xfs',
+              }));
+      return Promise.resolve({
+        filesystems,
+        mounts,
+        mountinfo_readable: filesystems.every((f) => f.mountinfo_readable),
+      });
+    },
   };
 }
 
@@ -421,6 +446,17 @@ export function fixtureXiraidVersion(dir: string): { version: string; build: str
   );
   if (v === null || typeof v.version !== 'string' || typeof v.build !== 'string') return null;
   return { version: v.version, build: v.build };
+}
+
+/**
+ * S20: `<dir>/nfsd-threads.json` → `{ "text": "8" }` (the raw
+ * /proc/fs/nfsd/threads content). Absent → rejects, like an unreadable file.
+ */
+export function fixtureNfsdThreads(dir: string): Promise<string> {
+  const v = readFixture<{ text?: unknown } | null>(dir, 'nfsd-threads.json', null);
+  return v !== null && typeof v.text === 'string'
+    ? Promise.resolve(v.text)
+    : Promise.reject(new Error('fixture nfsd-threads.json absent'));
 }
 
 /**

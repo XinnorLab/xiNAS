@@ -270,3 +270,29 @@ independent failure domains; with the connector enabled `mirror_count=1`.
 - xiRAID Classic 4.4 state vocabulary:
   <https://xinnor.io/docs/xiRAID-4.4.0/E/en/AG/1/showing_raid_state.html>.
 - `XinnorLab/pNFS` (the connector and the Lattice integration patches).
+
+## Audit 2026-09-23 — findings and resolution
+
+An independent audit of e5828f30 (Codex, "xiNAS 3.15 Lattice Placement
+MVP Audit") returned NO-GO with thirteen findings. Their resolution on
+`release/3.15` (spec §11):
+
+| Finding | Resolution |
+|---|---|
+| F-01 delayed/reordered push refreshes freshness | ingest drops a push that is not newer within the epoch; re-deliveries are deduplicated; neither refreshes the receipt |
+| F-02 transfer delay not in the age | ingest measures receipt − `generated_at`; every age and the staleness check include it |
+| F-03 export from `/etc/exports` | agent reads `/var/lib/nfs/etab` (kernel-effective); `details.source: etab` |
+| F-04 nested/foreign mount under a share | share `UNKNOWN` / `NESTED_MOUNT`; non-canonical path `PATH_NOT_CANONICAL` |
+| F-05 unresolved logdev/rtdev left the filesystem SUCCESS | filesystem and its shares `UNKNOWN` / `EXTERNAL_DEVICE_UNRESOLVED` |
+| F-06 `running` from systemd only | `running` needs `/proc/fs/nfsd/threads` > 0; `NFSD_NO_THREADS`, `NFSD_THREADS_UNAVAILABLE` |
+| F-07 no protected remote path | `mcp.http.tls` (HTTPS, optional mTLS); plain http off loopback refused unless explicitly allowed; `viewer` token with `surface: rest` |
+| F-08 incarnation `<share_id>:<fsid>` | durable placement incarnation (a `SharePlacement/<id>` marker row: UUID at create, kept on update, deleted with the share, backfilled on boot) in the incarnation |
+| F-09 not opt-in; version outside the deadline; unbounded systemctl | `placement.enabled` (default off); version inside the guard; `systemctl show` bounded to 5 s |
+| F-10 global FAILED as 200 | 503 `SOURCE_FAILED` |
+| F-11 progress values not published | `ARRAY.progress` (init/recon/restripe/sdc pct) |
+| F-12 `writable` ignored super options | `rw` required in the VFS options, `ro` in either list denies, else null |
+| F-13 desired rows joined across a change | `DESIRED_CHANGED_SINCE_OBSERVATION` when a desired row's `modified_at` is later than the receipt |
+
+Still open (docs/TODO.md): credential lifecycle and source allow-list,
+429/readiness/soak, certificate provisioning, the MDS gate (P3), and the
+hardware rows the audit lists as NOT RUN beyond the stand smoke test.

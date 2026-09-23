@@ -150,6 +150,12 @@ describe('share.create plan provider', () => {
         },
       },
       { key: '/xinas/v1/desired/ShareFsid/42', value: { fsid: 42, share_id: 's1' } },
+      // S20 F-08: the placement marker, minted at create.
+      {
+        key: '/xinas/v1/desired/SharePlacement/s1',
+        value: { share_id: 's1' },
+        mint_uuid: 'placement_incarnation',
+      },
     ]);
 
     // The diff carries the compiled export entry (defaults folded in).
@@ -335,6 +341,8 @@ describe('share.delete plan provider', () => {
     expect(result.desired_mutations).toEqual([
       { key: '/xinas/v1/desired/Share/s1', delete: true },
       { key: '/xinas/v1/desired/ShareFsid/42', delete: true },
+      // S20 F-08: the placement marker dies with the share.
+      { key: '/xinas/v1/desired/SharePlacement/s1', delete: true },
     ]);
     expect(result.diff).toEqual({ action: 'delete', export_path: '/mnt/data' });
     expect(result.risk_level).toBe('changing_access');
@@ -622,6 +630,11 @@ describe('PlanEngine integration (N0.2 plumbing end-to-end)', () => {
           },
         },
         { key: '/xinas/v1/desired/ShareFsid/42', value: { fsid: 42, share_id: 's1' } },
+        {
+          key: '/xinas/v1/desired/SharePlacement/s1',
+          value: { share_id: 's1' },
+          mint_uuid: 'placement_incarnation',
+        },
       ],
     });
     // The raw request spec rides the row verbatim (T9b dispatch contract).
@@ -785,7 +798,10 @@ describe('share.delete — fsid marker release', () => {
       id: 'mnt/data',
       path: '/mnt/data',
     });
-    expect(result.desired_mutations).toEqual([{ key: `${DESIRED}mnt/data`, delete: true }]);
+    expect(result.desired_mutations).toEqual([
+      { key: `${DESIRED}mnt/data`, delete: true },
+      { key: '/xinas/v1/desired/SharePlacement/mnt/data', delete: true },
+    ]);
   });
 });
 

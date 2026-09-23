@@ -46,3 +46,9 @@ xinas_agent_unit_src: "{{ xinas_agent_repo_path }}/xinas-agent.service"
 # Must be consistent with xinas_api_agent_heartbeat_interval_ms in
 # the xinas_api role.
 xinas_agent_heartbeat_interval_ms: 5000
+
+# S20 placement observations: the agent's 5 s placement cycle that feeds
+# GET /api/v1/placement/observations (the pNFS placement connector's source).
+# Opt-in (API-11): off, the collector is not registered and the route answers
+# 503 SOURCE_NOT_READY. Turn on only on nodes that serve pNFS data servers.
+xinas_agent_placement_enabled: false

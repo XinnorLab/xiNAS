@@ -121,3 +121,14 @@ xinas_api_agent_heartbeat_interval_ms: 5000
 # flight end-to-end (dispatch -> terminal). Integer >= 1; the api rejects
 # anything else at startup. See s2-task-envelope-spec §5.3.
 xinas_api_tasks_max_inflight: 4
+
+# S20 / ADR-0010: the api's dedicated TCP listener (`mcp.http`), serving the
+# SAME app as the unix socket — the MCP transport and the REST routes the
+# pNFS placement connector polls. Off by default; set a host to enable.
+# `xinas_api_mcp_http_tls_cert` / `_key` (PEM paths on the node) make it
+# HTTPS — the connector verifies the certificate against its configured CA
+# (CON-20), so plain http is for isolated lab networks only.
+xinas_api_mcp_http_host: ""
+xinas_api_mcp_http_port: 8080
+xinas_api_mcp_http_tls_cert: ""
+xinas_api_mcp_http_tls_key: ""

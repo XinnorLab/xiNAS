@@ -43,7 +43,13 @@ export interface ResourceRef {
 }
 
 /** A desired-KV mutation an apply performs (S3 §5.3). */
-export type DesiredMutation = { key: string; value: unknown } | { key: string; delete: true };
+export type DesiredMutation =
+  /**
+   * `mint_uuid` (S20 F-08): the engine fills `value[mint_uuid]` with a fresh
+   * UUID at APPLY time. Plans stay deterministic (the plan_hash covers the
+   * mutation without the id) while a creation id is still unique per apply.
+   */
+  { key: string; value: unknown; mint_uuid?: string } | { key: string; delete: true };
 
 export interface TaskStage {
   stage_index: number;

@@ -125,7 +125,19 @@ export interface ApiConfig {
    *  dedicated TCP listener serving the same app. */
   mcp?: {
     allow_apply?: boolean;
-    http?: { host: string; port: number };
+    http?: {
+      host: string;
+      port: number;
+      /**
+       * S20 (API-18/19, F-07): serve the listener over HTTPS. `cert_file` /
+       * `key_file` are PEM paths read at startup; an optional `ca_file`
+       * turns on mutual TLS (clients must present a certificate that CA
+       * signed). Without `tls`, a non-loopback host is refused unless
+       * `allow_insecure_http` says the network is trusted (lab only).
+       */
+      tls?: { cert_file: string; key_file: string; ca_file?: string };
+      allow_insecure_http?: boolean;
+    };
     confirmation?: McpConfirmationConfig;
     /** S17 §10 — operational controls for the event journal and subscriptions. */
     subscriptions?: McpSubscriptionsConfig;
@@ -255,6 +267,7 @@ function validateTokensSection(config: ApiConfig): void {
   // /api/v1 with the same token. internal_agent tokens are exempt — that
   // role is refused on the mcp surface (middleware/auth.ts), so they can
   // never be the mcp side of the bypass this warns about.
+  validateMcpHttp(config);
   if (config.mcp?.allow_apply === true) {
     const unscoped = Object.entries(config.tokens ?? {})
       .filter(([, p]) => p.role !== 'internal_agent' && (p.surface ?? 'any') === 'any')
@@ -805,5 +818,47 @@ export function validateHealthPromptSection(config: ApiConfig): void {
       }
     }
     hpRange('baseline.max_age_s_default', c.baseline.max_age_s_default, 0, 3600);
+  }
+}
+
+// ── S20 F-07: the dedicated listener's transport ────────────────────────
+
+/**
+ * `mcp.http` must be HTTPS off a loopback host: the placement connector (and
+ * any REST client) sends a bearer on every request. A plain-http listener on
+ * a routable address is accepted only with an explicit
+ * `allow_insecure_http: true`, which a warning names at startup so it can
+ * never be a silent default.
+ */
+function validateMcpHttp(config: ApiConfig): void {
+  const http = config.mcp?.http;
+  if (http === undefined) return;
+  if (typeof http.host !== 'string' || http.host.length === 0)
+    throw new Error('mcp.http.host must be a non-empty string');
+  // Port 0 = ephemeral (the test harness binds whatever is free).
+  if (!Number.isInteger(http.port) || http.port < 0 || http.port > 65535)
+    throw new Error('mcp.http.port must be an integer in [0, 65535]');
+  const tls = http.tls;
+  if (tls !== undefined) {
+    for (const key of ['cert_file', 'key_file'] as const) {
+      const p = tls[key];
+      if (typeof p !== 'string' || p.length === 0)
+        throw new Error(`mcp.http.tls.${key} must be a path`);
+      if (!existsSync(p)) throw new Error(`mcp.http.tls.${key}: ${p} does not exist`);
+    }
+    if (tls.ca_file !== undefined && !existsSync(tls.ca_file))
+      throw new Error(`mcp.http.tls.ca_file: ${tls.ca_file} does not exist`);
+    return;
+  }
+  if (!LOOPBACK_HOSTS.has(http.host)) {
+    if (http.allow_insecure_http !== true) {
+      throw new Error(
+        `mcp.http: plain http on ${http.host} is refused — configure mcp.http.tls, or set ` +
+          'mcp.http.allow_insecure_http: true for an isolated lab network (bearers travel in clear)',
+      );
+    }
+    console.warn(
+      `xinas-api: mcp.http serves plain http on ${http.host}:${http.port} (allow_insecure_http) — bearer tokens travel unencrypted; lab use only`,
+    );
   }
 }

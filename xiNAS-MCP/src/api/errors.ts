@@ -17,6 +17,7 @@ export type ErrorCode =
    */
   | 'SOURCE_NOT_READY'
   | 'SOURCE_STALE'
+  | 'SOURCE_FAILED'
   | 'SNAPSHOT_TOO_LARGE';
 
 /**
@@ -38,6 +39,7 @@ const STATUS_MAP: Record<ErrorCode, number> = {
   INTERNAL: 500,
   SOURCE_NOT_READY: 503,
   SOURCE_STALE: 503,
+  SOURCE_FAILED: 503,
   SNAPSHOT_TOO_LARGE: 503,
   TIMEOUT: 504,
 };

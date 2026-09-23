@@ -1,4 +1,5 @@
 import type { NextFunction, Request, Response } from 'express';
+import { transferDelayMs } from '../placement/receipts.js';
 import type { Kind } from '../../agent/collectors/base.js';
 import { observedSegment } from '../../agent/collectors/base.js';
 import { canonicalize } from '../../lib/canonical-json.js';
@@ -64,6 +65,33 @@ interface ObservedBody {
  * guard running on every write, schema-validation is conditional on
  * ctx.observedSchemas being present (see loop below).
  */
+/** `(server_epoch, source_generation)` of a stored/incoming placement row. */
+function placementStamp(value: unknown): { epoch: string | null; generation: number | null } {
+  const status = (value as { status?: Record<string, unknown> } | null | undefined)?.status;
+  const epoch = status?.server_epoch;
+  const generation = status?.source_generation;
+  return {
+    epoch: typeof epoch === 'string' ? epoch : null,
+    generation: typeof generation === 'number' && Number.isFinite(generation) ? generation : null,
+  };
+}
+
+/**
+ * S20 (F-01): ordering rule for the placement singleton. Within one agent
+ * epoch the generation must strictly increase; a new epoch (agent restart)
+ * is always accepted. A row without a stamp can never be compared, so it is
+ * accepted (and the route refuses it for other reasons).
+ */
+export function placementOrder(incoming: unknown, stored: unknown): 'newer' | 'regressed' {
+  if (stored === undefined || stored === null) return 'newer';
+  const a = placementStamp(incoming);
+  const b = placementStamp(stored);
+  if (a.epoch === null || a.generation === null || b.epoch === null || b.generation === null)
+    return 'newer';
+  if (a.epoch !== b.epoch) return 'newer';
+  return a.generation > b.generation ? 'newer' : 'regressed';
+}
+
 export function isValidObservedId(id: string): boolean {
   if (id.trim().length === 0) return false;
   // one leading '/' is legitimate (absolute-path ids); strip it, then any
@@ -155,10 +183,14 @@ export function observedHandler(ctx: ApiContext) {
       let accepted = 0;
       let deletedByReconcile = 0;
       let skippedUnchanged = 0;
+      let skippedRegressed = 0;
       const revisions: number[] = [];
-      // S20 §5.2: (kind, id, revision) of every stored/unchanged upsert, stamped
-      // on the api's receipt clock AFTER the transaction commits.
-      const receipts: Array<[string, string, number]> = [];
+      // S20 §5.2: (kind, id, revision, transfer delay) of every STORED upsert,
+      // stamped on the api's receipt clock AFTER the transaction commits. An
+      // unchanged or regressed placement push gets no receipt: a re-delivery
+      // must never make old evidence read as fresh (F-01, F-02).
+      const receipts: Array<[string, string, number, number | null]> = [];
+      const wallNow = ctx.observed_receipts?.wall() ?? Date.now();
 
       // Derive the KV path segment through observedSegment(kind) (base.ts) so
       // writer and reader never disagree on singletons (NfsIdmap → nfs_idmap,
@@ -197,15 +229,46 @@ export function observedHandler(ctx: ApiContext) {
             ) {
               skippedUnchanged++;
               revisions.push(current.revision);
-              receipts.push([delta.kind, delta.id, current.revision]);
               continue;
+            }
+            // S20 (F-01): the placement singleton is ordered by
+            // (server_epoch, source_generation). A push that is not newer
+            // than the stored row within the same epoch — a delayed retry,
+            // a reordered flush — is dropped, never stored, never receipted.
+            if (delta.kind === 'PlacementObservations') {
+              const order = placementOrder(value, current?.value);
+              if (order === 'regressed') {
+                skippedRegressed++;
+                revisions.push(current?.revision ?? 0);
+                console.warn(
+                  JSON.stringify({
+                    level: 'warn',
+                    subsystem: 'observed',
+                    event: 'placement_push_regressed',
+                    id: delta.id,
+                    incoming: placementStamp(value),
+                    stored: placementStamp(current?.value),
+                  }),
+                );
+                continue;
+              }
             }
             const result = tx.put(key, value);
             // No expected_revision → put always commits (ok: true). Guard
             // anyway so a future CAS variant can't silently push undefined.
             if (result.ok) {
               revisions.push(result.value.revision);
-              receipts.push([delta.kind, delta.id, result.value.revision]);
+              receipts.push([
+                delta.kind,
+                delta.id,
+                result.value.revision,
+                delta.kind === 'PlacementObservations'
+                  ? transferDelayMs(
+                      (value as { status?: { generated_at?: unknown } }).status?.generated_at,
+                      wallNow,
+                    )
+                  : 0,
+              ]);
             }
             accepted++;
             engine?.onChange({
@@ -278,10 +341,10 @@ export function observedHandler(ctx: ApiContext) {
 
       // 4. Notify the tracker that an observation push happened.
       ctx.tracker?.recordObservationPush(new Date());
-      // S20: stamp the receipt clock for every row this push carried.
+      // S20: stamp the receipt clock for every row this push STORED.
       if (ctx.observed_receipts !== undefined) {
-        for (const [kind, id, revision] of receipts)
-          ctx.observed_receipts.record(kind, id, revision);
+        for (const [kind, id, revision, delay] of receipts)
+          ctx.observed_receipts.record(kind, id, revision, delay);
       }
 
       const stateRevision = revisions.length > 0 ? Math.max(...revisions) : 0;
@@ -292,6 +355,7 @@ export function observedHandler(ctx: ApiContext) {
           accepted,
           deleted_by_reconcile: deletedByReconcile,
           skipped_unchanged: skippedUnchanged,
+          ...(skippedRegressed > 0 ? { skipped_regressed: skippedRegressed } : {}),
         },
         [stateRevision],
       );

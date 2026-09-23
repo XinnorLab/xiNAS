@@ -23,54 +23,42 @@ deferred and the change that deferred it.
 
 ## Placement observations (S20) — what the prototype leaves out
 
-*Deferred 2026-09-22, from the S20 placement-observations prototype
-(`docs/control-path/s20-placement-observations-spec.md` §1 "Out of
-scope", ADR-0019).*
+*Deferred 2026-09-22 from the S20 placement-observations prototype; revised
+2026-09-23 after the audit remediation
+(`docs/control-path/s20-placement-observations-spec.md` §11, ADR-0019).*
 
 **What is missing.**
 
-1. *HTTPS ingress and a dedicated connector credential* (API-17, API-19).
-   The route is served by the existing api listener under the existing
-   viewer role; there is no per-connector token scope and no TLS
-   termination of xiNAS's own.
-2. *Kernel-effective export rules* (API-10). `EXPORT.rules` come from
-   `/etc/exports` through the nfs-helper's `list_exports`; the response
-   labels this (`details.source: "/etc/exports"`, the coverage row's
-   `details`). What the kernel actually serves (`/var/lib/nfs/etab`,
-   `exportfs -v`) is not read.
-3. *Nested and bind-mount topology* (API-05). A share is placed on the
-   managed filesystem with the longest containing mountpoint; a bind
-   mount or a nested foreign mount under a share path is not detected.
-4. *A durable share incarnation counter.* `incarnation` is
-   `<share_id>:<fsid>`; a delete-and-recreate of the same path that
-   reuses the fsid is indistinguishable.
-5. *Rate limiting (429), the soak/performance evidence and a readiness
+1. *A connector-specific credential lifecycle* (API-19). The listener is
+   HTTPS (`mcp.http.tls`) and the connector's token is a `viewer` scoped
+   `surface: "rest"`, but rotation is still "edit the tokens file, restart
+   the api", and there is no per-connector allow-list of source addresses.
+2. *Rate limiting (429), the soak/performance evidence and a readiness
    endpoint* (API-20, API-24). The route serves every request; readiness
    is inferred from the 503 codes and `agent.health`.
-6. *The connector itself* (`lattice-ds-connector` in
-   `github.com/XinnorLab/pNFS`): the xiNAS module that evaluates this
-   response against the XMOD rules, freshness/hold-down and the UDS
-   assessments API are the next change; this change ships the source only.
+3. *Certificate provisioning.* `xinas_api_mcp_http_tls_cert` / `_key`
+   point at PEM files the operator provides; the roles do not mint or
+   renew a certificate.
+4. *The MDS side* (LAT-*, P3): the assessment cache and the allocation
+   gate in pnfs-lattice are not started; the connector
+   (`XinnorLab/pNFS`, `connectors/lattice-ds-connector`) publishes
+   assessments no MDS consumes yet.
 
-**What the code does instead.** See each item: existing listener and
-viewer token; `/etc/exports` labelled as the source; longest-mountpoint
-placement; fsid-based incarnation; no throttling; no readiness route.
+**What the code does instead.** (1) a static token in
+`/etc/xinas-api/config.json` with `surface: rest`; (2) no throttling, no
+readiness route; (3) the listener starts only when both PEM paths exist;
+(4) the connector's batch is readable on the MDS socket for inspection.
 
-**Why it was cut.** Each is a separate contract (TLS/credential
-provisioning through Ansible, an etab reader in the nfs-helper, mount
-tree analysis, a desired-Share schema change, a rate-limit policy) with
-its own spec; the prototype's job was a correct, honest source the
-connector can be built against.
+**Why it was cut.** Each is a separate contract (a credential store and
+rotation protocol, a rate-limit policy with its own tests, PKI, and a C
+change in the MDS) with its own spec.
 
-**What "done" looks like.** (1) an `https` listener or a documented
-reverse proxy plus a `surface: placement` token scope; (2) `EXPORT.rules`
-read from etab with `source: "etab"` and the coverage row without a
-labelled gap; (3) `FILESYSTEM` resources for bind mounts and
-`UNKNOWN` / `NESTED_MOUNT` for a foreign mount under a share; (4) an
-`incarnation` field on the desired Share row bumped on recreate; (5) a
-bounded 429 with `Retry-After`, the soak numbers in the runbook, a
-readiness endpoint; (6) the connector merged and smoke-tested against
-this route on the lab stand.
+**What "done" looks like.** (1) a connector token minted and rotated by a
+role or API call, with an optional source allow-list; (2) a bounded 429
+with `Retry-After`, the soak numbers in the runbook, a readiness endpoint;
+(3) a role that mints a node certificate (or takes one from the site CA)
+and renews it; (4) the LAT-* gate merged and T-11…T-17, T-23…T-26 run on
+the stand.
 
 ## MCP — S17 incomplete-source observations are logged, not journaled
 

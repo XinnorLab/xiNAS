@@ -252,6 +252,8 @@ def test_config_template_renders_valid_json() -> None:
     # the string-valued placeholders are already wrapped in quotes in the
     # template, so they get a bare token (not a re-quoted one).
     rendered = text.replace("{{ xinas_agent_heartbeat_interval_ms }}", "5000")
+    # S20: the placement opt-in renders as a bare JSON boolean.
+    rendered = rendered.replace("{{ xinas_agent_placement_enabled | bool | to_json }}", "false")
     rendered = re.sub(r"\{\{[^}]*\}\}", "x", rendered)
     data = json.loads(rendered)
     assert set(data) == {
@@ -261,8 +263,16 @@ def test_config_template_renders_valid_json() -> None:
         "agent_token_path",
         "socket_group",
         "heartbeat_interval_ms",
+        "placement",
     }
     assert isinstance(data["heartbeat_interval_ms"], int)
+    assert data["placement"] == {"enabled": False}
+
+
+def test_placement_cycle_is_opt_in() -> None:
+    # S20 (API-11): the 5 s placement cycle must not run on nodes that serve
+    # no pNFS data server; the role default is off.
+    assert _defaults()["xinas_agent_placement_enabled"] is False
 
 
 # --------------------------------------------------------------------------- #

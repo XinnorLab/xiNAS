@@ -72,7 +72,9 @@ export function createSystemctlProbe(opts: { execFile?: ShowExecFile } = {}): Sy
         ef(
           'systemctl',
           ['show', '-p', 'LoadState,ActiveState,SubState,UnitFileState', name],
-          {},
+          // Bounded (S20 API-12): a wedged systemctl is killed rather than
+          // holding the caller's cycle open.
+          { timeout: 5_000 },
           (err, stdout) => {
             if (err !== null) {
               // Absent/unloadable unit: degrade, never throw — the collector

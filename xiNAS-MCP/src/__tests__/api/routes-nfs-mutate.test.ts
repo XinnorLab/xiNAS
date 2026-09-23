@@ -103,6 +103,14 @@ describe('NFS mutating routes (N5)', () => {
     const row = desiredShare(plan.id);
     expect(row).not.toBeNull();
     expect(row?.value).toEqual({ kind: 'Share', id: plan.id, spec: CREATE_SPEC });
+    // S20 F-08: the create also minted the placement marker row.
+    const marker = setup.state.kv.get<{ share_id: string; placement_incarnation: string }>(
+      `/xinas/v1/desired/SharePlacement/${plan.id}`,
+    );
+    expect(marker?.value).toEqual({
+      share_id: plan.id,
+      placement_incarnation: expect.stringMatching(/^[0-9a-f-]{36}$/),
+    });
 
     // Lease held on Share/{id} by the running apply task.
     expect(

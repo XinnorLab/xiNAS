@@ -22,6 +22,7 @@ const RAID_SHOW = [
       [2, '/dev/nvme2n2', ['online']],
     ],
     state: ['online', 'initialized'],
+    init_progress: 100,
   },
   {
     name: 'log',
@@ -49,27 +50,49 @@ function sources(
     },
     filesystems: async () => {
       count('filesystems');
-      return [
-        {
-          id: 'mnt-data.mount',
-          mountpoint: '/mnt/data',
-          backing_device: '/dev/xi_data',
-          fs_type: 'xfs',
-          mount_options: ['defaults'],
-          mounted: true,
-          mountinfo_readable: true,
-          mount_source: '/dev/xi_data',
-          effective_mount_options: ['rw', 'noatime'],
-          super_options: ['rw', 'logdev=/dev/xi_log'],
-        },
-      ];
+      return {
+        filesystems: [
+          {
+            id: 'mnt-data.mount',
+            mountpoint: '/mnt/data',
+            backing_device: '/dev/xi_data',
+            fs_type: 'xfs',
+            mount_options: ['defaults'],
+            mounted: true,
+            mountinfo_readable: true,
+            mount_source: '/dev/xi_data',
+            effective_mount_options: ['rw', 'noatime'],
+            super_options: ['rw', 'logdev=/dev/xi_log'],
+          },
+        ],
+        mounts: [
+          { mountpoint: '/', source: '/dev/sda2', fstype: 'ext4' },
+          { mountpoint: '/mnt/data', source: '/dev/xi_data', fstype: 'xfs' },
+        ],
+        mountinfo_readable: true,
+      };
     },
     listExports: async () => {
       count('listExports');
       return [
-        { export_path: '/mnt/data/a', host_pattern: '10.0.0.0/8', options: ['rw', 'fsid=1'] },
-        { export_path: '/mnt/data/a', host_pattern: '10.1.0.0/16', options: ['ro', 'fsid=1'] },
-        { export_path: '/mnt/data/b', host_pattern: '*', options: ['rw', 'fsid=2'] },
+        {
+          export_path: '/mnt/data/a',
+          host_pattern: '10.0.0.0/8',
+          options: ['rw', 'fsid=1'],
+          source: 'etab',
+        },
+        {
+          export_path: '/mnt/data/a',
+          host_pattern: '10.1.0.0/16',
+          options: ['ro', 'fsid=1'],
+          source: 'etab',
+        },
+        {
+          export_path: '/mnt/data/b',
+          host_pattern: '*',
+          options: ['rw', 'fsid=2'],
+          source: 'etab',
+        },
       ];
     },
     nfsServiceState: async () => {
@@ -79,6 +102,14 @@ function sources(
     nfsdVersions: async () => {
       count('nfsdVersions');
       return '-2 +3 +4 +4.1 +4.2\n';
+    },
+    nfsdThreads: async () => {
+      count('nfsdThreads');
+      return '8\n';
+    },
+    realpath: async (p) => {
+      count('realpath');
+      return p;
     },
     xiraidVersion: async () => ({ version: '4.4.0', build: '4.4.0-43861' }),
     diskIdByPath: () => new Map([['/dev/nvme0n2', 'disk-0']]),
@@ -112,7 +143,7 @@ async function sweep(c: PlacementObservationCollector): Promise<PlacementRowStat
 }
 
 describe('PlacementObservationCollector', () => {
-  it('publishes one COMPLETE row from one call per source (XMOD-02)', async () => {
+  it('publishes one COMPLETE row from one call per source (XMOD-02); realpath once per export path', async () => {
     const src = sources();
     const c = collector(src);
     const row = await sweep(c);
@@ -122,6 +153,8 @@ describe('PlacementObservationCollector', () => {
       listExports: 1,
       nfsServiceState: 1,
       nfsdVersions: 1,
+      nfsdThreads: 1,
+      realpath: 2,
     });
     expect(row).toMatchObject({
       schema_version: '1.0',
@@ -137,12 +170,13 @@ describe('PlacementObservationCollector', () => {
         exports: { status: 'ok' },
         nfs_service: { status: 'ok' },
         nfsd_versions: { status: 'ok' },
+        nfsd_threads: { status: 'ok' },
       },
       collector: { deadline_hit: false, skipped_ticks: 0 },
     });
     expect(row.coverage.filter((c) => c.status === 'EVALUATED')).toHaveLength(8);
     expect(row.coverage.find((c) => c.check === 'export.effective_access')?.details).toEqual({
-      source: '/etc/exports',
+      source: 'etab',
     });
     expect(row.coverage.filter((c) => c.status === 'NOT_IMPLEMENTED').map((c) => c.reason)).toEqual(
       ['OUT_OF_MVP', 'OUT_OF_MVP', 'OUT_OF_MVP'],
@@ -165,9 +199,18 @@ describe('PlacementObservationCollector', () => {
     const data = row.resources.find((r) => r.id === 'array:data');
     expect((data?.details.members as Array<{ id: string }>)[0]?.id).toBe('disk-0');
     expect((data?.details.members as Array<{ id: string }>)[1]?.id).toBe('/dev/nvme1n2');
+    expect(data?.details.progress).toEqual({
+      init_pct: 100,
+      recon_pct: null,
+      restripe_pct: null,
+      sdc_pct: null,
+    });
     const fs = row.resources.find((r) => r.id === 'fs:mnt-data.mount');
     expect(fs?.details.uuid).toBe('uuid-data');
     expect(fs?.details.log_mode).toBe('EXTERNAL');
+    const nfs = row.resources.find((r) => r.id === 'nfs:nfs-server');
+    expect(nfs?.details.threads).toBe(8);
+    expect(nfs?.details.running).toBe(true);
     // Every record carries its monotonic stamp; the row its publication stamp.
     for (const r of row.resources) expect(typeof r.observed_mono_ms).toBe('number');
     expect(row.published_mono_ms).toBeGreaterThan(row.resources[0]?.observed_mono_ms as number);
@@ -211,6 +254,7 @@ describe('PlacementObservationCollector', () => {
         listExports: boom,
         nfsServiceState: boom,
         nfsdVersions: boom,
+        nfsdThreads: boom,
       }),
     );
     const row = await sweep(c);
@@ -231,6 +275,19 @@ describe('PlacementObservationCollector', () => {
       'COLLECTION_TIMEOUT',
     ]);
     expect(row.resources.find((r) => r.id === 'array:data')?.collection_status).toBe('SUCCESS');
+  });
+
+  it('F-09: a hanging version source is bounded by the same deadline and reads as unavailable', async () => {
+    const never = new Promise<never>(() => {});
+    const c = collector(sources({ xiraidVersion: () => never }), { deadlineMs: 30 });
+    const started = Date.now();
+    const row = await sweep(c);
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(row.resources.find((r) => r.id === 'array:data')?.reason_codes).toEqual([
+      'XIRAID_VERSION_UNAVAILABLE',
+    ]);
+    // The version is not one of the graph's sources: the snapshot stays COMPLETE.
+    expect(row.snapshot_status).toBe('COMPLETE');
   });
 
   it('a tick that fires during a running cycle is skipped, never stacked', async () => {
@@ -270,6 +327,22 @@ describe('PlacementObservationCollector', () => {
     const row = await sweep(c);
     expect(row.resources.find((r) => r.id === 'array:data')?.reason_codes).toEqual([
       'XIRAID_VERSION_UNAVAILABLE',
+    ]);
+  });
+
+  it('a symlinked export path is UNKNOWN / PATH_NOT_CANONICAL; a realpath failure is PATH_UNRESOLVABLE', async () => {
+    const c = collector(
+      sources({
+        realpath: async (p) => {
+          if (p === '/mnt/data/a') return '/mnt/real/a';
+          throw new Error('ENOENT');
+        },
+      }),
+    );
+    const row = await sweep(c);
+    expect(row.shares.map((s) => s.reason_codes)).toEqual([
+      ['PATH_NOT_CANONICAL'],
+      ['PATH_UNRESOLVABLE'],
     ]);
   });
 });

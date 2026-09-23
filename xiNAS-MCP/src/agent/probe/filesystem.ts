@@ -119,10 +119,24 @@ export interface PlacementFilesystemRow {
   mount_source_mismatch?: string;
 }
 
+/** One mount-table line as the lean sweep summarizes it (T-05 needs the whole table). */
+export interface PlacementMountSummary {
+  mountpoint: string;
+  source: string;
+  fstype: string;
+}
+
+/** The lean sweep's result: managed rows plus the node's mount table. */
+export interface PlacementFilesystemSweep {
+  filesystems: PlacementFilesystemRow[];
+  mounts: PlacementMountSummary[];
+  mountinfo_readable: boolean;
+}
+
 export interface FilesystemProbe {
   snapshot(): Promise<FilesystemSnapshot[]>;
   /** S20: the subprocess-free sweep for the placement collector. */
-  snapshotForPlacement(): Promise<PlacementFilesystemRow[]>;
+  snapshotForPlacement(): Promise<PlacementFilesystemSweep>;
 }
 
 /**
@@ -314,7 +328,7 @@ export function createFilesystemProbe(opts: FilesystemProbeOptions = {}): Filesy
       return results;
     },
 
-    async snapshotForPlacement(): Promise<PlacementFilesystemRow[]> {
+    async snapshotForPlacement(): Promise<PlacementFilesystemSweep> {
       const entries = await rd(sysDir);
       const mountUnits = entries.filter((e) => typeof e === 'string' && e.endsWith('.mount'));
       let mounts: MountEntry[] = [];
@@ -342,7 +356,15 @@ export function createFilesystemProbe(opts: FilesystemProbeOptions = {}): Filesy
           ),
         });
       }
-      return rows;
+      return {
+        filesystems: rows,
+        mounts: mounts.map((m) => ({
+          mountpoint: m.mountpoint,
+          source: m.source,
+          fstype: m.fstype,
+        })),
+        mountinfo_readable: mountinfoReadable,
+      };
     },
   };
 }

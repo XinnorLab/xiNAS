@@ -6,11 +6,12 @@
  * Read-only, viewer rank. The stored row is the agent's last 5 s cycle;
  * this route stamps evidence ages from the api's own receipt clock,
  * reconciles the share list with the desired Share rows and answers 503
- * (SOURCE_NOT_READY / SOURCE_STALE / SNAPSHOT_TOO_LARGE) instead of ever
- * serving an answer it cannot vouch for.
+ * (SOURCE_NOT_READY / SOURCE_STALE / SOURCE_FAILED / SNAPSHOT_TOO_LARGE)
+ * instead of ever serving an answer it cannot vouch for.
  */
 
 import { Router } from 'express';
+import { readPlacementIncarnation } from '../../lib/nfs-placement.js';
 import type { ApiContext } from '../context.js';
 import { getOrNull, listByPrefix, sendOk } from '../handlers/reads.js';
 import {
@@ -33,7 +34,15 @@ function desiredShares(ctx: ApiContext): DesiredShare[] {
     if (typeof path !== 'string' || path.length === 0) continue;
     const id = row.value.id ?? row.key.slice(row.key.lastIndexOf('/') + 1);
     const fsid = row.value.spec?.fsid;
-    out.push({ id, path, ...(fsid !== undefined ? { fsid } : {}) });
+    // S20 (F-08): the durable creation id lives in its own marker row.
+    const incarnation = readPlacementIncarnation(ctx.state.kv, id);
+    out.push({
+      id,
+      path,
+      ...(fsid !== undefined ? { fsid } : {}),
+      ...(incarnation !== undefined ? { placement_incarnation: incarnation } : {}),
+      ...(typeof row.modified_at === 'number' ? { modified_at: row.modified_at } : {}),
+    });
   }
   return out;
 }

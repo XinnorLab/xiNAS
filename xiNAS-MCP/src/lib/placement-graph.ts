@@ -2,8 +2,9 @@
  * S20 placement graph — pure.
  *
  * Turns one collection cycle's raw inputs (xiRAID arrays, managed
- * filesystems, `/etc/exports` rules, the nfs-server unit, nfsd versions)
- * into the `shares[]` / `resources[]` of the placement-observations result
+ * filesystems with the node's mount table, the kernel-effective export table,
+ * the nfs-server unit, nfsd versions and threads) into the `shares[]` /
+ * `resources[]` of the placement-observations result
  * (docs/control-path/s20-placement-observations-spec.md §4.5). No I/O and no
  * clocks: every timestamp and monotonic stamp comes in through the inputs,
  * so the graph rules are testable as a function.
@@ -31,6 +32,14 @@ export interface MemberInput {
   state_valid: boolean;
 }
 
+/** The four raid_show progress values, a finite 0–100 or null (API-08). */
+export interface ArrayProgress {
+  init_pct: number | null;
+  recon_pct: number | null;
+  restripe_pct: number | null;
+  sdc_pct: number | null;
+}
+
 export interface ArrayInput {
   name: string;
   raid_level: string;
@@ -38,6 +47,7 @@ export interface ArrayInput {
   raw_states: string[];
   state_valid: boolean;
   members: MemberInput[];
+  progress?: ArrayProgress;
 }
 
 export interface FilesystemInput {
@@ -62,6 +72,20 @@ export interface FilesystemInput {
   uuid?: string;
 }
 
+/** One line of the node's mount table, as the lean sweep summarizes it. */
+export interface MountSummary {
+  mountpoint: string;
+  source: string;
+  fstype: string;
+}
+
+/** The lean filesystem sweep: managed rows plus the whole mount table (T-05). */
+export interface FilesystemSweep {
+  filesystems: FilesystemInput[];
+  mounts: MountSummary[];
+  mountinfo_readable: boolean;
+}
+
 export interface ExportRuleInput {
   host_pattern: string;
   options: string[];
@@ -70,6 +94,8 @@ export interface ExportRuleInput {
 export interface ExportInput {
   export_path: string;
   rules: ExportRuleInput[];
+  /** Where the rules were read: `etab` (kernel-effective, exportfs(8)) or another labelled source. */
+  source: string;
 }
 
 export interface NfsServiceInput {
@@ -80,13 +106,20 @@ export interface NfsServiceInput {
 
 export interface GraphInputs {
   arrays: Source<ArrayInput[]>;
-  filesystems: Source<FilesystemInput[]>;
+  filesystems: Source<FilesystemSweep>;
   exports: Source<ExportInput[]>;
   nfs_service: Source<NfsServiceInput>;
   /** parseNfsdVersions output (`['3', '4.0', '4.1', '4.2']` subset). */
   nfsd_versions: Source<string[]>;
+  /** parseNfsdThreads output: the running nfsd thread count, null when the file was junk. */
+  nfsd_threads: Source<number | null>;
   /** null when the package version could not be determined. */
   xiraid_version: { version: string; build: string } | null;
+  /**
+   * Export path → its canonical (realpath) form, or null when it could not be
+   * resolved. Absent entries are treated as unresolved (T-05 symlink rule).
+   */
+  canonical_paths?: Record<string, string | null>;
 }
 
 export interface PlacementResource {
@@ -111,6 +144,8 @@ export interface PlacementShare {
   export_ref: string | null;
   service_ref: string | null;
   reason_codes: string[];
+  /** Foreign mountpoints found under or between the share path and its filesystem (T-05). */
+  nested_mountpoints?: string[];
 }
 
 export interface PlacementGraph {
@@ -124,6 +159,11 @@ export const NFS_SERVICE_RESOURCE_ID = 'nfs:nfs-server';
 /** `encExportId`-style id for an export path; the caller supplies the encoder. */
 export type ExportIdEncoder = (path: string) => string;
 
+function pathContains(parent: string, path: string): boolean {
+  if (parent.length === 0) return false;
+  return path === parent || (parent === '/' ? path.startsWith('/') : path.startsWith(`${parent}/`));
+}
+
 /**
  * The managed filesystem with the LONGEST mountpoint that contains `path`
  * by path segment (spec §4.5 rule 1). `/mnt/data` contains `/mnt/data/x`
@@ -135,12 +175,37 @@ export function containingFilesystem<T extends { mountpoint: string }>(
 ): T | undefined {
   let best: T | undefined;
   for (const fs of filesystems) {
-    const mp = fs.mountpoint;
-    if (mp.length === 0) continue;
-    const contains = path === mp || (mp === '/' ? path.startsWith('/') : path.startsWith(`${mp}/`));
-    if (contains && (best === undefined || mp.length > best.mountpoint.length)) best = fs;
+    if (
+      pathContains(fs.mountpoint, path) &&
+      (best === undefined || fs.mountpoint.length > best.mountpoint.length)
+    )
+      best = fs;
   }
   return best;
+}
+
+/**
+ * Mount-table entries that make the share's placement on `fsMountpoint`
+ * ambiguous (T-05, API-05): anything mounted AT or UNDER the share path, or
+ * BETWEEN the filesystem's mountpoint and the share path. The filesystem's
+ * own entry is not foreign. Pure path arithmetic over the sweep's table.
+ */
+export function foreignMountsUnder(
+  sharePath: string,
+  fsMountpoint: string,
+  mounts: readonly MountSummary[],
+): string[] {
+  const out: string[] = [];
+  for (const m of mounts) {
+    if (m.mountpoint === fsMountpoint) continue;
+    const underShare = pathContains(sharePath, m.mountpoint);
+    const between =
+      m.mountpoint.length > fsMountpoint.length &&
+      pathContains(fsMountpoint, m.mountpoint) &&
+      pathContains(m.mountpoint, sharePath);
+    if (underShare || between) out.push(m.mountpoint);
+  }
+  return out.sort();
 }
 
 function superOption(superOptions: readonly string[] | undefined, key: string): string | undefined {
@@ -221,6 +286,14 @@ function arrayResources(
         raid_level: a.raid_level,
         state_valid: a.state_valid,
         raw_states: a.raw_states,
+        // API-08: the daemon's separate progress values, verbatim (a 100 is
+        // a number, never a proof of a finished state — the words are).
+        progress: a.progress ?? {
+          init_pct: null,
+          recon_pct: null,
+          restripe_pct: null,
+          sdc_pct: null,
+        },
         members: a.members.map((m) => ({
           id: m.disk_id ?? m.device_path ?? `member:${m.index}`,
           index: m.index,
@@ -237,6 +310,29 @@ function arrayResources(
   return { resources, byVolumePath };
 }
 
+/**
+ * `writable` needs BOTH option lists to agree (API-06/09): the per-mount VFS
+ * options (`rw`/`ro` in mountinfo's options field) and the XFS super options
+ * (`rw`/`ro` as the first super option). A `ro` in either is read-only; `rw`
+ * in the VFS options with no `ro` anywhere is writable; anything else is
+ * unproven (null).
+ */
+export function writableFromOptions(
+  effective: readonly string[] | undefined,
+  superOptions: readonly string[] | undefined,
+): boolean | null {
+  if (effective === undefined) return null;
+  const ro =
+    effective.includes('ro') || (superOptions !== undefined && superOptions.includes('ro'));
+  if (ro) return false;
+  if (
+    effective.includes('rw') &&
+    (superOptions === undefined || superOptions.length === 0 || superOptions.includes('rw'))
+  )
+    return true;
+  return null;
+}
+
 function filesystemResource(
   fs: FilesystemInput,
   src: { observed_at: string; mono_ms: number },
@@ -247,7 +343,7 @@ function filesystemResource(
   let status: CollectionStatus = 'SUCCESS';
   const unknown = (reason: string): void => {
     status = 'UNKNOWN';
-    reasons.push(reason);
+    if (!reasons.includes(reason)) reasons.push(reason);
   };
 
   const uuid = fs.uuid ?? fs.id;
@@ -256,13 +352,7 @@ function filesystemResource(
   const mounted: boolean | null = fs.mountinfo_readable ? (fs.mounted ?? false) : null;
   const effective = fs.effective_mount_options;
   const writable: boolean | null =
-    mounted === true && effective !== undefined
-      ? effective.includes('ro')
-        ? false
-        : effective.includes('rw')
-          ? true
-          : null
-      : null;
+    mounted === true ? writableFromOptions(effective, fs.super_options) : null;
 
   if (!fs.mountinfo_readable) unknown('MOUNTINFO_UNREADABLE');
   if (fs.mount_source_mismatch !== undefined) unknown('MOUNT_SOURCE_MISMATCH');
@@ -295,7 +385,10 @@ function filesystemResource(
         else arrayRefs.push({ role: 'REALTIME', resource_id: rt.id });
       }
     }
-    if (!externalResolved) reasons.push('EXTERNAL_DEVICE_UNRESOLVED');
+    // XMOD-12: a mandatory external device that no array owns is an
+    // unproven dependency — the filesystem cannot be assessed (UNKNOWN),
+    // not a filesystem with a flag.
+    if (!externalResolved) unknown('EXTERNAL_DEVICE_UNRESOLVED');
   }
 
   return {
@@ -342,14 +435,13 @@ function exportResource(
       kind: 'EXPORT',
       export_path: e.export_path,
       present: true,
-      // Prototype (spec §6): rules come from /etc/exports, not from the
-      // kernel's etab — labelled so the connector can treat it as
-      // desired-not-effective.
-      source: '/etc/exports',
+      // `etab` is the kernel-effective table exportfs(8) maintains; any other
+      // value is a labelled, weaker source the connector may refuse.
+      source: e.source,
       rules: e.rules.map((r) => ({
         client: r.host_pattern,
         // exports(5): `ro` is the default when neither is given.
-        writable: r.options.includes('rw') ? true : !r.options.includes('ro') ? false : false,
+        writable: r.options.includes('rw') ? true : false,
         // exports(5): `sec=sys` is the default.
         security: (ruleValue(r.options, 'sec') ?? 'sys').split(':').filter((s) => s.length > 0),
         options: r.options,
@@ -361,6 +453,7 @@ function exportResource(
 function nfsServiceResource(
   svc: Source<NfsServiceInput>,
   versions: Source<string[]>,
+  threads: Source<number | null>,
 ): PlacementResource {
   if (!svc.ok) {
     return failedResource(
@@ -372,11 +465,29 @@ function nfsServiceResource(
   const reasons: string[] = [];
   let status: CollectionStatus = 'SUCCESS';
   const active = svc.value.active_state;
-  const running: boolean | null =
+  const unitActive: boolean | null =
     active === 'active' ? true : active === null || active === 'unknown' ? null : false;
-  if (running === null) {
+  // API-10, T-08: the unit being active is not proof that kernel nfsd serves
+  // anything (`active (exited)` with zero threads is exactly that case). The
+  // thread count is the anchor; the unit state is context.
+  let threadCount: number | null = null;
+  let running: boolean | null;
+  if (unitActive === null) {
+    running = null;
     status = 'UNKNOWN';
     reasons.push('NFS_SERVICE_STATE_UNAVAILABLE');
+  } else if (unitActive === false) {
+    running = false;
+  } else if (!threads.ok || threads.value === null) {
+    running = null;
+    status = 'UNKNOWN';
+    reasons.push(
+      !threads.ok ? sourceReason(threads, 'NFSD_THREADS_UNAVAILABLE') : 'NFSD_THREADS_UNAVAILABLE',
+    );
+  } else {
+    threadCount = threads.value;
+    running = threads.value > 0;
+    if (!running) reasons.push('NFSD_NO_THREADS');
   }
   let protocols: string[] = [];
   if (versions.ok) {
@@ -399,6 +510,8 @@ function nfsServiceResource(
       running,
       protocols,
       reason_codes: reasons,
+      unit_active_state: active,
+      threads: threadCount,
       ...(svc.value.sub_state !== undefined ? { sub_state: svc.value.sub_state } : {}),
     },
   };
@@ -437,11 +550,12 @@ export function buildPlacementGraph(
   );
   resources.push(...arrayRes);
 
-  const nfs = nfsServiceResource(inputs.nfs_service, inputs.nfsd_versions);
+  const nfs = nfsServiceResource(inputs.nfs_service, inputs.nfsd_versions, inputs.nfsd_threads);
 
   // Filesystems.
   const fsResources = new Map<string, PlacementResource>(); // by Filesystem input id
   let fsInputs: FilesystemInput[] = [];
+  let mounts: MountSummary[] = [];
   if (!inputs.filesystems.ok) {
     resources.push(
       failedResource(
@@ -451,7 +565,8 @@ export function buildPlacementGraph(
       ),
     );
   } else {
-    fsInputs = inputs.filesystems.value;
+    fsInputs = inputs.filesystems.value.filesystems;
+    mounts = inputs.filesystems.value.mounts;
     for (const fs of fsInputs) {
       const r = filesystemResource(fs, inputs.filesystems, inputs.arrays, byVolumePath);
       fsResources.set(fs.id, r);
@@ -470,17 +585,18 @@ export function buildPlacementGraph(
     );
   } else {
     let invalid = 0;
+    const arraysById = new Map(arrayRes.map((a) => [a.id, a]));
     for (const e of inputs.exports.value) {
       let encoded: string;
       try {
         encoded = encodeExportId(e.export_path);
       } catch {
         invalid++;
-        resources.push({
-          ...failedResource(`export:invalid:${invalid}`, 'EXPORT', 'EXPORT_PATH_INVALID', {
+        resources.push(
+          failedResource(`export:invalid:${invalid}`, 'EXPORT', 'EXPORT_PATH_INVALID', {
             export_path: e.export_path,
           }),
-        });
+        );
         continue;
       }
       const exportRes = exportResource(e, `export:${encoded}`, inputs.exports);
@@ -497,7 +613,6 @@ export function buildPlacementGraph(
       if (fsRes.collection_status !== 'SUCCESS') reasons.push('DEPENDENCY_FILESYSTEM_UNAVAILABLE');
       if (nfs.collection_status !== 'SUCCESS') reasons.push('DEPENDENCY_NFS_SERVICE_UNAVAILABLE');
       const refs = fsRes.details.array_refs as Array<{ resource_id: string }> | undefined;
-      const arraysById = new Map(arrayRes.map((a) => [a.id, a]));
       for (const ref of refs ?? []) {
         const a = arraysById.get(ref.resource_id);
         if (a !== undefined) {
@@ -508,6 +623,20 @@ export function buildPlacementGraph(
           )
             reasons.push('DEPENDENCY_ARRAY_UNAVAILABLE');
         }
+      }
+      // T-05 / API-05: a foreign mount at, under or between the share path
+      // and its filesystem makes the placement ambiguous — no fallback to
+      // the parent filesystem's arrays.
+      const nested = inputs.filesystems.value.mountinfo_readable
+        ? foreignMountsUnder(e.export_path, fs.mountpoint, mounts)
+        : [];
+      if (nested.length > 0) reasons.push('NESTED_MOUNT');
+      // T-05 symlink rule: the export path must be its own canonical form;
+      // an unresolvable path is not proven to be on this filesystem at all.
+      if (inputs.canonical_paths !== undefined) {
+        const canonical = inputs.canonical_paths[e.export_path];
+        if (canonical === undefined || canonical === null) reasons.push('PATH_UNRESOLVABLE');
+        else if (canonical !== e.export_path) reasons.push('PATH_NOT_CANONICAL');
       }
       const fsid = ruleValue(e.rules[0]?.options ?? [], 'fsid');
       const times = oldest(deps);
@@ -522,18 +651,19 @@ export function buildPlacementGraph(
         export_ref: exportRes.id,
         service_ref: nfs.id,
         reason_codes: reasons,
+        ...(nested.length > 0 ? { nested_mountpoints: nested } : {}),
       });
     }
   }
 
   resources.push(nfs);
 
-  const sources = [inputs.arrays, inputs.filesystems, inputs.exports, inputs.nfs_service];
-  const failed = sources.filter((s) => !s.ok).length;
+  const primary = [inputs.arrays, inputs.filesystems, inputs.exports, inputs.nfs_service];
+  const failed = primary.filter((s) => !s.ok).length;
   const snapshot_status: SnapshotStatus =
-    failed === 0 && inputs.nfsd_versions.ok
+    failed === 0 && inputs.nfsd_versions.ok && inputs.nfsd_threads.ok
       ? 'COMPLETE'
-      : failed === sources.length
+      : failed === primary.length
         ? 'FAILED'
         : 'PARTIAL';
 

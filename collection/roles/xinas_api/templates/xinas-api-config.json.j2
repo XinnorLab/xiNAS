@@ -16,6 +16,7 @@
     "heartbeat_interval_ms": {{ xinas_api_agent_heartbeat_interval_ms }}
   },
   "internalTokensPath": "{{ xinas_api_config_dir }}/internal-tokens.json",
+  "mcp": {{ (dict(http=(dict(host=xinas_api_mcp_http_host, port=xinas_api_mcp_http_port) | combine(dict(tls=dict(cert_file=xinas_api_mcp_http_tls_cert, key_file=xinas_api_mcp_http_tls_key)) if xinas_api_mcp_http_tls_cert | length > 0 else dict()))) if xinas_api_mcp_http_host | length > 0 else dict()) | to_json }},
   "tasks": {
     "max_inflight": {{ xinas_api_tasks_max_inflight }}
   },

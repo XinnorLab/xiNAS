@@ -347,7 +347,7 @@ function devicePath(entry: unknown): string | null {
  * anything else — a string, NaN, an out-of-range value — reads as null so a
  * bad sample is dropped rather than published (SUBS-PROGRESS-003).
  */
-function progressPct(v: unknown): number | null {
+export function progressPct(v: unknown): number | null {
   const n = numberOrNull(v);
   return n !== null && Number.isFinite(n) && n >= 0 && n <= 100 ? n : null;
 }

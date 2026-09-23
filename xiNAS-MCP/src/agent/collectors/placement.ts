@@ -6,23 +6,25 @@
  * (5 s) and flushes the single row
  * `/xinas/v1/observed/PlacementObservations/default` with complete-snapshot
  * semantics. One cycle makes exactly one call per source — raidShow, the
- * lean filesystem snapshot, listExports, the nfs-server unit state, the
- * nfsd versions file — bounded by one deadline (2 s); a late source is
- * published as ERROR/COLLECTION_TIMEOUT and the snapshot as PARTIAL. The
- * graph itself is computed by the pure lib/placement-graph.
+ * lean filesystem sweep (unit files + the mount table), the kernel-effective
+ * export table, the nfs-server unit state, the nfsd versions and threads
+ * files — bounded by one deadline (2 s); a late source is published as
+ * ERROR/COLLECTION_TIMEOUT and the snapshot as PARTIAL. The graph itself is
+ * computed by the pure lib/placement-graph.
  *
  * What the row carries that the route does not expose verbatim: per-record
  * monotonic stamps and the cycle's `published_mono_ms`, from which the api
- * derives `evidence_age_ms` against its own receipt clock (spec §5.2).
+ * derives `evidence_age_ms` against its own receipt clock (spec §5.2), and
+ * `generated_at`, from which the api measures the transfer delay.
  */
 
 import { encExportId } from '../../lib/nfs-export-id.js';
-import { parseNfsdVersions } from '../../lib/parse/nfsd.js';
-import { normalizeLevel, parseRaidShowEntries } from '../../lib/parse/raid.js';
+import { parseNfsdThreads, parseNfsdVersions } from '../../lib/parse/nfsd.js';
+import { normalizeLevel, parseRaidShowEntries, progressPct } from '../../lib/parse/raid.js';
 import {
   type ArrayInput,
   type ExportInput,
-  type FilesystemInput,
+  type FilesystemSweep,
   type GraphInputs,
   type NfsServiceInput,
   type PlacementGraph,
@@ -30,6 +32,7 @@ import {
   buildPlacementGraph,
 } from '../../lib/placement-graph.js';
 import { log } from '../log.js';
+import type { PlacementFilesystemSweep } from '../probe/filesystem.js';
 import type { XiraidVersion } from '../probe/xiraid-version.js';
 import type { Collector, ObservationDelta } from './base.js';
 
@@ -45,56 +48,71 @@ export const PLACEMENT_CAPABILITIES = [
   'source.freshness',
 ] as const;
 
-export const PLACEMENT_COVERAGE: ReadonlyArray<{
+export interface CoverageRow {
   check: string;
   required: boolean;
   status: 'EVALUATED' | 'NOT_IMPLEMENTED';
   reason?: string;
   details?: Record<string, unknown>;
-}> = [
-  ...PLACEMENT_CAPABILITIES.map((check) =>
-    check === 'export.effective_access'
-      ? // The one labelled gap (spec §6): rules come from /etc/exports.
-        { check, required: true, status: 'EVALUATED' as const, details: { source: '/etc/exports' } }
-      : { check, required: true, status: 'EVALUATED' as const },
-  ),
-  {
-    check: 'filesystem.integrity',
-    required: false,
-    status: 'NOT_IMPLEMENTED',
-    reason: 'OUT_OF_MVP',
-  },
-  { check: 'network.path', required: false, status: 'NOT_IMPLEMENTED', reason: 'OUT_OF_MVP' },
-  {
-    check: 'network.performance',
-    required: false,
-    status: 'NOT_IMPLEMENTED',
-    reason: 'OUT_OF_MVP',
-  },
-];
+}
+
+/**
+ * The coverage rows for one cycle. `export.effective_access` names where
+ * the rules came from: `etab` is the kernel-effective table (exportfs(8));
+ * anything else is a labelled weaker source the connector may refuse.
+ */
+export function placementCoverage(exportSource: string): CoverageRow[] {
+  return [
+    ...PLACEMENT_CAPABILITIES.map(
+      (check): CoverageRow =>
+        check === 'export.effective_access'
+          ? { check, required: true, status: 'EVALUATED', details: { source: exportSource } }
+          : { check, required: true, status: 'EVALUATED' },
+    ),
+    {
+      check: 'filesystem.integrity',
+      required: false,
+      status: 'NOT_IMPLEMENTED',
+      reason: 'OUT_OF_MVP',
+    },
+    { check: 'network.path', required: false, status: 'NOT_IMPLEMENTED', reason: 'OUT_OF_MVP' },
+    {
+      check: 'network.performance',
+      required: false,
+      status: 'NOT_IMPLEMENTED',
+      reason: 'OUT_OF_MVP',
+    },
+  ];
+}
 
 export const PLACEMENT_SCHEMA_VERSION = '1.0';
 export const PLACEMENT_DEFAULT_PERIOD_MS = 5_000;
 export const PLACEMENT_DEFAULT_DEADLINE_MS = 2_000;
-
-/** The lean filesystem row the probe's snapshotForPlacement() returns. */
-export type PlacementFilesystemRow = Omit<FilesystemInput, 'uuid'>;
+/** The kernel-effective export table exportfs(8) maintains. */
+export const ETAB_PATH = '/var/lib/nfs/etab';
 
 export interface PlacementExportRule {
   export_path: string;
   host_pattern: string;
   options: string[];
+  /** `etab` for the kernel-effective table; other values are labelled sources. */
+  source: string;
 }
 
 /** Everything the cycle reads, injected so tests drive it with fixtures. */
 export interface PlacementSources {
   raidShow(): Promise<unknown>;
-  filesystems(): Promise<PlacementFilesystemRow[]>;
+  filesystems(): Promise<PlacementFilesystemSweep>;
+  /** The effective export table (etab), one entry per (path, client). */
   listExports(): Promise<PlacementExportRule[]>;
   /** `systemctl show nfs-server.service` (ActiveState/SubState). */
   nfsServiceState(): Promise<{ active_state: string; sub_state: string }>;
   /** Raw text of /proc/fs/nfsd/versions. */
   nfsdVersions(): Promise<string>;
+  /** Raw text of /proc/fs/nfsd/threads. */
+  nfsdThreads(): Promise<string>;
+  /** `fs.realpath` of an export path (one lstat chain, no subprocess). */
+  realpath(path: string): Promise<string>;
   /** Cached package version (probe/xiraid-version). */
   xiraidVersion(): Promise<XiraidVersion | null>;
   /** Device path → control-path Disk id, from the slow disk sweep's cache. */
@@ -136,11 +154,11 @@ export interface PlacementRowStatus {
   snapshot_status: PlacementGraph['snapshot_status'];
   collection_period_ms: number;
   capabilities: string[];
-  coverage: typeof PLACEMENT_COVERAGE;
+  coverage: CoverageRow[];
   shares: PlacementGraph['shares'];
   resources: PlacementGraph['resources'];
   sources: Record<
-    'arrays' | 'filesystems' | 'exports' | 'nfs_service' | 'nfsd_versions',
+    'arrays' | 'filesystems' | 'exports' | 'nfs_service' | 'nfsd_versions' | 'nfsd_threads',
     SourceSummary
   >;
   /** Agent monotonic stamp when the row was built (ages are offsets from it). */
@@ -258,68 +276,104 @@ export class PlacementObservationCollector implements Collector<'PlacementObserv
       });
 
     const diskIds = this.#sources.diskIdByPath();
-    const [arrays, filesystems, exports, nfsService, nfsdVersions, version] = await Promise.all([
-      guard('raid_show', async (): Promise<ArrayInput[]> => {
-        const payload = await this.#sources.raidShow();
-        return parseRaidShowEntries(payload).map((e) => ({
-          name: e.name,
-          raid_level: normalizeLevel(e.raw.level),
-          // xiRAID Classic exposes every array as /dev/xi_<name> (parse/raid).
-          volume_path: `/dev/xi_${e.name}`,
-          raw_states: e.states,
-          state_valid: e.state_valid,
-          members: e.members.map((m) => {
-            const diskId = m.device === null ? undefined : diskIds.get(m.device);
-            return {
-              index: m.index,
-              device_path: m.device,
-              ...(diskId !== undefined ? { disk_id: diskId } : {}),
-              raw_states: m.states,
-              state_valid: m.state_valid,
-            };
-          }),
-        }));
-      }),
-      guard('filesystems', async (): Promise<FilesystemInput[]> => {
-        const rows = await this.#sources.filesystems();
-        return rows.map((r) => {
-          const uuid = this.#sources.filesystemUuid(r.id);
-          return uuid !== undefined ? { ...r, uuid } : { ...r };
-        });
-      }),
-      guard('exports', async (): Promise<ExportInput[]> => {
-        const rules = await this.#sources.listExports();
-        const byPath = new Map<string, ExportInput>();
-        for (const r of rules) {
-          const e = byPath.get(r.export_path) ?? { export_path: r.export_path, rules: [] };
-          e.rules.push({ host_pattern: r.host_pattern, options: r.options });
-          byPath.set(r.export_path, e);
-        }
-        return [...byPath.values()];
-      }),
-      guard('nfs_service', async (): Promise<NfsServiceInput> => {
-        const s = await this.#sources.nfsServiceState();
-        return { active_state: s.active_state, sub_state: s.sub_state };
-      }),
-      guard(
-        'nfsd_versions',
-        async (): Promise<string[]> => parseNfsdVersions(await this.#sources.nfsdVersions()),
-      ),
-      // Cached after the first success; a null is published as
-      // XIRAID_VERSION_UNAVAILABLE on every ARRAY resource.
-      this.#sources
-        .xiraidVersion()
-        .catch((): null => null),
-    ]);
+    const [arrays, filesystems, exportsAndPaths, nfsService, nfsdVersions, nfsdThreads, version] =
+      await Promise.all([
+        guard('raid_show', async (): Promise<ArrayInput[]> => {
+          const payload = await this.#sources.raidShow();
+          return parseRaidShowEntries(payload).map((e) => ({
+            name: e.name,
+            raid_level: normalizeLevel(e.raw.level),
+            // xiRAID Classic exposes every array as /dev/xi_<name> (parse/raid).
+            volume_path: `/dev/xi_${e.name}`,
+            raw_states: e.states,
+            state_valid: e.state_valid,
+            progress: {
+              init_pct: progressPct(e.raw.init_progress),
+              recon_pct: progressPct(e.raw.recon_progress),
+              restripe_pct: progressPct(e.raw.restripe_progress),
+              sdc_pct: progressPct(e.raw.sdc_progress),
+            },
+            members: e.members.map((m) => {
+              const diskId = m.device === null ? undefined : diskIds.get(m.device);
+              return {
+                index: m.index,
+                device_path: m.device,
+                ...(diskId !== undefined ? { disk_id: diskId } : {}),
+                raw_states: m.states,
+                state_valid: m.state_valid,
+              };
+            }),
+          }));
+        }),
+        guard('filesystems', async (): Promise<FilesystemSweep> => {
+          const sweep = await this.#sources.filesystems();
+          return {
+            filesystems: sweep.filesystems.map((r) => {
+              const uuid = this.#sources.filesystemUuid(r.id);
+              return uuid !== undefined ? { ...r, uuid } : { ...r };
+            }),
+            mounts: sweep.mounts,
+            mountinfo_readable: sweep.mountinfo_readable,
+          };
+        }),
+        guard(
+          'exports',
+          async (): Promise<{
+            exports: ExportInput[];
+            canonical: Record<string, string | null>;
+          }> => {
+            const rules = await this.#sources.listExports();
+            const byPath = new Map<string, ExportInput>();
+            for (const r of rules) {
+              const e = byPath.get(r.export_path) ?? {
+                export_path: r.export_path,
+                rules: [],
+                source: r.source,
+              };
+              e.rules.push({ host_pattern: r.host_pattern, options: r.options });
+              byPath.set(r.export_path, e);
+            }
+            const canonical: Record<string, string | null> = {};
+            for (const path of byPath.keys()) {
+              try {
+                canonical[path] = await this.#sources.realpath(path);
+              } catch {
+                canonical[path] = null;
+              }
+            }
+            return { exports: [...byPath.values()], canonical };
+          },
+        ),
+        guard('nfs_service', async (): Promise<NfsServiceInput> => {
+          const s = await this.#sources.nfsServiceState();
+          return { active_state: s.active_state, sub_state: s.sub_state };
+        }),
+        guard(
+          'nfsd_versions',
+          async (): Promise<string[]> => parseNfsdVersions(await this.#sources.nfsdVersions()),
+        ),
+        guard(
+          'nfsd_threads',
+          async (): Promise<number | null> => parseNfsdThreads(await this.#sources.nfsdThreads()),
+        ),
+        // Cached after the first success; inside the deadline like everything
+        // else (API-12). A null is published as XIRAID_VERSION_UNAVAILABLE.
+        guard('xiraid_version', () => this.#sources.xiraidVersion()),
+      ]);
     clearTimeout(timer);
 
+    const exports: Source<ExportInput[]> = exportsAndPaths.ok
+      ? { ...exportsAndPaths, value: exportsAndPaths.value.exports }
+      : exportsAndPaths;
     const inputs: GraphInputs = {
       arrays,
       filesystems,
       exports,
       nfs_service: nfsService,
       nfsd_versions: nfsdVersions,
-      xiraid_version: version,
+      nfsd_threads: nfsdThreads,
+      xiraid_version: version.ok ? version.value : null,
+      ...(exportsAndPaths.ok ? { canonical_paths: exportsAndPaths.value.canonical } : {}),
     };
     const graph = buildPlacementGraph(inputs, encExportId);
     const generatedAt = this.#now();
@@ -336,6 +390,7 @@ export class PlacementObservationCollector implements Collector<'PlacementObserv
         ? { status: 'ok', observed_at: s.observed_at, mono_ms: s.mono_ms }
         : { status: s.reason === 'COLLECTION_TIMEOUT' ? 'timeout' : 'failed' };
 
+    const exportSource = exports.ok ? (exports.value[0]?.source ?? 'etab') : 'etab';
     return {
       schema_version: PLACEMENT_SCHEMA_VERSION,
       controller_id: this.#controllerId,
@@ -345,7 +400,7 @@ export class PlacementObservationCollector implements Collector<'PlacementObserv
       snapshot_status: graph.snapshot_status,
       collection_period_ms: this.pollIntervalMs,
       capabilities: [...PLACEMENT_CAPABILITIES],
-      coverage: PLACEMENT_COVERAGE,
+      coverage: placementCoverage(exportSource),
       shares: graph.shares,
       resources: graph.resources,
       sources: {
@@ -354,6 +409,7 @@ export class PlacementObservationCollector implements Collector<'PlacementObserv
         exports: summary(exports),
         nfs_service: summary(nfsService),
         nfsd_versions: summary(nfsdVersions),
+        nfsd_threads: summary(nfsdThreads),
       },
       published_mono_ms: publishedMono,
       collector: {

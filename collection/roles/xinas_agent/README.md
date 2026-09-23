@@ -59,6 +59,7 @@ The `meta/main.yml` dependency declaration enforces step 2 before step 3.
 | `xinas_agent_token_path` | `/etc/xinas-agent/agent-token` | Token file (read-only; written by `xinas_api`). Mode `0400 root:root`. |
 | `xinas_agent_unit_src` | `{{ xinas_agent_repo_path }}/xinas-agent.service` | Source path for the systemd unit. |
 | `xinas_agent_heartbeat_interval_ms` | `5000` | Interval (ms) at which the api's HeartbeatTracker pings the agent. Must be consistent with the `xinas_api` role's matching variable. |
+| `xinas_agent_placement_enabled` | `false` | S20: run the 5 s placement cycle that feeds `GET /api/v1/placement/observations` (the pNFS placement connector's source). Opt-in; off, the route answers `503 SOURCE_NOT_READY`. |
 
 ## Token rotation
 

@@ -17,26 +17,61 @@
     "source.freshness"
   ],
   "coverage": [
-    { "check": "raid.array_states", "required": true, "status": "EVALUATED" },
-    { "check": "raid.member_states", "required": true, "status": "EVALUATED" },
-    { "check": "topology.data_log_realtime", "required": true, "status": "EVALUATED" },
-    { "check": "identity", "required": true, "status": "EVALUATED" },
-    { "check": "filesystem.mounted_rw", "required": true, "status": "EVALUATED" },
+    {
+      "check": "raid.array_states",
+      "required": true,
+      "status": "EVALUATED"
+    },
+    {
+      "check": "raid.member_states",
+      "required": true,
+      "status": "EVALUATED"
+    },
+    {
+      "check": "topology.data_log_realtime",
+      "required": true,
+      "status": "EVALUATED"
+    },
+    {
+      "check": "identity",
+      "required": true,
+      "status": "EVALUATED"
+    },
+    {
+      "check": "filesystem.mounted_rw",
+      "required": true,
+      "status": "EVALUATED"
+    },
     {
       "check": "export.effective_access",
       "required": true,
       "status": "EVALUATED",
-      "details": { "source": "/etc/exports" }
+      "details": {
+        "source": "etab"
+      }
     },
-    { "check": "nfs.service", "required": true, "status": "EVALUATED" },
-    { "check": "source.freshness", "required": true, "status": "EVALUATED" },
+    {
+      "check": "nfs.service",
+      "required": true,
+      "status": "EVALUATED"
+    },
+    {
+      "check": "source.freshness",
+      "required": true,
+      "status": "EVALUATED"
+    },
     {
       "check": "filesystem.integrity",
       "required": false,
       "status": "NOT_IMPLEMENTED",
       "reason": "OUT_OF_MVP"
     },
-    { "check": "network.path", "required": false, "status": "NOT_IMPLEMENTED", "reason": "OUT_OF_MVP" },
+    {
+      "check": "network.path",
+      "required": false,
+      "status": "NOT_IMPLEMENTED",
+      "reason": "OUT_OF_MVP"
+    },
     {
       "check": "network.performance",
       "required": false,
@@ -47,7 +82,7 @@
   "shares": [
     {
       "share_id": "mnt-data-training-a",
-      "incarnation": "mnt-data-training-a:7",
+      "incarnation": "mnt-data-training-a:7:6f3c2b1a-0d4e-4f5a-9b8c-7d6e5f4a3b2c",
       "export_path": "/mnt/data/training-a",
       "collection_status": "SUCCESS",
       "observed_at": "2026-09-22T12:00:00Z",
@@ -59,7 +94,7 @@
     },
     {
       "share_id": "mnt-data-training-b",
-      "incarnation": "mnt-data-training-b:8",
+      "incarnation": "mnt-data-training-b:8:6f3c2b1a-0d4e-4f5a-9b8c-7d6e5f4a3b2c",
       "export_path": "/mnt/data/training-b",
       "collection_status": "SUCCESS",
       "observed_at": "2026-09-22T12:00:00Z",
@@ -71,7 +106,7 @@
     },
     {
       "share_id": "mnt-data-training-c",
-      "incarnation": "mnt-data-training-c:9",
+      "incarnation": "mnt-data-training-c:9:6f3c2b1a-0d4e-4f5a-9b8c-7d6e5f4a3b2c",
       "export_path": "/mnt/data/training-c",
       "collection_status": "UNKNOWN",
       "observed_at": "2026-09-22T12:00:00Z",
@@ -79,7 +114,9 @@
       "filesystem_ref": null,
       "export_ref": "export:mnt-data-training-c",
       "service_ref": "nfs:nfs-server",
-      "reason_codes": ["EXPORT_ABSENT"]
+      "reason_codes": [
+        "EXPORT_ABSENT"
+      ]
     }
   ],
   "resources": [
@@ -99,7 +136,11 @@
         "build": "4.4.0-43861",
         "raid_level": "5",
         "state_valid": true,
-        "raw_states": ["online", "initialized", "degraded"],
+        "raw_states": [
+          "online",
+          "initialized",
+          "degraded"
+        ],
         "members": [
           {
             "id": "disk-0",
@@ -107,7 +148,9 @@
             "group": null,
             "device_path": "/dev/nvme0n2",
             "state_valid": true,
-            "raw_states": ["online"]
+            "raw_states": [
+              "online"
+            ]
           },
           {
             "id": "disk-1",
@@ -115,7 +158,9 @@
             "group": null,
             "device_path": "/dev/nvme1n2",
             "state_valid": true,
-            "raw_states": ["online"]
+            "raw_states": [
+              "online"
+            ]
           },
           {
             "id": "disk-2",
@@ -123,9 +168,17 @@
             "group": null,
             "device_path": "/dev/nvme2n2",
             "state_valid": true,
-            "raw_states": ["offline"]
+            "raw_states": [
+              "offline"
+            ]
           }
-        ]
+        ],
+        "progress": {
+          "init_pct": 100,
+          "recon_pct": null,
+          "restripe_pct": null,
+          "sdc_pct": null
+        }
       }
     },
     {
@@ -144,7 +197,10 @@
         "build": "4.4.0-43861",
         "raid_level": "10",
         "state_valid": true,
-        "raw_states": ["online", "initialized"],
+        "raw_states": [
+          "online",
+          "initialized"
+        ],
         "members": [
           {
             "id": "disk-3",
@@ -152,7 +208,9 @@
             "group": null,
             "device_path": "/dev/nvme0n1",
             "state_valid": true,
-            "raw_states": ["online"]
+            "raw_states": [
+              "online"
+            ]
           },
           {
             "id": "disk-4",
@@ -160,7 +218,9 @@
             "group": null,
             "device_path": "/dev/nvme1n1",
             "state_valid": true,
-            "raw_states": ["online"]
+            "raw_states": [
+              "online"
+            ]
           },
           {
             "id": "disk-5",
@@ -168,7 +228,9 @@
             "group": null,
             "device_path": "/dev/nvme2n1",
             "state_valid": true,
-            "raw_states": ["online"]
+            "raw_states": [
+              "online"
+            ]
           },
           {
             "id": "disk-6",
@@ -176,9 +238,17 @@
             "group": null,
             "device_path": "/dev/nvme3n1",
             "state_valid": true,
-            "raw_states": ["online"]
+            "raw_states": [
+              "online"
+            ]
           }
-        ]
+        ],
+        "progress": {
+          "init_pct": 100,
+          "recon_pct": null,
+          "restripe_pct": null,
+          "sdc_pct": null
+        }
       }
     },
     {
@@ -197,12 +267,24 @@
         "fs_type": "xfs",
         "mounted": true,
         "writable": true,
-        "mount_options": ["rw", "noatime"],
-        "super_options": ["rw", "logdev=/dev/xi_log"],
+        "mount_options": [
+          "rw",
+          "noatime"
+        ],
+        "super_options": [
+          "rw",
+          "logdev=/dev/xi_log"
+        ],
         "external_dependencies_resolved": true,
         "array_refs": [
-          { "role": "DATA", "resource_id": "array:data" },
-          { "role": "LOG", "resource_id": "array:log" }
+          {
+            "role": "DATA",
+            "resource_id": "array:data"
+          },
+          {
+            "role": "LOG",
+            "resource_id": "array:log"
+          }
         ],
         "log_mode": "EXTERNAL"
       }
@@ -218,13 +300,20 @@
         "kind": "EXPORT",
         "export_path": "/mnt/data/training-a",
         "present": true,
-        "source": "/etc/exports",
+        "source": "etab",
         "rules": [
           {
             "client": "10.10.0.0/16",
             "writable": true,
-            "security": ["sys"],
-            "options": ["rw", "sync", "no_subtree_check", "fsid=7"]
+            "security": [
+              "sys"
+            ],
+            "options": [
+              "rw",
+              "sync",
+              "no_subtree_check",
+              "fsid=7"
+            ]
           }
         ]
       }
@@ -240,13 +329,20 @@
         "kind": "EXPORT",
         "export_path": "/mnt/data/training-b",
         "present": true,
-        "source": "/etc/exports",
+        "source": "etab",
         "rules": [
           {
             "client": "10.10.0.0/16",
             "writable": true,
-            "security": ["sys"],
-            "options": ["rw", "sync", "no_subtree_check", "fsid=8"]
+            "security": [
+              "sys"
+            ],
+            "options": [
+              "rw",
+              "sync",
+              "no_subtree_check",
+              "fsid=8"
+            ]
           }
         ]
       }
@@ -262,7 +358,7 @@
         "kind": "EXPORT",
         "export_path": "/mnt/data/training-c",
         "present": false,
-        "source": "/etc/exports",
+        "source": "etab",
         "rules": []
       }
     },
@@ -276,17 +372,41 @@
       "details": {
         "kind": "NFS_SERVICE",
         "running": true,
-        "protocols": ["NFSv3", "NFSv4.1", "NFSv4.2"],
-        "reason_codes": []
+        "protocols": [
+          "NFSv3",
+          "NFSv4.1",
+          "NFSv4.2"
+        ],
+        "reason_codes": [],
+        "unit_active_state": "active",
+        "threads": 8
       }
     }
   ],
   "sources": {
-    "arrays": { "status": "ok" },
-    "filesystems": { "status": "ok" },
-    "exports": { "status": "ok" },
-    "nfs_service": { "status": "ok" },
-    "nfsd_versions": { "status": "ok" }
+    "arrays": {
+      "status": "ok"
+    },
+    "filesystems": {
+      "status": "ok"
+    },
+    "exports": {
+      "status": "ok"
+    },
+    "nfs_service": {
+      "status": "ok"
+    },
+    "nfsd_versions": {
+      "status": "ok"
+    },
+    "nfsd_threads": {
+      "status": "ok"
+    }
   },
-  "collector": { "cycle_ms": 180, "deadline_hit": false, "skipped_ticks": 0 }
+  "collector": {
+    "cycle_ms": 180,
+    "deadline_hit": false,
+    "skipped_ticks": 0
+  },
+  "transfer_delay_ms": 120
 }

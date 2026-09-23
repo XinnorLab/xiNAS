@@ -33,6 +33,7 @@
  * (`ACTIVE_NFS_SESSIONS`), per the spec's "warning, not blocker" decision.
  */
 import { decExportId, encExportId } from '../../../lib/nfs-export-id.js';
+import { sharePlacementKey } from '../../../lib/nfs-placement.js';
 import { compileShareToExportEntry, shareSpecToCompileInput } from '../../../lib/nfs-exports.js';
 import {
   allocateFsid,
@@ -298,6 +299,14 @@ const shareCreateProvider: PlanProvider = {
           value: toDesiredShareDoc(resolvedSpec),
         },
         { key: shareFsidKey(fsid), value: { fsid, share_id: share.id } },
+        // S20 (F-08): the durable placement incarnation — minted by the engine
+        // at APPLY time (`mint_uuid`) so the plan stays deterministic, in its
+        // own row so a boot-time backfill never bumps Share revisions.
+        {
+          key: sharePlacementKey(share.id),
+          value: { share_id: share.id },
+          mint_uuid: 'placement_incarnation',
+        },
       ],
     };
   },
@@ -372,6 +381,7 @@ const shareUpdateProvider: PlanProvider = {
       desired_mutations: [
         {
           key: `${DESIRED_SHARE_PREFIX}${share.id}`,
+          // S20 (F-08): an update never touches the placement marker.
           value: toDesiredShareDoc(spec as Record<string, unknown>),
         },
         ...markerMutations,
@@ -416,6 +426,9 @@ const shareDeleteProvider: PlanProvider = {
         ...(desiredFsid !== undefined
           ? [{ key: shareFsidKey(desiredFsid), delete: true as const }]
           : []),
+        // S20 (F-08): the placement marker dies with the share; a recreate
+        // mints a new one.
+        { key: sharePlacementKey(id), delete: true as const },
       ],
     };
   },

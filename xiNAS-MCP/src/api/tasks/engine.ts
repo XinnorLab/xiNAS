@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { Database } from 'better-sqlite3';
 import type { KvStore } from '../../state/index.js';
 import type { LeaseManager } from '../../state/leases.js';
@@ -630,6 +631,12 @@ export class TaskEngine {
         desiredRollback.push({ key: m.key, prior_value });
         if ('delete' in m) {
           this.kv.delete(m.key);
+        } else if (m.mint_uuid !== undefined && m.value !== null && typeof m.value === 'object') {
+          // Apply-time id (S20 F-08): unique per apply, absent from the plan hash.
+          this.kv.put(m.key, {
+            ...(m.value as Record<string, unknown>),
+            [m.mint_uuid]: randomUUID(),
+          });
         } else {
           this.kv.put(m.key, m.value);
         }

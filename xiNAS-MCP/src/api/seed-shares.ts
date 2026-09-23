@@ -1,6 +1,8 @@
+import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { encExportId } from '../lib/nfs-export-id.js';
 import { allocateFsid, collectUsedFsids, shareFsidKey } from '../lib/nfs-fsid.js';
+import { sharePlacementKey } from '../lib/nfs-placement.js';
 import type { OpenedStateStore } from '../state/index.js';
 import type { ApiConfig } from './config.js';
 
@@ -106,11 +108,22 @@ export function seedShares(state: OpenedStateStore, config: ApiConfig): void {
 
     const pattern =
       typeof entry.clients === 'string' && entry.clients.length > 0 ? entry.clients : '*';
-    const spec = { path, clients: [{ pattern, options }], fsid };
+    // S20 (F-08): the durable creation id the placement connector compares.
+    const spec = {
+      path,
+      clients: [{ pattern, options }],
+      fsid,
+    };
     // Same doc shape as providers/nfs.ts toDesiredShareDoc + the GET routes.
     state.kv.put(`${DESIRED_SHARE_PREFIX}${id}`, { kind: 'Share', id, spec }, PUT_SOURCE);
     // Marker so the create provider's absence pin sees this number as taken.
     state.kv.put(shareFsidKey(fsid), { fsid, share_id: id }, PUT_SOURCE);
+    // S20 (F-08): the durable placement incarnation the connector compares.
+    state.kv.put(
+      sharePlacementKey(id),
+      { share_id: id, placement_incarnation: randomUUID() },
+      PUT_SOURCE,
+    );
   }
 
   state.kv.put(

@@ -199,6 +199,7 @@ components:
         - INTERNAL
         - SOURCE_NOT_READY
         - SOURCE_STALE
+        - SOURCE_FAILED
         - SNAPSHOT_TOO_LARGE
       description: |
         Stable, machine-readable error code per reqs §1. The three S20 codes
@@ -206,9 +207,11 @@ components:
         503 with `result: null` (API-03, API-20): `SOURCE_NOT_READY` — no
         agent push has reached this api process yet; `SOURCE_STALE` — the
         last push is older than `2 × collection_period_ms + 2 s`
-        (`details.age_ms`); `SNAPSHOT_TOO_LARGE` — more than 256 shares or
-        16 MiB serialized (`details.shares`, `details.bytes`) — the snapshot
-        is refused, never truncated. They are distinct from
+        (`details.age_ms`, which includes the measured transfer delay);
+        `SOURCE_FAILED` — the last cycle failed on every source (API-20: a
+        global FAILED is a source failure, not an answer); `SNAPSHOT_TOO_LARGE`
+        — more than 256 shares or 16 MiB serialized (`details.shares`,
+        `details.bytes`) — the snapshot is refused, never truncated. They are distinct from
         `EXECUTOR_UNAVAILABLE` (a `details.reason` of `INTERNAL`), which
         means the agent RPC is down.
 
@@ -2401,6 +2404,10 @@ components:
           type: object
           description: Cycle diagnostics (`cycle_ms`, `deadline_hit`, `skipped_ticks`); additive.
           additionalProperties: true
+        transfer_delay_ms:
+          type: integer
+          minimum: 0
+          description: How old the row already was when this api received it (receipt time − `generated_at`); included in every `evidence_age_ms`.
     PlacementCoverageRow:
       type: object
       required: [check, required, status]
@@ -2442,6 +2449,10 @@ components:
           type: array
           maxItems: 16
           items: { type: string, minLength: 1 }
+        nested_mountpoints:
+          type: array
+          items: { type: string }
+          description: "Foreign mountpoints at, under or between the share path and its filesystem (T-05); present with `NESTED_MOUNT`."
     PlacementResource:
       type: object
       required: [id, incarnation, collection_status, observed_at, evidence_age_ms, reason_codes, details]
@@ -2480,6 +2491,14 @@ components:
           type: array
           maxItems: 32
           items: { type: string, minLength: 1 }
+        progress:
+          type: object
+          description: "The daemon's separate progress values (API-08), a finite 0–100 or null each; a number is never a proof of a finished state — the words are."
+          properties:
+            init_pct: { type: [number, "null"] }
+            recon_pct: { type: [number, "null"] }
+            restripe_pct: { type: [number, "null"] }
+            sdc_pct: { type: [number, "null"] }
         members:
           type: array
           maxItems: 1024
@@ -2540,7 +2559,8 @@ components:
         present: { type: [boolean, "null"] }
         source:
           type: string
-          description: Where the rules were read (`/etc/exports` in the prototype — the labelled gap of spec §6).
+          description: "Where the rules were read: `etab` — the kernel-effective table exportfs(8) maintains (/var/lib/nfs/etab). Any other value is a labelled weaker source (`fixture` in fixture mode)."
+
         rules:
           type: array
           maxItems: 512
@@ -2565,7 +2585,11 @@ components:
       additionalProperties: true
       properties:
         kind: { type: string, const: NFS_SERVICE }
-        running: { type: [boolean, "null"] }
+        running:
+          type: [boolean, "null"]
+          description: "true only when the unit is active AND kernel nfsd has threads (/proc/fs/nfsd/threads > 0); false when the unit is inactive or has no threads (`NFSD_NO_THREADS`); null when unproven."
+        unit_active_state: { type: [string, "null"] }
+        threads: { type: [integer, "null"], description: "Running nfsd threads; null when unread." }
         protocols:
           type: array
           maxItems: 8
@@ -2650,8 +2674,9 @@ components:
     Unavailable:
       description: >-
         HTTP 503 with `result: null` and one typed error (S20 §5.4):
-        `SOURCE_NOT_READY`, `SOURCE_STALE` (`details.age_ms`) or
-        `SNAPSHOT_TOO_LARGE` (`details.shares`, `details.bytes`).
+        `SOURCE_NOT_READY`, `SOURCE_STALE` (`details.age_ms`),
+        `SOURCE_FAILED` (`details.sources`) or `SNAPSHOT_TOO_LARGE`
+        (`details.shares`, `details.bytes`).
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Envelope' }
@@ -2990,17 +3015,23 @@ paths:
       description: |
         The agent's last 5 s placement cycle, projected at read time: the
         `result` is a `PlacementObservations` object (schema_version 1.0).
-        `evidence_age_ms` is computed from the api's own receipt clock plus
-        the agent-reported intra-cycle offset, so repeated reads show
-        growing ages. `state_revision` is the stored row's KV revision, not
+        `evidence_age_ms` is computed from the api's own receipt clock, plus
+        the transfer delay measured at ingest (receipt time minus the row's
+        `generated_at`), plus the agent-reported intra-cycle offset, so a
+        delayed or re-delivered push can only read older, and repeated reads
+        show growing ages. The ingest drops a push that does not carry a
+        newer `(server_epoch, source_generation)` than the stored row. `state_revision` is the stored row's KV revision, not
         a snapshot generation — that is `source_generation`, to be compared
         together with `server_epoch`. Shares are the node's `/etc/exports`
         entries on managed filesystems reconciled with the desired Share
         rows: a desired share without an export line is `UNKNOWN` /
         `EXPORT_ABSENT` (with an `EXPORT` resource `present: false` as
         proof of absence); an export xiNAS did not create carries
-        `SHARE_UNMANAGED`. Viewer rank; read-only; exposed as the MCP tool
-        `placement.observations`.
+        `SHARE_UNMANAGED`; a desired Share modified after the observation
+        was received is `UNKNOWN` / `DESIRED_CHANGED_SINCE_OBSERVATION`.
+        Export rules are the kernel-effective table (`/var/lib/nfs/etab`,
+        `details.source: etab`). Viewer rank; read-only; exposed as the MCP
+        tool `placement.observations`.
       responses:
         '200':
           description: OK — `result` is a `PlacementObservations` object.

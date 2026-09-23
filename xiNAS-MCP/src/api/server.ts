@@ -1,5 +1,6 @@
-import { chmodSync, chownSync, existsSync, unlinkSync } from 'node:fs';
+import { chmodSync, chownSync, existsSync, readFileSync, unlinkSync } from 'node:fs';
 import http from 'node:http';
+import https from 'node:https';
 import type { AddressInfo } from 'node:net';
 import { MetricsRegistry } from '../lib/metrics.js';
 import { type OpenedStateStore, openStateStore } from '../state/index.js';
@@ -18,6 +19,7 @@ import { startLeaseSweeper } from './lease-sweeper.js';
 import { startConfirmationSweeper } from './mcp/confirmation/sweeper.js';
 import { loadObservedSchemas } from './observed-schemas.js';
 import { backfillShareFsidMarkers } from './backfill-fsid-markers.js';
+import { backfillPlacementIncarnation } from './backfill-placement-incarnation.js';
 import { seedShares } from './seed-shares.js';
 import { buildTaskEngines } from './tasks/build.js';
 import { TaskWatch } from './tasks/watch.js';
@@ -68,6 +70,8 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Server
   // marker lost to a rolled-back task or a restored snapshot. Must run AFTER
   // seedShares, which may create shares.
   backfillShareFsidMarkers(state);
+  // S20 (F-08): every desired Share carries a durable placement_incarnation.
+  backfillPlacementIncarnation(state);
 
   // Compile inbound-observation validators from api-v1.yaml once. Returns null
   // (validation skipped) when the spec isn't shipped — the graceful default.
@@ -306,12 +310,31 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Server
       req2.end();
     });
 
-  // Optional dedicated MCP TCP listener (same app — same routes,
-  // same /mcp endpoint; the legacy demo port re-points here).
+  // Optional dedicated TCP listener (same app — same routes, same /mcp
+  // endpoint; the legacy demo port re-points here). With `tls` it is an
+  // HTTPS listener (S20 F-07: the placement connector verifies the
+  // certificate against its configured CA and never sends its bearer over
+  // plain http off a loopback host).
   let mcpServer: http.Server | undefined;
   if (config.mcp?.http !== undefined) {
-    mcpServer = http.createServer(app);
     const mcpHttp = config.mcp.http;
+    mcpServer =
+      mcpHttp.tls !== undefined
+        ? https.createServer(
+            {
+              cert: readFileSync(mcpHttp.tls.cert_file),
+              key: readFileSync(mcpHttp.tls.key_file),
+              ...(mcpHttp.tls.ca_file !== undefined
+                ? {
+                    ca: readFileSync(mcpHttp.tls.ca_file),
+                    requestCert: true,
+                    rejectUnauthorized: true,
+                  }
+                : {}),
+            },
+            app,
+          )
+        : http.createServer(app);
     await new Promise<void>((resolve, reject) => {
       (mcpServer as http.Server).once('error', reject);
       (mcpServer as http.Server).listen(mcpHttp.port, mcpHttp.host, () => resolve());
