@@ -438,11 +438,32 @@ The api merges the agent's export-derived share list with
   the id at **apply** time, so the plan itself stays deterministic
   (the same spec plans to the same `plan_hash` over REST, MCP and the
   CLI);
-- a desired row whose KV `modified_at` is later than the receipt of the
-  observation it would be joined with → `UNKNOWN` /
+- a desired row whose KV `modified_at` is not provably earlier than the
+  evidence it would be joined with → `UNKNOWN` /
   `DESIRED_CHANGED_SINCE_OBSERVATION` — an observation can never be
   joined with a desired Share that changed after it was collected (audit
-  F-13); the next accepted push joins again;
+  F-13); the next accepted push joins again. The evidence time is the
+  record's own `observed_at`, never the api's receipt of the push: a
+  share was observed at `t0`, deleted and recreated at `t1`, and the push
+  that carries the `t0` observation may land at `t2 > t1`, so ordering
+  against the receipt would join the old export with the new
+  incarnation. The comparison is per record:
+  - an observed share: its `observed_at` (the oldest of its
+    dependencies' evidence, §4.5);
+  - a desired-only share answered from an `EXPORT` resource
+    (`FILESYSTEM_UNRESOLVED`): that resource's `observed_at`;
+  - a desired-only share answered from the exports source
+    (`EXPORT_ABSENT`): the exports source's `observed_at`.
+
+  `modified_at >= observed_at` is a change (equal milliseconds cannot be
+  ordered); a missing or unparsable `observed_at` also cannot be ordered
+  and is treated as a change. A desired-only share with no evidence at
+  all keeps its dependency reason (`DEPENDENCY_EXPORT_UNAVAILABLE`,
+  `COLLECTION_TIMEOUT`): nothing is joined, so nothing can be joined
+  across a change. A desired row without `modified_at` is joined as
+  before. Both clocks are the node's wall clock — the agent stamps
+  `observed_at`, the api's KV stamps `modified_at`, on the same host
+  (§4.6);
 - desired, not observed, no `EXPORT` resource for the path, and the
   agent's exports source is `ok` → `collection_status: UNKNOWN`,
   `reason_codes: [EXPORT_ABSENT]`, `filesystem_ref: null`; this is proof
@@ -570,7 +591,10 @@ separate readiness endpoint is deferred.
   nested-mount, canonical-path, writable-from-both-lists, unresolved
   external device → UNKNOWN, nfsd-threads and progress rules; the ingest's
   ordering guard and transfer delay (route tests push through
-  `/internal/v1/observed`); `SOURCE_FAILED`; `DESIRED_CHANGED_SINCE_OBSERVATION`;
+  `/internal/v1/observed`); `SOURCE_FAILED`; `DESIRED_CHANGED_SINCE_OBSERVATION`
+  (ordered against the record's `observed_at`: a change between the
+  observation and its receipt, a recreate at the same path and fsid,
+  equal milliseconds, an unparsable `observed_at`);
   the placement-incarnation backfill; `mcp.http` transport validation;
   the agent's `placement.enabled`.
 
@@ -595,3 +619,8 @@ the connector polls. The route is viewer-rank; give the connector its own
   (F-08), opt-in cycle + version inside the deadline + bounded systemctl
   (F-09), `SOURCE_FAILED` (F-10), array progress (F-11), `writable` from
   both option lists (F-12), `DESIRED_CHANGED_SINCE_OBSERVATION` (F-13).
+- 2026-09-25 — F-13 ordered against the record's own `observed_at`
+  instead of the api's receipt of the push (implementation review of
+  846a4922, P1): an observation collected before a delete-and-recreate
+  but delivered after it was joined with the new incarnation as
+  `SUCCESS`. Equal or unorderable times count as a change (§5.3).

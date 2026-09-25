@@ -221,11 +221,17 @@ export function projectPlacement(
     if (r.details.kind === 'NFS_SERVICE') nfsRef = r.id;
   }
   const desiredByPath = new Map(desired.map((d) => [d.path, d]));
-  // F-13: a desired row that changed after this observation was received
-  // (a share recreated, its path or fsid edited) cannot be joined with the
-  // older observation — the join is refused until a newer cycle lands.
-  const changedSince = (d: DesiredShare): boolean =>
-    d.modified_at !== undefined && d.modified_at > clock.receipt.received_at_ms;
+  // F-13: a desired row that changed at or after the evidence it would be
+  // joined with (a share recreated, its path or fsid edited) cannot be
+  // joined with that older evidence — refused until a newer cycle lands.
+  // Ordered against the record's own observed_at, not the receipt: a push
+  // observed before a recreate can be received after it. An evidence time
+  // that cannot be parsed cannot be ordered, so it counts as a change.
+  const changedSince = (d: DesiredShare, observedAt: string | null | undefined): boolean => {
+    if (d.modified_at === undefined) return false;
+    const t = typeof observedAt === 'string' ? Date.parse(observedAt) : Number.NaN;
+    return Number.isNaN(t) || d.modified_at >= t;
+  };
 
   const shares: OutRecord<StoredShare>[] = [];
   const observedPaths = new Set<string>();
@@ -236,7 +242,7 @@ export function projectPlacement(
     if (d === undefined) {
       // An export xiNAS did not create; the connector may still bind it.
       shares.push({ ...out, reason_codes: [...out.reason_codes, 'SHARE_UNMANAGED'] });
-    } else if (changedSince(d)) {
+    } else if (changedSince(d, s.observed_at)) {
       shares.push({
         ...out,
         share_id: d.id,
@@ -260,7 +266,16 @@ export function projectPlacement(
     let reason: string;
     let observedAt: string | null = null;
     let age: number | null = null;
-    if (changedSince(d)) {
+    const exportsRead = exportsSource?.status === 'ok' && exportsSource.mono_ms !== undefined;
+    // The evidence this record would rest on; none (the exports source
+    // failed) means nothing is joined, so the dependency reason stands.
+    const evidenceAt =
+      present !== undefined
+        ? present.observed_at
+        : exportsRead
+          ? (exportsSource?.observed_at ?? null)
+          : undefined;
+    if (evidenceAt !== undefined && changedSince(d, evidenceAt)) {
       reason = 'DESIRED_CHANGED_SINCE_OBSERVATION';
     } else if (present !== undefined) {
       // Exported, but not on a managed filesystem (§4.4).

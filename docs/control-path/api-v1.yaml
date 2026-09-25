@@ -3027,8 +3027,9 @@ paths:
         rows: a desired share without an export line is `UNKNOWN` /
         `EXPORT_ABSENT` (with an `EXPORT` resource `present: false` as
         proof of absence); an export xiNAS did not create carries
-        `SHARE_UNMANAGED`; a desired Share modified after the observation
-        was received is `UNKNOWN` / `DESIRED_CHANGED_SINCE_OBSERVATION`.
+        `SHARE_UNMANAGED`; a desired Share modified at or after the
+        record's own `observed_at` (or whose evidence time cannot be
+        ordered) is `UNKNOWN` / `DESIRED_CHANGED_SINCE_OBSERVATION`.
         Export rules are the kernel-effective table (`/var/lib/nfs/etab`,
         `details.source: etab`). Viewer rank; read-only; exposed as the MCP
         tool `placement.observations`.

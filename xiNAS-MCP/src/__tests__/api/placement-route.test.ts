@@ -31,12 +31,18 @@ const specPath = resolve(here, '..', '..', '..', '..', 'docs', 'control-path', '
 const AT = '2026-09-22T12:00:00.000Z';
 const SHARE_A = encExportId('/srv/nfs/share-a');
 
-/** The receipt wall clock the tests control; rows are generated 250 ms before it. */
+/**
+ * The receipt wall clock the tests control; rows are generated 250 ms and
+ * their evidence observed 300 ms before it.
+ */
 let wallNow = Date.now();
 
 /** A row as the agent's collector publishes it (collectors/placement). */
 function agentRow(over: Record<string, unknown> = {}): Record<string, unknown> {
   const exportA = `export:${SHARE_A}`;
+  // Evidence is stamped just before the row is generated, on the same wall
+  // clock the api uses for desired rows (F-13 orders against it).
+  const obs = new Date(wallNow - 300).toISOString();
   return {
     kind: 'PlacementObservations',
     id: 'default',
@@ -56,7 +62,7 @@ function agentRow(over: Record<string, unknown> = {}): Record<string, unknown> {
           incarnation: `${SHARE_A}:42`,
           export_path: '/srv/nfs/share-a',
           collection_status: 'SUCCESS',
-          observed_at: AT,
+          observed_at: obs,
           observed_mono_ms: 1000,
           filesystem_ref: 'fs:srv-nfs.mount',
           export_ref: exportA,
@@ -69,7 +75,7 @@ function agentRow(over: Record<string, unknown> = {}): Record<string, unknown> {
           id: 'fs:srv-nfs.mount',
           incarnation: 'u:/dev/xi_data',
           collection_status: 'SUCCESS',
-          observed_at: AT,
+          observed_at: obs,
           observed_mono_ms: 1000,
           reason_codes: [],
           details: {
@@ -92,7 +98,7 @@ function agentRow(over: Record<string, unknown> = {}): Record<string, unknown> {
           id: exportA,
           incarnation: `${exportA}:42`,
           collection_status: 'SUCCESS',
-          observed_at: AT,
+          observed_at: obs,
           observed_mono_ms: 1000,
           reason_codes: [],
           details: {
@@ -107,7 +113,7 @@ function agentRow(over: Record<string, unknown> = {}): Record<string, unknown> {
           id: 'nfs:nfs-server',
           incarnation: 'nfs:nfs-server:active',
           collection_status: 'SUCCESS',
-          observed_at: AT,
+          observed_at: obs,
           observed_mono_ms: 1100,
           reason_codes: [],
           details: {
@@ -121,16 +127,16 @@ function agentRow(over: Record<string, unknown> = {}): Record<string, unknown> {
         },
       ],
       sources: {
-        arrays: { status: 'ok', observed_at: AT, mono_ms: 1000 },
-        filesystems: { status: 'ok', observed_at: AT, mono_ms: 1000 },
-        exports: { status: 'ok', observed_at: AT, mono_ms: 1000 },
-        nfs_service: { status: 'ok', observed_at: AT, mono_ms: 1100 },
-        nfsd_versions: { status: 'ok', observed_at: AT, mono_ms: 1100 },
-        nfsd_threads: { status: 'ok', observed_at: AT, mono_ms: 1100 },
+        arrays: { status: 'ok', observed_at: obs, mono_ms: 1000 },
+        filesystems: { status: 'ok', observed_at: obs, mono_ms: 1000 },
+        exports: { status: 'ok', observed_at: obs, mono_ms: 1000 },
+        nfs_service: { status: 'ok', observed_at: obs, mono_ms: 1100 },
+        nfsd_versions: { status: 'ok', observed_at: obs, mono_ms: 1100 },
+        nfsd_threads: { status: 'ok', observed_at: obs, mono_ms: 1100 },
       },
       published_mono_ms: 1200,
       collector: { cycle_ms: 200, deadline_hit: false, skipped_ticks: 0 },
-      observed_at: AT,
+      observed_at: obs,
       ...over,
     },
   };
@@ -156,8 +162,8 @@ describe('GET /api/v1/placement/observations', () => {
   beforeEach(async () => {
     setup = await buildTestApp();
     nowMono = 100_000;
-    // Receipts happen 5 s "in the future" so desired rows seeded during a
-    // test read as written BEFORE the observation was received (F-13).
+    // Observations and receipts happen 5 s "in the future" so desired rows
+    // seeded during a test read as written BEFORE the evidence (F-13).
     wallNow = Date.now() + 5_000;
     // A controllable receipt clock in place of the one createApp minted.
     receipts = new ObservedReceipts(
@@ -318,25 +324,29 @@ describe('GET /api/v1/placement/observations', () => {
     expect((await get(VIEWER_TOKEN)).body.result.shares[0].incarnation).toBe('share-a:42:gen-2');
   });
 
-  it('F-13: a desired share modified AFTER the observation was received is UNKNOWN / DESIRED_CHANGED_SINCE_OBSERVATION until the next cycle', async () => {
+  it('F-13: a recreate between the observation and its receipt is UNKNOWN / DESIRED_CHANGED_SINCE_OBSERVATION until a newer observation lands', async () => {
     seedShare(setup.state, 'share-a');
     storeRow();
     expect((await get(VIEWER_TOKEN)).body.result.shares[0].collection_status).toBe('SUCCESS');
-    // Recreate (same path, same fsid) after the receipt: the receipt was
-    // stamped 5 s in the past so the new row's modified_at is later.
+    // Observed 5 s ago (t0), recreated now at the same path and fsid (t1),
+    // received 5 s from now (t2): t0 < t1 < t2. Ordering against the
+    // receipt would join the old export with the new incarnation.
     wallNow = Date.now() - 5_000;
-    storeRow();
+    const observedBefore = agentRow({ source_generation: 4 });
     setup.state.kv.delete('/xinas/v1/desired/Share/share-a');
     seedShare(setup.state, 'share-a');
+    wallNow = Date.now() + 5_000;
+    const put = setup.state.kv.put(PLACEMENT_ROW_KEY, observedBefore);
+    if (!put.ok) throw new Error(`kv.put refused: ${put.reason}`);
+    receipts.record('PlacementObservations', 'default', put.value.revision, 0);
     const res = await get(VIEWER_TOKEN);
     expect(res.body.result.shares[0]).toMatchObject({
       share_id: 'share-a',
       collection_status: 'UNKNOWN',
       reason_codes: ['DESIRED_CHANGED_SINCE_OBSERVATION'],
     });
-    // The next push (received after the change) joins again.
-    wallNow = Date.now() + 5_000;
-    storeRow({ source_generation: 4 });
+    // The next push, observed after the change, joins again.
+    storeRow({ source_generation: 5 });
     expect((await get(VIEWER_TOKEN)).body.result.shares[0].collection_status).toBe('SUCCESS');
   });
 

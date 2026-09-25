@@ -16,7 +16,11 @@ export interface Receipt {
   revision: number;
   /** `performance.now()` at the moment the push was stored. */
   received_mono_ms: number;
-  /** Wall clock (epoch ms) at the moment the push was stored (F-13 reconciliation). */
+  /**
+   * Wall clock (epoch ms) at the moment the push was stored. Not the F-13
+   * reference: a desired change is ordered against each record's own
+   * `observed_at`, since a push observed before a change can land after it.
+   */
   received_at_ms: number;
   /**
    * How old the row already was when it arrived (receipt wall clock −

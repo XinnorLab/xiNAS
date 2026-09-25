@@ -291,7 +291,7 @@ MVP Audit") returned NO-GO with thirteen findings. Their resolution on
 | F-10 global FAILED as 200 | 503 `SOURCE_FAILED` |
 | F-11 progress values not published | `ARRAY.progress` (init/recon/restripe/sdc pct) |
 | F-12 `writable` ignored super options | `rw` required in the VFS options, `ro` in either list denies, else null |
-| F-13 desired rows joined across a change | `DESIRED_CHANGED_SINCE_OBSERVATION` when a desired row's `modified_at` is later than the receipt |
+| F-13 desired rows joined across a change | `DESIRED_CHANGED_SINCE_OBSERVATION` when a desired row's `modified_at` is not provably earlier than the record's own `observed_at` (not the api's receipt: a push observed before a recreate can land after it) |
 
 Still open (docs/TODO.md): credential lifecycle and source allow-list,
 429/readiness/soak, certificate provisioning, the MDS gate (P3), and the
