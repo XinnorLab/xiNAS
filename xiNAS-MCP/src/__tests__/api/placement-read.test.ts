@@ -19,6 +19,7 @@ import {
 import type { Receipt } from '../../api/placement/receipts.js';
 
 const AT = '2026-09-22T12:00:00.000Z';
+const OBSERVED_MS = Date.parse(AT);
 
 function stored(over: Partial<StoredPlacementStatus> = {}): StoredPlacementStatus {
   const sid = encExportId('/mnt/data/a');
@@ -285,10 +286,10 @@ describe('projectPlacement', () => {
       collection_status: 'UNKNOWN',
       reason_codes: ['DESIRED_CHANGED_SINCE_OBSERVATION'],
     });
-    // Modified before receipt: joined normally.
+    // Modified before the observation: joined normally.
     const ok = projectPlacement(
       stored(),
-      [{ id: 'share-a', path: '/mnt/data/a', fsid: 42, modified_at: received - 1 }],
+      [{ id: 'share-a', path: '/mnt/data/a', fsid: 42, modified_at: OBSERVED_MS - 1 }],
       clock(50_400, { received_at_ms: received }),
     );
     expect(ok.shares[0]?.collection_status).toBe('SUCCESS');
@@ -302,6 +303,100 @@ describe('projectPlacement', () => {
       'DESIRED_CHANGED_SINCE_OBSERVATION',
     ]);
     expect(only.resources.some((x) => x.id === `export:${encExportId('/mnt/data/b')}`)).toBe(false);
+  });
+
+  it('F-13: a change between the observation and its receipt (observed < modified < received) is UNKNOWN', () => {
+    const r = projectPlacement(
+      stored(),
+      [{ id: 'share-a', path: '/mnt/data/a', fsid: 42, modified_at: OBSERVED_MS + 1_000 }],
+      clock(50_400, { received_at_ms: OBSERVED_MS + 2_000 }),
+    );
+    expect(r.shares[0]).toMatchObject({
+      share_id: 'share-a',
+      collection_status: 'UNKNOWN',
+      reason_codes: ['DESIRED_CHANGED_SINCE_OBSERVATION'],
+    });
+  });
+
+  it('F-13: a recreate at the same path and fsid inside that window never publishes the old export as the new incarnation', () => {
+    const r = projectPlacement(
+      stored(),
+      [
+        {
+          id: 'share-a',
+          path: '/mnt/data/a',
+          fsid: 42,
+          placement_incarnation: 'gen-2',
+          modified_at: OBSERVED_MS + 500,
+        },
+      ],
+      clock(50_400, { received_at_ms: OBSERVED_MS + 2_000 }),
+    );
+    expect(r.shares[0]?.incarnation).toBe('share-a:42:gen-2');
+    expect(r.shares[0]?.collection_status).toBe('UNKNOWN');
+    expect(r.shares[0]?.reason_codes).toContain('DESIRED_CHANGED_SINCE_OBSERVATION');
+  });
+
+  it('F-13: a modification in the same millisecond as the observation cannot be ordered — UNKNOWN', () => {
+    const r = projectPlacement(
+      stored(),
+      [{ id: 'share-a', path: '/mnt/data/a', fsid: 42, modified_at: OBSERVED_MS }],
+      clock(50_400, { received_at_ms: OBSERVED_MS + 2_000 }),
+    );
+    expect(r.shares[0]?.collection_status).toBe('UNKNOWN');
+  });
+
+  it('F-13: an observed share with no evidence time cannot be ordered against a modified desired row — UNKNOWN', () => {
+    const base = stored();
+    const share = { ...(base.shares[0] as StoredPlacementStatus['shares'][number]) };
+    share.observed_at = null;
+    share.observed_mono_ms = null;
+    const r = projectPlacement(
+      { ...base, shares: [share] },
+      [{ id: 'share-a', path: '/mnt/data/a', fsid: 42, modified_at: OBSERVED_MS - 60_000 }],
+      clock(50_400, { received_at_ms: OBSERVED_MS + 2_000 }),
+    );
+    expect(r.shares[0]?.collection_status).toBe('UNKNOWN');
+    expect(r.shares[0]?.reason_codes).toContain('DESIRED_CHANGED_SINCE_OBSERVATION');
+  });
+
+  it('F-13: a desired-only share created after the exports source was read is not EXPORT_ABSENT', () => {
+    const r = projectPlacement(
+      stored(),
+      [{ id: 'share-b', path: '/mnt/data/b', modified_at: OBSERVED_MS + 1_000 }],
+      clock(50_400, { received_at_ms: OBSERVED_MS + 2_000 }),
+    );
+    expect(r.shares.find((s) => s.share_id === 'share-b')?.reason_codes).toEqual([
+      'DESIRED_CHANGED_SINCE_OBSERVATION',
+    ]);
+    expect(r.resources.some((x) => x.id === `export:${encExportId('/mnt/data/b')}`)).toBe(false);
+  });
+
+  it('F-13: a desired-only share changed after its EXPORT resource was observed is not FILESYSTEM_UNRESOLVED', () => {
+    const r = projectPlacement(
+      stored(),
+      [{ id: 'share-o', path: '/srv/other', modified_at: OBSERVED_MS + 1_000 }],
+      clock(50_400, { received_at_ms: OBSERVED_MS + 2_000 }),
+    );
+    expect(r.shares.find((s) => s.share_id === 'share-o')).toMatchObject({
+      collection_status: 'UNKNOWN',
+      export_ref: null,
+      reason_codes: ['DESIRED_CHANGED_SINCE_OBSERVATION'],
+    });
+  });
+
+  it('F-13: a desired-only share with no export evidence keeps its dependency reason', () => {
+    const r = projectPlacement(
+      stored({
+        sources: { ...stored().sources, exports: { status: 'failed' } },
+        resources: stored().resources.filter((x) => x.details.kind !== 'EXPORT'),
+      }),
+      [{ id: 'share-b', path: '/mnt/data/b', modified_at: OBSERVED_MS + 1_000 }],
+      clock(50_400, { received_at_ms: OBSERVED_MS + 2_000 }),
+    );
+    expect(r.shares.find((s) => s.share_id === 'share-b')?.reason_codes).toEqual([
+      'DEPENDENCY_EXPORT_UNAVAILABLE',
+    ]);
   });
 
   it('observed, not desired → SHARE_UNMANAGED, status unchanged', () => {

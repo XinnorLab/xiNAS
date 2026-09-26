@@ -142,6 +142,15 @@ Requires-Rebuild: xinas_node_build
 
 ### Fixed
 
+- **Placement observations order a desired-share change against the
+  evidence, not the push receipt (S20 F-13).** A share observed at `t0`,
+  deleted and recreated at `t1`, and delivered in a push received at
+  `t2 > t1` was joined with the new desired incarnation as `SUCCESS`.
+  The api now compares the desired row's `modified_at` with the record's
+  own `observed_at` (the exports source's or the `EXPORT` resource's for
+  desired-only shares); equal or unorderable times read as
+  `UNKNOWN` / `DESIRED_CHANGED_SINCE_OBSERVATION`.
+
 - **`js-yaml`, `ajv` and `ajv-formats` are runtime dependencies.** The
   api has imported `js-yaml` since S19b (the profile catalog) and now
   needs `ajv` for the report validator; both were listed under
