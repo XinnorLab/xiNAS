@@ -30,6 +30,7 @@ CREATE_ARRAY = REPO / "collection/roles/raid_fs/tasks/create_array.yml"
 RAID_FS_MAIN = REPO / "collection/roles/raid_fs/tasks/main.yml"
 PRESETS = [
     REPO / "presets/default/raid_fs.yml",
+    REPO / "presets/raid6/raid_fs.yml",
     REPO / "presets/xinnorVM/raid_fs.yml",
 ]
 
