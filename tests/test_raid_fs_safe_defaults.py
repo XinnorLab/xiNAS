@@ -17,6 +17,7 @@ RAID_FS_DEFAULTS = REPO / "collection/roles/raid_fs/defaults/main.yml"
 NVME_DEFAULTS = REPO / "collection/roles/nvme_namespace/defaults/main.yml"
 PRESET_RAID_FS = [
     REPO / "presets/default/raid_fs.yml",
+    REPO / "presets/raid6/raid_fs.yml",
     REPO / "presets/xinnorVM/raid_fs.yml",
 ]
 
