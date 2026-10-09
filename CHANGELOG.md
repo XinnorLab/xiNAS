@@ -8,6 +8,26 @@ supported source for installing and updating xiNAS.
 
 ## [Unreleased]
 
+## [3.13.3] - 2026-10-09
+
+Adds a `raid6` deployment preset on top of 3.13.2. No role changed, so
+this release carries no `Requires-Rebuild:` trailer: an installed host
+that updates gets the new preset directory and nothing is re-run.
+
+### Added
+
+- **`raid6` preset: the default physical-node layout with a RAID 6 data
+  array.** `presets/raid6/` is a copy of `presets/default/` with
+  `nvme_raid_data_level: 6`, for deployments whose data array must survive
+  two concurrent drive failures. The log array (RAID 10), the network pool,
+  the NFS export and the role list are unchanged from `default`. The
+  `nvme_namespace` role already handled level 6 (`parity_disks=2`, so the
+  XFS stripe width is members − 2; 4-drive minimum from
+  `nvme_raid_min_devices`), which is why no role code changed. The preset
+  appears in the installer's preset list alongside `default` and
+  `xinnorVM`, and unattended installs select it with
+  `autoinstall.sh --preset raid6`. See `docs/Installer/spec.md` §1.4.
+
 ## [3.13.2] - 2026-09-07
 
 Requires-Rebuild: doca_ofed
