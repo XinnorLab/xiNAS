@@ -4,7 +4,7 @@ This document describes the xiNAS installer surface area: deployment presets, An
 
 Source layout this spec is derived from:
 
-- Presets: [presets/default/](../../presets/default), [presets/xinnorVM/](../../presets/xinnorVM)
+- Presets: [presets/default/](../../presets/default), [presets/raid6/](../../presets/raid6), [presets/xinnorVM/](../../presets/xinnorVM)
 - Playbooks: [playbooks/site.yml](../../playbooks/site.yml), [playbooks/common.yml](../../playbooks/common.yml), [playbooks/doca_ofed_install.yml](../../playbooks/doca_ofed_install.yml)
 - Roles: [collection/roles/](../../collection/roles)
 - Install scripts: [install.sh](../../install.sh), [prepare_system.sh](../../prepare_system.sh), [autoinstall.sh](../../autoinstall.sh)
@@ -79,6 +79,18 @@ Resulting storage layout (with ≥3 virtio drives):
 | Data array | RAID 5 across `n2` namespaces | RAID 5 across remaining drives |
 | `perf_tuning` | Full (cpupower, NVMe poll queues, ring buffers) | `cpupower` disabled, `nr_requests` skipped |
 
+### 1.4 `presets/raid6/` — physical NVMe storage node, RAID 6 data array
+
+Target: the same hardware as `default` (§1.1), for deployments that need the data array to survive two concurrent drive failures. The preset is a copy of `default` with one value changed: `nvme_raid_data_level=6` in [raid_fs.yml](../../presets/raid6/raid_fs.yml). `playbook.yml`, `network.yml` and `nfs_exports.yml` are identical to `default`'s.
+
+Resulting storage layout:
+
+- RAID 10 log array from each drive's `n1` (500 MB) namespace — unchanged from `default`.
+- RAID 6 data array from each drive's `n2` (remaining capacity) namespace. The `nvme_namespace` role sets `parity_disks=2` for level 6, so the XFS stripe width is `members − 2` and usable capacity is `(members − 2) ×` namespace size (see [raid-spec.md](raid-spec.md) §6.3).
+- XFS at `/mnt/data` with the same options as the default preset.
+
+The minimum member count comes from the `nvme_raid_min_devices` table in [collection/roles/nvme_namespace/defaults/main.yml](../../collection/roles/nvme_namespace/defaults/main.yml): 4 drives for RAID 6, the same floor as RAID 5 (numbers owned by [raid-management-spec.md](../Storage/raid-management-spec.md) §4). Below it the role reports insufficient devices and generates no array configuration, exactly as `default` does.
+
 ---
 
 ## 2. Playbooks
@@ -95,7 +107,7 @@ common → doca_ofed → net_controllers → xiraid_classic → nvme_namespace
 ```
 
 - `xiraid_classic` is gated by `xiraid_skip_install` (default `false`).
-- `site.yml` is always the playbook that actually runs — the menus and `autoinstall.sh` never execute a preset's own `playbook.yml` (§1.0). Both preset `playbook.yml` files list this same role order, in the same order, and a test pins that equality; the file survives as documentation of a preset's role selection even though only its `vars:` are read at apply time.
+- `site.yml` is always the playbook that actually runs — the menus and `autoinstall.sh` never execute a preset's own `playbook.yml` (§1.0). Every preset `playbook.yml` file lists this same role order, in the same order, and a test pins that equality; the file survives as documentation of a preset's role selection even though only its `vars:` are read at apply time.
 
 ### 2.2 [playbooks/common.yml](../../playbooks/common.yml) — baseline only
 
@@ -1064,7 +1076,7 @@ Resolution precedence, lowest to highest:
 | Skip dep bootstrap | `skip_prepare` | `XINAS_SKIP_PREPARE` | `--skip-prepare` | `no` |
 | Force-format a reused array | `fs_force_format` | `XINAS_FS_FORCE_FORMAT` | — | `no` |
 
-**Presets:** `default`, `xinnorVM`, `existing-raid`. `existing-raid`
+**Presets:** `default`, `raid6`, `xinnorVM`, `existing-raid`. `existing-raid`
 applies the `default` preset files but adds
 `xiraid_skip_install=true nvme_auto_namespace=false` — the
 non-interactive equivalent of the menu's "Use Existing RAID Arrays"

@@ -1,0 +1,22 @@
+---
+- name: Full storage-node configuration (common → OFED → xiRAID → NFS → perf)
+  hosts: storage_nodes
+  gather_facts: true
+  roles:
+    - role: common
+    - role: doca_ofed
+    - role: net_controllers
+    - role: xiraid_classic  # EULA is accepted automatically
+    - role: nvme_namespace  # Auto-detect drives and create namespaces (generates xiraid_arrays)
+    - role: raid_fs
+    - role: exports       # manage /etc/exports
+    - role: nfs_server    # configure kernel NFS server
+    - role: xinas_node_build  # Node 20 + xiNAS-MCP build (dist/ for api/agent/mcp)
+    - role: xinas_api     # xinas-api.service: serves the /mcp endpoint on /run/xinas/api.sock (finding #28)
+    - role: xinas_agent   # xinas-agent.service (meta-depends on xinas_api for the agent-token)
+    - role: xinas_nfs_helper  # NFS helper daemon (serves the agent + legacy MCP)
+    - role: xinas_mcp     # legacy MCP server (AI assistant bridge)
+    - role: xinas_menu    # Python/Textual management console (replaces Bash menus)
+    - role: xinas_history  # configuration history & rollback
+    - role: perf_tuning
+    - role: motd          # fancy login banner with NAS status
