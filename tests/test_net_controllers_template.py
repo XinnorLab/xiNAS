@@ -29,7 +29,7 @@ import yaml
 REPO = Path(__file__).resolve().parents[1]
 TEMPLATE = REPO / "collection/roles/net_controllers/templates/netplan.yaml.j2"
 OFED_DEFAULTS = REPO / "collection/roles/doca_ofed/defaults/main.yml"
-PRESETS = ("default", "xinnorVM")
+PRESETS = ("default", "raid6", "xinnorVM")
 
 
 def test_presets_do_not_ship_a_netplan_template():

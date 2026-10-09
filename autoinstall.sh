@@ -33,7 +33,7 @@ Non-interactive xiNAS provisioning. Configuration is resolved from
 (lowest to highest precedence): answer file, environment, CLI flags.
 
 Options:
-  --preset NAME         default | xinnorVM | existing-raid   (default: default)
+  --preset NAME         default | raid6 | xinnorVM | existing-raid   (default: default)
   --license-file PATH   xiRAID license file        (default: /tmp/license)
   --hostname NAME       hostname to set            (default: xiNAS-<HWKEY>)
   --inventory PATH      Ansible inventory          (default: inventories/lab.ini)
@@ -180,7 +180,7 @@ preset_path="presets/$preset_dir_name"
 
 # ── Validate ──────────────────────────────────────────────────────────────────
 [ -d "$preset_path" ] || \
-    die "Unknown preset '$preset' (expected: default, xinnorVM, existing-raid)"
+    die "Unknown preset '$preset' (expected: default, raid6, xinnorVM, existing-raid)"
 
 if [ ! -f "$license_file" ]; then
     die "License file not found: $license_file — place the license there or pass --license-file"
