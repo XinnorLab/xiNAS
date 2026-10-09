@@ -108,12 +108,16 @@ const FEED_URIS = [
   'xinas://events/system',
 ];
 
+// `detectedAt` is stamped at call time, not with a fixed date: the journal behind
+// startServer() runs on the real clock, so a fixed timestamp eventually ages past
+// the `retentionDays` window of the sweep below and the age rule — which this
+// file means to leave inert, exercising `maxRows` — deletes every seeded row.
 const input = (summary: string, feed: EventInput['feed'] = 'raid'): EventInput => ({
   schemaVersion: '1',
   feed,
   type: 'raid.state.degraded',
   severity: 'error',
-  detectedAt: '2026-09-04T12:00:00.000Z',
+  detectedAt: new Date().toISOString(),
   timeAccuracy: 'observed',
   source: { kind: 'observed_transition', component: 'XiraidArray' },
   subject: { kind: 'XiraidArray', id: 'data' },
