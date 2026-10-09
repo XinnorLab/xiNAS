@@ -39,6 +39,7 @@ API_DEFAULTS = REPO_ROOT / "collection/roles/xinas_api/defaults/main.yml"
 CONFIG_TEMPLATE = ROLE / "templates/xinas-agent-config.json.j2"
 PLAYBOOKS = [
     REPO_ROOT / "presets/default/playbook.yml",
+    REPO_ROOT / "presets/raid6/playbook.yml",
     REPO_ROOT / "presets/xinnorVM/playbook.yml",
     REPO_ROOT / "playbooks/site.yml",
 ]

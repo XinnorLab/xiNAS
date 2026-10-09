@@ -32,6 +32,7 @@ OFED_TASKS = REPO_ROOT / "collection/roles/doca_ofed/tasks/main.yml"
 OFED_HANDLERS = REPO_ROOT / "collection/roles/doca_ofed/handlers/main.yml"
 PLAYBOOKS = [
     REPO_ROOT / "presets/default/playbook.yml",
+    REPO_ROOT / "presets/raid6/playbook.yml",
     REPO_ROOT / "presets/xinnorVM/playbook.yml",
     REPO_ROOT / "playbooks/site.yml",
 ]
