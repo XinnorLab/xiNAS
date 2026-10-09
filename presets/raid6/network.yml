@@ -1,0 +1,18 @@
+# IP pool configuration for automatic allocation
+# Each detected high-speed interface gets an IP from the pool:
+#   Interface 1: 10.10.1.1/24
+#   Interface 2: 10.10.2.1/24
+#   etc.
+
+net_ip_pool_enabled: true
+net_ip_pool_start: "10.10.1.1"
+net_ip_pool_end: "10.10.255.1"
+net_ip_pool_prefix: 24
+
+# Manual IP overrides (optional)
+# net_manual_ips:
+#   ib0: "192.168.1.100/24"
+net_manual_ips: {}
+
+# MTU for high-speed interfaces (0 = use system default)
+net_mtu: 0
