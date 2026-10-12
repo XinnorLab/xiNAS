@@ -2,6 +2,30 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+@AGENTS.md
+
+## Working in Claude Code
+
+- Start every session by reading the active feature card
+  (`.claude/active-feature` names it, under `docs/features/`) and
+  determining the current gate. [docs/process/workflow.md](docs/process/workflow.md)
+  says what each gate needs and who approves it.
+- Role subagents live in `.claude/agents/` (analyst, architect, reviewers);
+  the architecture rules the architect must follow are in
+  `.claude/skills/project-architecture/SKILL.md`. Path-scoped rules in
+  `.claude/rules/` load when you touch the matching files.
+- `.claude/settings.json` holds the permission rules and a `PreToolUse`
+  hook that blocks edits to code while the active feature's spec is not
+  `approved`. For a trivial code-only fix (the exemption in *Spec-first
+  rule* below), set `.claude/active-feature` to `trivial` for that
+  session and say so in the commit message.
+- Superpowers skills save drafts under `docs/superpowers/` (specs, plans,
+  tests). Those are dated drafts; the durable contract is the area spec
+  under `docs/<Area>/`, which must be updated before gate G3.
+- Use plan mode (`claude --permission-mode plan` or Shift+Tab) for
+  analysis, architecture and planning sessions; write the results to the
+  documents after leaving plan mode.
+
 ## Project Overview
 
 xiNAS is an Ansible-based provisioning framework for high-performance NAS storage nodes. Bash/whiptail menus drive the install; a Python/Textual TUI (`xinas_menu/`) and a TypeScript control path (`xiNAS-MCP/`) drive day-2 management. Deploys Xinnor xiRAID storage with NVIDIA DOCA-OFED networking and NFS-RDMA exports.

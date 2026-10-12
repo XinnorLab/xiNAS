@@ -40,3 +40,6 @@ scripts/node_modules/
 # discards tracked modifications. See docs/Installer/update-spec.md.
 playbooks/group_vars/
 .xinas-local/
+
+# Per-developer pointer to the feature card in progress (see AGENTS.md).
+.claude/active-feature
