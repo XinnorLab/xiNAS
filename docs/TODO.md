@@ -1021,24 +1021,30 @@ model would test nothing.
 release (`ac-NN-<host>-<n>.json`), produced by the runbook procedure and
 committed with the release notes; the runner already accepts them.
 
-## Health — the fs_io PID1 delegation is not yet proven on hardware
+## Health — the loopback-probe validation rows are not yet proven on hardware
 
 *Deferred 2026-09-10, from the S19 validation remediation
-(`fix/s19-validation-findings`); spec §9.3 "Execution boundary", B01.*
+(`fix/s19-validation-findings`); spec §9.3 "Execution boundary", B01.
+Narrowed 2026-10-15.*
 
-**What is missing.** The `systemd-run` delegation of `fs_io` was designed
-from the `ReadWritePaths` semantics observed on xinas-box (systemd 255) and
-is covered by unit and e2e tests with a stubbed `systemd-run`; no node has
-run the built code yet.
+**What is missing.** The F05/F08 row of `hardware-smoke-runbook.md` §5a
+(a loopback probe during `profile=deep` answers `409`; with `nfs-server`
+stopped, `nfs_loopback` fails cleanly and leaves nothing behind). The
+`fs_io` delegation itself is proven: the B01 row passed on xinas-box on
+2026-10-15.
 
-**What the code does instead.** Nothing different — the delegation is the
-shipped path; a `systemd-run` failure is an honest `FSIO_HELPER_FAILED`
-outcome with `cleanup: failed`, never a false `clean`.
+**What the code does instead.** The same code as before; the row could not
+pass on hardware because `nfs_loopback` never mounted
+(`docs/troubleshooting/nfs-loopback-probe-systemd-mount-type.md`, fixed
+by passing `--type=nfs`).
 
-**Why it was cut.** No installed 3.14 node existed on 2026-09-10.
+**Why it was cut.** No installed 3.14 node existed on 2026-09-10; on
+2026-10-15 the probe it depends on was broken, and stopping `nfs-server`
+on xinas-box would have cut off a connected client.
 
-**Done looks like.** The two B01 rows of `hardware-smoke-runbook.md` ticked
-on a real node and this entry deleted.
+**Done looks like.** The F05/F08 row ticked on a node running the
+`--type=nfs` fix, with no NFS client attached during the `nfs-server`
+stop, and this entry deleted.
 
 ## Health — a `pass` needs carried evidence for ledger-tool-only checks
 
