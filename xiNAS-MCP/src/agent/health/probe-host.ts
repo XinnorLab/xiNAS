@@ -19,7 +19,7 @@
  *    step's own fstat never finished) is left too, reported as identity
  *    unknown rather than a replacement claim (F07). A failed or refused
  *    unlink is `cleanup.status: 'failed'`.
- *  - nfsLoopback: PID1-DELEGATED `systemd-mount localhost:<export>` at a
+ *  - nfsLoopback: PID1-DELEGATED `systemd-mount --type=nfs localhost:<export>` at a
  *    per-run `<root>/<run>-<random>/mnt` (the S5 pattern — PID1 performs
  *    the mount so the probe inherits `.mount` unit semantics), list it.
  *    However the mount step ends, `systemd-umount` is always attempted —
@@ -698,7 +698,9 @@ export function createRealProbeHost(deps: RealProbeHostDeps = {}): ProbeHost {
         await step('mount', () =>
           exec(
             'systemd-mount',
-            ['--collect', `localhost:${exportPath}`, mnt],
+            // --type=nfs: without a type systemd-mount treats the source as a
+            // local path and refuses `localhost:<export>` (spec §9.3 step 2).
+            ['--collect', '--type=nfs', `localhost:${exportPath}`, mnt],
             Math.max(1, deadline - clock()),
           ),
         );
