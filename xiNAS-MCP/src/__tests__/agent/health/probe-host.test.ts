@@ -142,7 +142,7 @@ describe('createRealProbeHost.nfsLoopback (spec §9.3)', () => {
     expect(r.artifact).toEqual({ kind: 'mountpoint', path: mnt });
     expect(r.cleanup).toEqual({ status: 'clean' });
     expect(calls).toEqual([
-      ['systemd-mount', '--collect', 'localhost:/srv/data', mnt],
+      ['systemd-mount', '--collect', '--type=nfs', 'localhost:/srv/data', mnt],
       ['systemd-umount', mnt],
     ]);
     expect(readdirSync(root)).toEqual([]);
@@ -275,7 +275,7 @@ describe('validation F05/F06/F07 regressions', () => {
       exec: async (file, args) => {
         called.push(file);
         if (file === 'systemd-mount') {
-          marker = join(args[2]!, 'FOREIGN-DATA');
+          marker = join(args[args.length - 1]!, 'FOREIGN-DATA');
           writeFileSync(marker, 'data visible at the mountpoint');
           throw new Error('mount client timed out after submission');
         }
@@ -295,7 +295,7 @@ describe('validation F05/F06/F07 regressions', () => {
     const host = createRealProbeHost({
       root,
       exec: async (file, args) => {
-        if (file === 'systemd-mount') mounted = args[2]!;
+        if (file === 'systemd-mount') mounted = args[args.length - 1]!;
       },
     });
     const r = await host.nfsLoopback('/export', { runId: '../outside', timeoutMs: 1000 });

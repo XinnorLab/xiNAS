@@ -154,6 +154,15 @@ Requires-Rebuild: xinas_node_build
 
 ### Fixed
 
+- **The NFS loopback health probe mounts again.** `nfs_loopback` and the
+  `nfs.loopback` check of `GET /health?profile=deep` ran `systemd-mount`
+  without `--type=nfs`, which makes it treat `localhost:<export>` as a
+  local path and fail before mounting anything. Every release since
+  v3.1.1 therefore reported `nfs.loopback: critical`, and the whole deep
+  report `critical`, on a healthy node. The probe now passes
+  `--type=nfs`. See
+  `docs/troubleshooting/nfs-loopback-probe-systemd-mount-type.md`.
+
 - **`js-yaml`, `ajv` and `ajv-formats` are runtime dependencies.** The
   api has imported `js-yaml` since S19b (the profile catalog) and now
   needs `ajv` for the report validator; both were listed under
