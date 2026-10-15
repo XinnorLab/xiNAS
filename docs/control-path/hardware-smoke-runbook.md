@@ -141,7 +141,7 @@ On a scratch node (or after `./uninstall.sh`):
   `probe-none-<random>` under `<mountpoint>/.xinas-health` on every
   mounted managed fs (the file appears/disappears; the directory stays,
   root-owned 0700); `nfs.loopback` performs a REAL PID1-delegated
-  `systemd-mount localhost:<export>` at a per-run
+  `systemd-mount --type=nfs localhost:<export>` at a per-run
   `/run/xinas/health-probe/none-<random>/mnt` and unmounts (check
   `systemd-mount --list` empty and the per-run directory gone
   afterwards) — PID1 performs the mount, so this validates the
@@ -160,7 +160,17 @@ On a scratch node (or after `./uninstall.sh`):
   `decision: APPLY` → the same result plus `confirmation_id`; the record
   reads `consumed` with `consumed_task_id: probe:<uuid>`. Run two probes
   concurrently: the second answers `409 CONFLICT` (`PROBE_IN_PROGRESS`).
-- [ ] Validation B01 (2026-09-10): on the installed node,
+  *2026-10-15, xinas-box (`release/3.15` @ `846a4922`; `git diff
+  846a4922 ead19fb8 -- xiNAS-MCP/src/agent/health xiNAS-MCP/src/api/health
+  xiNAS-MCP/src/lib/health` is empty, so the probe code equals
+  `release/3.14` @ `ead19fb8`), over the UDS:* `fs_io` ✅ (`ok: true`,
+  `probe-<run_id>-<random>`, `cleanup: clean`, file gone); two concurrent
+  probes ✅ (`200` + `409 PROBE_IN_PROGRESS`); `nfs_loopback` ❌ — `ok:
+  false` at `stage: mount`, cleanup clean: `systemd-mount` without
+  `--type=nfs` rejects `localhost:<export>`
+  (`docs/troubleshooting/nfs-loopback-probe-systemd-mount-type.md`),
+  fixed with this entry, re-run pending. The MCP half was not run.
+- [x] Validation B01 (2026-09-10): on the installed node,
   `nsenter -t $(systemctl show -p MainPID --value xinas-agent) -m -- findmnt -no TARGET,OPTIONS <mountpoint>`
   shows `ro` (the agent's own namespace) while `findmnt` on the host
   shows `rw`; `POST /health/probe {probe: fs_io}` nevertheless returns
@@ -169,6 +179,14 @@ On a scratch node (or after `./uninstall.sh`):
   `ReadWritePaths=<mountpoint>`, exited 0. `GET /health?profile=deep`
   (operator, `mcp.allow_apply: true`) reports `filesystem.io: ok` on the
   same node — before this fix it was `critical` with `EROFS`.
+  ✅ *2026-10-15, xinas-box (systemd 255):* the agent's namespace shows
+  `/mnt/data` `ro`, the host `rw`; `fs_io` returns `ok: true`,
+  `cleanup: clean`; the transient `xinas-health-fsio-<random>.service`,
+  read while it ran, had `ProtectSystem=strict`,
+  `ReadWritePaths=/mnt/data` and exited 0 (`Result=success`); one unit per
+  probe in the journal; `GET /health?profile=deep` over the UDS reports
+  `filesystem.io: ok` with `coverage_status: complete` (the same report's
+  `nfs.loopback: critical` is the `--type=nfs` defect, not this row).
 - [ ] Validation F05/F08 (2026-09-10): start `GET /health?profile=deep` and,
   while it runs, `POST /health/probe {probe: nfs_loopback}`: the second
   answers `409 CONFLICT` (`PROBE_IN_PROGRESS`). Stop `nfs-server` and run
@@ -203,6 +221,10 @@ On a scratch node (or after `./uninstall.sh`):
   (`probe_budget_exhausted`) without the agent logging a probe.
   `GET /health?profile=quick&run_id=<run_id>` echoes the run id with no
   warning; restart `xinas-api` and repeat: `RUN_UNKNOWN`, still `200`.
+  *2026-10-15, xinas-box, over the UDS:* four `fs_io` probes `200` and the
+  fifth `412 PRECONDITION_FAILED` (`probe_budget_exhausted`,
+  `probes_per_run: 4`) ✅. The `profile=quick` echo and the
+  restart half were not run.
 - [ ] `GET /health/catalog`: `version: "1"`, twenty rows, `HC-11.client-path`
   and the other `no_source: true` rows list no inputs; `xinasctl health
   catalog` and `xinasctl health context` render the same bodies.

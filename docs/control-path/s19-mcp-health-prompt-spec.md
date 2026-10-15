@@ -1010,8 +1010,8 @@ removed, not kept as a fallback.
 > ReadWritePaths=/mnt/data findmnt -no TARGET,OPTIONS /mnt/data`: the
 > mountpoint is `rw` inside the transient unit, `rw` with
 > `ReadWritePaths=/mnt` too, and `ro` without a grant. The full probe
-> path on an installed node is the B01 row of `hardware-smoke-runbook.md`
-> (pending).
+> path on an installed node is the B01 row of `hardware-smoke-runbook.md`,
+> passed on xinas-box on 2026-10-15 (systemd 255.4-1ubuntu8.18).
 
 **`nfs_loopback`**
 
@@ -1026,8 +1026,27 @@ removed, not kept as a fallback.
    agent's pid, reclaimed once when that pid is gone (`ESRCH`). A
    refused lock is a result with `error.stage: 'lock'`.
 2. Mountpoint `/run/xinas/health-probe/<run_id|none>-<random>/mnt`,
-   created 0700; `systemd-mount --collect localhost:<export> <mnt>`
+   created 0700; `systemd-mount --collect --type=nfs localhost:<export> <mnt>`
    bounded by `timeout_s`; `readdir`; `systemd-umount <mnt>`.
+
+   `--type=nfs` is required. Without a type, `systemd-mount` treats the
+   source as a local path and refuses `localhost:<export>` before
+   anything is mounted. Observed on xinas-box on 2026-10-15 (Ubuntu
+   24.04.1, systemd 255.4-1ubuntu8.18): `systemd-mount --collect
+   localhost:/mnt/data <mnt>` exits 1 with `Failed to make path
+   localhost:/mnt/data absolute: No such file or directory`, while the
+   exact command of this step, `systemd-mount --collect --type=nfs
+   localhost:/mnt/data <mnt>`, exits 0 with an NFSv3 `rw` mount, `readdir`
+   lists the export, `systemd-umount <mnt>` exits 0, and `st_dev` of
+   `<mnt>` then equals its parent's. The systemd 255 manual
+   (<https://www.freedesktop.org/software/systemd/man/255/systemd-mount.html>)
+   describes `--type=` only as the file system type to mount and does not
+   state this rule, so the observation is the source. Every release from
+   v3.1.1 (the first with the S7 deep probes) through v3.13.3, and
+   `release/3.14` and `release/3.15` before this fix, ran the command
+   without the type, so the probe and the `nfs.loopback` check of
+   `profile=deep` always failed on a real node
+   (`docs/troubleshooting/nfs-loopback-probe-systemd-mount-type.md`).
 3. After the mount step ends in ANY way other than success (timeout,
    error, killed client) the host still runs `systemd-umount <mnt>`,
    bounded by whatever remains of the run's own deadline plus a 4 s
