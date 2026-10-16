@@ -50,7 +50,7 @@ Rebuild: `Requires-Rebuild: xinas_node_build`
 
 | Id | Question | Why it matters | Addressed to | Needed material |
 |----|----------|----------------|--------------|-----------------|
-| Q-CP-001 | Should the fix also go to 3.13.x as a hotfix? | every shipped release since v3.1.1 reports `nfs.loopback: critical` on `profile=deep` | owner | decision |
+| Q-CP-001 | Should the fix also go to 3.13.x as a hotfix? | every shipped release since v3.1.1 reports `nfs.loopback: critical` on `profile=deep` | owner | **decided 2026-10-16: no hotfix** — ships in 3.14.0; fold it into a 3.13.x release only if one is cut for another reason |
 
 ## Assumptions
 
@@ -60,7 +60,7 @@ Rebuild: `Requires-Rebuild: xinas_node_build`
 
 ## Accepted risks
 
-- none yet
+- 3.13.x hosts keep the false `nfs.loopback: critical` on `profile=deep` until they update to 3.14 (Q-CP-001; owner, 2026-10-16).
 
 ## Reviews
 
@@ -87,13 +87,23 @@ Rebuild: `Requires-Rebuild: xinas_node_build`
 - Implementation review (G5, `implementation-reviewer`): **pass**;
   follow-up applied: a `### Fixed` entry in `CHANGELOG.md`.
 
+- Integration (2026-10-15): #407 merged into `release/3.14` (CI green;
+  the push run on `c28a5429`, which also carries the `3.14.0-rc.1` bump,
+  green); #408 forward-ported it to `release/3.15` (cherry-pick, CI
+  green). Shipped in `v3.14.0-rc.1`.
+- Acceptance on hardware (2026-10-15, xinas-box after a rebuild on
+  `release/3.15` @ `f3a78b8e`, probe code identical to `c28a5429`):
+  `nfs_loopback` returns `ok: true` with `cleanup: clean`, PID1 performs
+  the mount (journal), and `profile=deep` reports `nfs.loopback: ok`.
+  Recorded in `hardware-smoke-runbook.md` §5a. The acceptance criterion
+  of TASK-CP-01-01 is met.
+
 ## Next step
 
-1. CI on the PR into `release/3.14`; merge.
-2. Forward-port the same change to `release/3.15` (a merge of
-   `release/3.14`, or a cherry-pick).
-3. Re-run the `nfs_loopback` and F05/F08 rows on xinas-box after the
-   rebuild.
+1. Owner accepts the result (G7). Known limit: the F05/F08 runbook row is
+   still open (`docs/TODO.md`, "the loopback-probe validation rows are not
+   yet proven on hardware"); it needs a window with no NFS client attached.
+2. (Q-CP-001 decided: no 3.13.x hotfix.)
 
 ## Retrospective (after G7)
 
