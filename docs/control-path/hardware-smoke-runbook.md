@@ -169,7 +169,21 @@ On a scratch node (or after `./uninstall.sh`):
   false` at `stage: mount`, cleanup clean: `systemd-mount` without
   `--type=nfs` rejects `localhost:<export>`
   (`docs/troubleshooting/nfs-loopback-probe-systemd-mount-type.md`),
-  fixed with this entry, re-run pending. The MCP half was not run.
+  fixed by #407 (`release/3.14`) and #408 (`release/3.15`). The MCP half
+  was not run.
+  *Re-run 2026-10-15, after the fix (xinas-box fast-forwarded to
+  `release/3.15` @ `f3a78b8e`, `npm ci && npm run build`, `xinas-api` and
+  `xinas-agent` restarted; `git diff f3a78b8e c28a5429 -- xiNAS-MCP/src/agent/health
+  xiNAS-MCP/src/api/health xiNAS-MCP/src/lib/health` is empty, so this is
+  the `v3.14.0-rc.1` probe code):* `nfs_loopback` on share `mnt/data` ✅
+  — `200`, `ok: true`, `cleanup: clean`, no mount and no per-run
+  directory left; the journal shows `systemd[1]` mounting, mounted,
+  unmounting and deactivating the per-run `.mount` unit, so PID1 performs
+  the mount. `fs_io` ✅ again. `GET /health?profile=deep`:
+  `nfs.loopback: ok`, `filesystem.io: ok`, `coverage_status: complete`;
+  the report is `degraded` only from `network.rdma-readiness`,
+  `network.rdma-live` and `tuning.sysctl`, which read the same before the
+  fix.
 - [x] Validation B01 (2026-09-10): on the installed node,
   `nsenter -t $(systemctl show -p MainPID --value xinas-agent) -m -- findmnt -no TARGET,OPTIONS <mountpoint>`
   shows `ro` (the agent's own namespace) while `findmnt` on the host
@@ -193,6 +207,13 @@ On a scratch node (or after `./uninstall.sh`):
   `POST /health/probe {probe: nfs_loopback}`: `ok: false`, the per-run
   directory under `/run/xinas/health-probe/` is gone or reported under
   `cleanup.detail`, and nothing under the export path changed.
+  *2026-10-15, xinas-box, after the `--type=nfs` fix:* the first half was
+  not reproduced — in 20 attempts the `nfs_loopback` request never
+  arrived inside the deep run's probe phase (every answer `200`), so no
+  `409` was observed here; two concurrent probes do answer `409` (the
+  row above). The second half was not run: an NFS client
+  (192.168.65.225) was connected, and stopping `nfs-server` would cut it
+  off.
 - [ ] S19b prompt, from a real MCP client (Claude Desktop / Inspector) on
   both eras: `server/discover` (modern) and `initialize` (legacy)
   advertise `prompts: { listChanged: false }`; `prompts/list` shows
