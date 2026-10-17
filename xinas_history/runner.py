@@ -141,6 +141,7 @@ class TransactionalRunner:
         target_resources: list[str] | None = None,
         diff_summary: str | None = None,
         skip_preflight: bool = False,
+        expected_state: dict | None = None,
     ) -> RunResult:
         """Execute a configuration change with full transactional guarantees.
 
@@ -155,6 +156,11 @@ class TransactionalRunner:
             target_resources: Resource names affected (for preflight).
             diff_summary: Human-readable summary of the change.
             skip_preflight: Skip preflight validation (for emergency ops).
+            expected_state: Expected post-change runtime state (RAID levels,
+                mounts, exports, services) passed to
+                :meth:`PostApplyValidator.validate` (specs.md §13.1).
+                ``None`` degrades post-apply validation to the blanket
+                nfs-server/xiraid liveness check only.
 
         Returns:
             RunResult with operation outcome.
@@ -265,6 +271,7 @@ class TransactionalRunner:
                     )
                     post_result = await self._post_apply.validate(
                         target_manifest=target_manifest,
+                        expected_state=expected_state,
                     )
                     result.validation = post_result.to_dict()
                 except Exception as exc:
@@ -410,6 +417,7 @@ class TransactionalRunner:
         target_resources: list[str] | None = None,
         diff_summary: str | None = None,
         progress_cb: Callable[[str], None] | None = None,
+        expected_state: dict | None = None,
     ) -> RunResult:
         """Convenience: execute an Ansible playbook as a transactional operation.
 
@@ -439,6 +447,7 @@ class TransactionalRunner:
             extra_vars=extra_vars,
             target_resources=target_resources,
             diff_summary=diff_summary,
+            expected_state=expected_state,
         )
         if result_holder.get("output"):
             run_result.output = result_holder["output"]
@@ -563,10 +572,37 @@ class TransactionalRunner:
         diff). Default uses the runtime collector; tests override."""
         return await RuntimeCollector(self._inspector).collect_checksums()
 
-    async def _validate_restore(self) -> bool:
-        """Post-restore validation. Best-effort True in this slice (deep link/
-        service validation is a follow-on); tests force False to exercise the
-        file-level rollback."""
+    async def _validate_restore(
+        self,
+        restore_set: list[str],
+        delete_set: list[str],
+        target_checksums: dict,
+    ) -> bool:
+        """Post-restore validation (specs.md §13.2): confirm the reconverge
+        step actually produced the expected state for the restored files --
+        re-checksum the LIVE managed files AFTER reconverging and compare
+        against the target snapshot's checksums, rather than trusting a
+        zero exit code from the reconverge commands (a reconverge command
+        can exit 0 while leaving the system in a state that does not match
+        what was restored)."""
+        current = (await self._collect_current_checksums()).to_dict()
+        for name in restore_set:
+            if current.get(name) != target_checksums.get(name):
+                logger.warning(
+                    "Post-restore validation: %s checksum mismatch after "
+                    "reconverge (expected %s, got %s)",
+                    name,
+                    target_checksums.get(name),
+                    current.get(name),
+                )
+                return False
+        for name in delete_set:
+            if current.get(name):
+                logger.warning(
+                    "Post-restore validation: %s still present after delete",
+                    name,
+                )
+                return False
         return True
 
     def _write_system_file(self, name: str, content: bytes) -> None:
@@ -692,7 +728,11 @@ class TransactionalRunner:
 
             ok = await self._reconverge(change_set)
             if ok:
-                ok = await self._validate_restore()
+                ok = await self._validate_restore(
+                    restore_set=restore_set,
+                    delete_set=delete_set,
+                    target_checksums=target_checksums,
+                )
 
             if not ok:
                 rb_ok = await self._restore_rollback(pre.id, change_set)

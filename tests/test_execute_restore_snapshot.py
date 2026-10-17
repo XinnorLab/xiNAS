@@ -182,7 +182,7 @@ def test_restore_validation_fail_does_file_level_rollback(tmp_path):
         target_checksums={"etc_exports": "sha256:TARGET"},
     )
 
-    async def _fail() -> bool:
+    async def _fail(**kwargs) -> bool:
         return False
 
     runner._validate_restore = _fail  # type: ignore[attr-defined]
@@ -276,7 +276,7 @@ def test_rollback_recreates_deleted_file(tmp_path):
     # The fake collector always returns b"EPHEMERAL-LIVE" for etc_exports.
     (live_dir / "exports").write_bytes(b"LIVE-BYTES")
 
-    async def _fail() -> bool:
+    async def _fail(**kwargs) -> bool:
         return False
 
     runner._validate_restore = _fail  # type: ignore[attr-defined]
@@ -286,3 +286,33 @@ def test_rollback_recreates_deleted_file(tmp_path):
     assert result.rollback_performed is True
     # The deleted file must be RECREATED from the pre-change ephemeral bytes.
     assert (live_dir / "exports").read_bytes() == b"EPHEMERAL-LIVE"
+
+
+# ---------------------------------------------------------------------------
+# T4 (F-runner-257) — real post-restore validation (specs.md §13.2)
+# ---------------------------------------------------------------------------
+
+
+def test_restore_validation_catches_reconverge_that_lied(tmp_path):
+    """Reconverge commands all exit 0, but the live re-checksum taken AFTER
+    reconverging still does not match the target -- the real post-restore
+    validator (specs.md §13.2) must catch this and roll back; the old
+    always-True stub would have reported success."""
+    runner, store, target_id, live_dir, commands = _build(
+        tmp_path,
+        target_system={"etc_exports": b"TARGET-EXPORTS"},
+        target_checksums={"etc_exports": "sha256:TARGET"},
+    )
+
+    # Live checksum NEVER updates to TARGET, no matter how many times it is
+    # collected -- simulates a reconverge that exits 0 without converging.
+    async def _live_checksums() -> Checksums:
+        return Checksums(etc_exports="sha256:STILL-STALE")
+
+    runner._collect_current_checksums = _live_checksums  # type: ignore[attr-defined]
+
+    result = asyncio.run(runner.execute_restore_snapshot(target_id, source="api", reason="x"))
+
+    assert result.success is False
+    assert result.rollback_performed is True
+    assert "validation failed" in (result.error or "")
