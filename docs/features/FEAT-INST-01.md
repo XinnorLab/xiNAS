@@ -4,7 +4,7 @@ Area: INST (`docs/Installer/`)
 Profile: medium (two areas — INST and CLIENT — after Q-INST-001)
 Owner: Sergey Platonov
 Approvers: spec and plan Sergey Platonov; acceptance Sergey Platonov
-Current gate: G5 Task (server part); G3 Spec (client part)
+Current gate: G6 Feature (server part); G3 Spec (client part)
 Spec status: approved (server part, docs/Installer/spec.md); client part not yet written
 Branch: fix/installer-virtual-kernel-flavour (off release/3.14 @ `dd979de9`)
 
@@ -99,6 +99,40 @@ Rebuild: decided in Q-INST-003 (see Approvals)
   four fixed; the §4.2 loop was run on `xinas-rc-vm` and resolved
   `macsec` for both installed kernels.
 - Spec review 3 (2026-10-19, same reviewer): **ready**.
+- Implementation review (G5, 2026-10-19, `implementation-reviewer`):
+  spec compliance **pass**, code quality **fix needed** — three test
+  lines over ruff's 100 columns; `dpkg-query` exiting 1 with no versioned
+  image package would fail the kernel list under `pipefail`; the hold test
+  re-implemented the selection instead of rendering it; no CHANGELOG
+  entry; the failure message overstated its cause; `-dbgsym` packages
+  would yield a bogus K. All fixed. The `-dbgsym` exclusion is a
+  post-approval clarification of spec §3.2 (*Which kernels*) and of the
+  §4.2 loop — it only narrows K by debug-symbol packages, which are never
+  bootable kernels; recorded here for the owner.
+
+## Task results
+
+- TASK-INST-01-01 (commit `6cece3e1`) and TASK-INST-01-02, 2026-10-19:
+  - Tests first: the new tests failed 32/33 before the role changes.
+    After: `test_common_kernel_hold.py`, `test_doca_ofed_macsec_preflight.py`,
+    `test_common_avx_preflight.py`, `test_doca_ofed_handler_order.py` —
+    47 passed (pytest on `xinas-rc-vm`, files copied with LF endings).
+  - `ruff format --check` and `ruff check` on the two test files: clean.
+    `yamllint -c .yamllint.yml` on both roles: clean. `ansible-lint
+    collection/roles/` with `community.general` and `ansible.posix`:
+    0 failures, 0 warnings (production profile passed).
+  - On hardware (`xinas-rc-vm`, Ubuntu 24.04.5 cloud image returned to
+    plain virtual flavour — no `linux-image-generic`, no
+    `linux-modules-extra-*` for either installed kernel; ansible-core
+    2.16.3): `--tags kernel,deps` held `linux-image-virtual`, found both
+    kernels without `macsec`, installed `linux-modules-extra` for
+    `6.8.0-142` and `6.8.0-147`, re-check passed, `failed=0`; a second
+    run `changed=0`; with no kernel metapackage installed the hold was
+    skipped and the warning printed, `failed=0`.
+  - Not run: the full pytest suite, the TypeScript suites (no change
+    there); the "no apt candidate" failure path on a host (covered by
+    the structural test only); a fresh install on an unmodified cloud
+    image (needs a new VM and a licence for its hardware key).
 
 ## Open questions
 

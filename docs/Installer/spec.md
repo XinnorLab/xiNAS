@@ -649,7 +649,8 @@ Effective values listed below come from each role's `defaults/main.yml`, overrid
     `linux-image-unsigned-` in each installed name that contains a
     kernel version (`[0-9]+\.[0-9]+\.[0-9]+-[0-9]+`), for example
     `6.8.0-147-generic` from `linux-image-6.8.0-147-generic`.
-    Metapackage names (`linux-image-virtual`) never yield a K. A newer
+    Metapackage names (`linux-image-virtual`) and debug-symbol packages
+    (names ending in `-dbgsym`) never yield a K. A newer
     kernel already installed and waiting for the reboot this role
     requires is therefore included.
   - **Per kernel K.** If `modinfo -k K macsec` fails, the role asks apt
@@ -947,7 +948,7 @@ lsmod | grep -E '^(mlx5_core|mlx5_ib|rpcrdma|svcrdma|xprtrdma)'
 dpkg -l | grep -E 'doca-all|mlnx-fw-updater|mlnx-nfsrdma-dkms'
 # macsec resolves for every installed kernel — the same set as §3.2 (mlx5_ib needs it)
 for k in $(dpkg-query -W -f='${db:Status-Abbrev} ${Package}\n' 'linux-image-*' \
-    | awk '$1 ~ /^[ih]i/ {print $2}' \
+    | awk '$1 ~ /^[ih]i/ && $2 !~ /-dbgsym$/ {print $2}' \
     | sed -nE 's/^linux-image-(unsigned-)?([0-9]+\.[0-9]+\.[0-9]+-[0-9]+.*)$/\2/p' | sort -u); do
   modinfo -k "$k" -n macsec
 done

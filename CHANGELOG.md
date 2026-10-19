@@ -10,6 +10,7 @@ supported source for installing and updating xiNAS.
 
 Requires-Rebuild: xinas_node_build
 Requires-Rebuild: common
+Requires-Rebuild: doca_ofed
 
 ### Added
 
@@ -164,6 +165,16 @@ Requires-Rebuild: common
   update, which also completes the hold where an HWE metapackage sits
   beside `linux-image-generic`. See
   `docs/troubleshooting/installer-virtual-kernel-flavour.md`.
+
+- **DOCA-OFED installs on a cloud image.** DOCA-Host's `mlx5_ib` needs
+  the kernel's `macsec` module, which Ubuntu ships in
+  `linux-modules-extra-<kernel>` — a package the virtual kernel
+  metapackage does not pull in — so `openibd` failed with `Unknown symbol
+  macsec_netdev_is_offloaded`. Before installing DOCA, `doca_ofed` now
+  checks `macsec` for the running kernel and every installed kernel, adds
+  `linux-modules-extra-<kernel>` where apt has it, and stops with a clear
+  message, naming the kernel, where it cannot. On generic-flavour hosts
+  the check changes nothing.
 
 - **The NFS loopback health probe mounts again.** `nfs_loopback` and the
   `nfs.loopback` check of `GET /health?profile=deep` ran `systemd-mount`
