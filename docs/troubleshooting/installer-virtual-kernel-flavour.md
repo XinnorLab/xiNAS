@@ -5,7 +5,7 @@ an Ubuntu 24.04.5 cloud image (runbook §2).
 **Affects:** `v3.13.3` and `release/3.14` (the tasks below are unchanged
 between them). Any host whose kernel metapackage is `linux-virtual` /
 `linux-image-virtual` instead of `linux-generic` / `linux-image-generic`
-— every Ubuntu cloud image, and minimized server installs.
+— every Ubuntu cloud image (checked on the 24.04.5 `noble-server-cloudimg-amd64` image).
 **Status:** fix in progress (FEAT-INST-01). Workaround below.
 
 ## Symptoms
