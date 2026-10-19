@@ -9,6 +9,7 @@ supported source for installing and updating xiNAS.
 ## [Unreleased]
 
 Requires-Rebuild: xinas_node_build
+Requires-Rebuild: common
 
 ### Added
 
@@ -153,6 +154,16 @@ Requires-Rebuild: xinas_node_build
   spec now cites a fixture or a test per row.
 
 ### Fixed
+
+- **The kernel hold no longer stops the install on a cloud image.** The
+  `common` role held a fixed `linux-image-generic`; an Ubuntu cloud image
+  carries `linux-image-virtual` instead, so the hold failed and the
+  install stopped in the first role. The role now holds every installed
+  kernel image metapackage it finds (generic, virtual, HWE, `-edge`, …)
+  and only warns when there is none. Existing hosts re-run `common` on
+  update, which also completes the hold where an HWE metapackage sits
+  beside `linux-image-generic`. See
+  `docs/troubleshooting/installer-virtual-kernel-flavour.md`.
 
 - **The NFS loopback health probe mounts again.** `nfs_loopback` and the
   `nfs.loopback` check of `GET /health?profile=deep` ran `systemd-mount`
