@@ -1060,30 +1060,34 @@ model would test nothing.
 release (`ac-NN-<host>-<n>.json`), produced by the runbook procedure and
 committed with the release notes; the runner already accepts them.
 
-## Health — the loopback-probe validation rows are not yet proven on hardware
+## Health — a loopback probe during a deep run is not proven to answer 409 on hardware
 
 *Deferred 2026-09-10, from the S19 validation remediation
 (`fix/s19-validation-findings`); spec §9.3 "Execution boundary", B01.
-Narrowed 2026-10-15.*
+Narrowed 2026-10-15 and 2026-10-19.*
 
-**What is missing.** The F05/F08 row of `hardware-smoke-runbook.md` §5a
-(a loopback probe during `profile=deep` answers `409`; with `nfs-server`
-stopped, `nfs_loopback` fails cleanly and leaves nothing behind). The
-`fs_io` delegation itself is proven: the B01 row passed on xinas-box on
-2026-10-15.
+**What is missing.** The first half of the F05/F08 row of
+`hardware-smoke-runbook.md` §5a: a `POST /health/probe {probe:
+nfs_loopback}` sent while `GET /health?profile=deep` runs answers `409
+CONFLICT` (`PROBE_IN_PROGRESS`). Everything else in the row is proven:
+B01 passed on xinas-box (2026-10-15), and the second half (with
+`nfs-server` stopped the probe fails cleanly and changes nothing) passed
+on `xinas-rc-vm` (2026-10-19).
 
-**What the code does instead.** The same code as before; the row could not
-pass on hardware because `nfs_loopback` never mounted
-(`docs/troubleshooting/nfs-loopback-probe-systemd-mount-type.md`, fixed
-by passing `--type=nfs`).
+**What the code does instead.** The deep run and the probe route share
+the agent's probe lock, and two concurrent probes do answer `409` on
+hardware. The first half could not be produced from outside: in 45
+attempts over REST on two nodes the probe request never arrived inside
+the deep run's short probe phase.
 
-**Why it was cut.** No installed 3.14 node existed on 2026-09-10; on
-2026-10-15 the probe it depends on was broken, and stopping `nfs-server`
-on xinas-box would have cut off a connected client.
+**Why it was cut.** Timing two REST calls cannot make them overlap
+reliably, and no hook exists to hold a deep run inside its probe phase.
 
-**Done looks like.** The F05/F08 row ticked on a node running the
-`--type=nfs` fix, with no NFS client attached during the `nfs-server`
-stop, and this entry deleted.
+**Done looks like.** Either a deterministic check that holds the lock
+during a deep run (an e2e test against the real agent with a slowed
+probe, or a test-only delay) and sees the second caller refused, or the
+owner accepting the concurrent-probe `409` plus the unit tests as the
+proof; then this entry deleted.
 
 ## Health — a `pass` needs carried evidence for ledger-tool-only checks
 
