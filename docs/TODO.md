@@ -21,6 +21,52 @@ deferred and the change that deferred it.
 
 ---
 
+## Installer — the uninstaller does not release the kernel hold
+
+*Deferred 2026-10-19, from FEAT-INST-01 (`fix/installer-virtual-kernel-flavour`).*
+
+**What is missing.** `uninstall.sh` leaves every kernel image metapackage
+the `common` role set to `hold` (`docs/Installer/spec.md` §3.1) held, so a
+host that drops xiNAS keeps its kernel pinned until an operator runs
+`apt-mark unhold`.
+
+**What the code does instead.** The hold stays; `docs/Installer/spec.md`
+§6 lists it with the other `common` changes the uninstaller does not
+revert. Before FEAT-INST-01 the same was true of the single
+`linux-image-generic` hold.
+
+**Why it was cut.** The role does not record which holds it set and
+which an operator set before it; releasing a hold the operator wanted is
+worse than leaving one xiNAS set.
+
+**What done looks like.** The role records the packages it held (for
+example in `/var/lib/xinas/`), and the uninstaller's `common` phase
+releases exactly those, with an uninstall-spec row and a test.
+
+## client_repo — the client DOCA role does not check for the macsec module
+
+*Deferred 2026-10-19, from FEAT-INST-01 (`fix/installer-virtual-kernel-flavour`),
+pending the owner's answer to Q-INST-001.*
+
+**What is missing.** The server `doca_ofed` role now checks that every
+installed kernel has the `macsec` module before installing DOCA-Host and
+adds `linux-modules-extra-<kernel>` where it is missing
+(`docs/Installer/spec.md` §3.2). The client role in
+`client_repo/collection/roles/doca_ofed/` has no such check.
+
+**What the code does instead.** It installs DOCA's `mlx5_ib` when it
+detects a Mellanox NIC; on a client whose kernel lacks `macsec` (a
+virtual-flavour cloud image), `openibd` would fail the way it did on the
+server.
+
+**Why it was cut.** The client is a separate spec area
+(`docs/Client/client-setup-spec.md`) and the failure was observed on the
+server only.
+
+**What done looks like.** The same check in the client role, the client
+spec updated, and a client install on a virtual-flavour host with a
+Mellanox NIC (or VF) passing.
+
 ## MCP — S17 incomplete-source observations are logged, not journaled
 
 *Deferred 2026-09-08, from the S15–S18 validation remediation
