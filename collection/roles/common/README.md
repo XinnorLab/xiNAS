@@ -7,7 +7,10 @@ Baseline configuration for all storage nodes. Installs essential packages, confi
 * **`common_packages`** – list of baseline packages to install.
 * **`common_sysctl`** – dictionary of sysctl parameters. Written to
   `/etc/sysctl.d/80-xinas-common.conf`; the role never writes to the shared
-  `/etc/sysctl.conf` and strips the keys older versions left there. See
+  `/etc/sysctl.conf` and strips the keys older versions left there. The task
+  writes the file with `reload: false`; the `Reload sysctl` handler
+  (`sysctl -e --system`) applies it, so a re-run never drops `perf_tuning`'s
+  live values. See
   [docs/Installer/spec.md](../../../docs/Installer/spec.md) §3.1.
 * **`chrony_service_name`** – name of the chrony service to manage (default `chrony`).
 * **`chrony_package_name`** – name of the chrony package to install (default `chrony`).
@@ -20,6 +23,20 @@ Baseline configuration for all storage nodes. Installs essential packages, confi
 * **`xinas_cpuinfo_path`** – file the AVX preflight reads the `flags` line
   from (default `/proc/cpuinfo`; override only to exercise the check
   against a fixture).
+* **`common_unattended_reboot`** – let unattended-upgrades reboot the node
+  on its own when an update leaves `/var/run/reboot-required` (default
+  `false`). A reboot drops every NFS client, so updates install but the
+  reboot waits for the operator unless this is turned on. See
+  [docs/Installer/spec.md](../../../docs/Installer/spec.md) §3.1.
+* **`common_unattended_reboot_time`** – 24-hour `HH:MM` at which that
+  reboot happens; a time already past that day means the next day
+  (default `""`, meaning immediately). Quote it in YAML
+  (`"22:00"`): unquoted, `10:00`–`23:59` load as integers. While
+  `common_unattended_reboot` is on, anything non-empty that is not a quoted
+  `HH:MM` string fails the play; while it is off the value is ignored.
+
+Every task in the role carries the `common` tag, so `--tags common` (and
+a `Requires-Rebuild: common` trailer) re-runs the whole role.
 
 The role also carries the **existing-install preflight**, which takes no
 variable of its own: when `xiraid_skip_install` is true it verifies that

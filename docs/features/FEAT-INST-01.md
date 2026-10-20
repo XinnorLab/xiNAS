@@ -198,6 +198,20 @@ Rebuild: none — clients do not use the server update flow (§5.3)
 |----|------------|-------|------------|
 | A-1 | Ubuntu 22.04 cloud images have the same metapackage split as 24.04 | owner | a 22.04 cloud-image install, or accepted risk |
 
+## Known limits (found later)
+
+- 2026-10-20, from the FEAT-INST-02 spec review: the Q-INST-003 trailers
+  did not run on update as decided. `playbooks/site.yml` lists every role
+  without tags, and at the time no task in `common` or `doca_ofed`
+  carried the role's name as a tag, so `ansible-playbook
+  playbooks/site.yml --tags common,doca_ofed` (what the update flow
+  runs) matched no task in either role.
+  - `common`: fixed in FEAT-INST-02, which tags every task `common`.
+  - `doca_ofed`: still a no-op. The fix is tracked in `docs/TODO.md`
+    ("roles that do not answer to their own tag"). `CHANGELOG.md` keeps
+    `Requires-Rebuild: doca_ofed` on purpose, so that the trailer takes
+    effect if that fix lands before 3.14.0.
+
 ## Accepted risks
 
 - none yet

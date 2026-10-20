@@ -119,15 +119,28 @@ Runs only the `doca_ofed` role. Useful when re-installing/updating the NVIDIA DO
 
 ### 2.4 Tag-based partial runs
 
-Every role registers a tag matching its name. Typical re-runs:
+A role that tags its tasks with its own name can be re-run on its own.
+Typical re-runs:
 
 ```bash
 ansible-playbook playbooks/site.yml --tags nfs_server
-ansible-playbook playbooks/site.yml --tags perf_tuning
-ansible-playbook playbooks/site.yml --tags net_controllers
+ansible-playbook playbooks/site.yml --tags common
 ```
 
 The TUI's update flow uses these tags via the `Requires-Rebuild:` commit trailer (see [CLAUDE.md](../../CLAUDE.md)).
+
+**Not yet true for every role.** Ansible does not tag a role's tasks with
+the role's name, and `site.yml` lists every role without `tags:`, so a
+role answers to `--tags <role>` only when its own tasks carry that tag.
+As of 3.14.0-rc.1, the tasks of `doca_ofed`, `net_controllers`,
+`xiraid_classic`, `nvme_namespace`, `xinas_history` and `perf_tuning` carry
+no tag with the role's name. For those roles, `--tags <role>` and a
+`Requires-Rebuild: <role>` trailer run nothing. `common` carries its tag
+from 3.14.0 (§3.1 *Role tag*). This was found by reading the task files,
+not by a `--list-tasks` run. Whether every task of the other roles carries
+its tag was not checked. The fix and a test that pins the tag on every
+task are tracked in `docs/TODO.md`. Until that lands, name a topic tag
+the role does carry, or `all`, in a trailer for one of these roles.
 
 ### 2.5 Playbook output presentation (status ticker)
 
@@ -469,6 +482,30 @@ Effective values listed below come from each role's `defaults/main.yml`, overrid
 
 [defaults](../../collection/roles/common/defaults/main.yml) · [tasks](../../collection/roles/common/tasks/main.yml)
 
+- **Role tag.** Every task in the role carries the `common` tag next to
+  its topic tag (`packages`, `kernel`, `security`, …), so
+  `ansible-playbook playbooks/site.yml --tags common` runs the whole role.
+  This is what a `Requires-Rebuild: common` trailer runs on an updating
+  host (§2.4). `site.yml` lists the role without tags, and Ansible does not
+  tag a role's tasks with the role's name by itself. Until 3.14.0-rc.1 no
+  task carried the tag, so that trailer ran nothing. A re-run converges to
+  the role's settings, the same as a full `site.yml` run does, so on an
+  updating host it resets:
+  - the hostname, to `xinas_hostname` or `xiNAS-<HWKEY>`. A hostname set
+    with `configure_hostname.sh`, which the TUI's Set Hostname item runs,
+    is kept, because that script writes `xinas_hostname` into
+    `20-local.yml`. One set with `hostnamectl` alone is not kept;
+  - the timezone, to `common_timezone` (default `Europe/Amsterdam`). No
+    menu writes that key, so a timezone set with `timedatectl` alone is
+    reset;
+  - the apt configuration this section owns (the kernel hold,
+    `20auto-upgrades`).
+
+  Everything else is idempotent. The sysctl task does not touch live
+  values over an unchanged drop-in (*`common` does not reload from the
+  task*, below). It is not yet observed how many tasks a second
+  `--tags common` run reports as changed on a fully deployed host (card
+  FEAT-INST-02 hardware step).
 - **AVX preflight (first task, before any `apt` call).** xiRAID requires
   an x86_64 CPU with AVX — vendor requirement: [xiRAID Classic 4.1.0
   Hardware Requirements](https://xinnor.io/docs/xiRAID-4.1.0/E/en/SR/hardware_requirements.html)
@@ -551,7 +588,109 @@ Effective values listed below come from each role's `defaults/main.yml`, overrid
   images or install media carry was not checked, and neither the hold
   nor the `doca_ofed` module check (§3.2) depends on it. See
   `docs/troubleshooting/installer-virtual-kernel-flavour.md`.
-- Unattended-upgrades config deployed to `/etc/apt/apt.conf.d/20auto-upgrades`.
+- Unattended upgrades: the role renders `unattended-upgrades.conf.j2` to
+  `/etc/apt/apt.conf.d/20auto-upgrades` (`root:root`, `0644`, tags
+  `security` and `common`). With the defaults, its non-comment lines are:
+
+  ```text
+  APT::Periodic::Update-Package-Lists "1";
+  APT::Periodic::Unattended-Upgrade "1";
+  Unattended-Upgrade::Automatic-Reboot "false";
+  ```
+
+  - **Updates install; the node does not reboot itself.**
+    `common_unattended_reboot` (default `false`) sets
+    `Unattended-Upgrade::Automatic-Reboot`. With `false`, the daily
+    unattended run still installs what its configured origins allow, and
+    a `/var/run/reboot-required` it leaves behind stays there until an
+    operator reboots. The reason is the storage service: a reboot the node
+    starts on its own drops every NFS / NFS-RDMA client without warning.
+    **[observed]** 2026-10-20, `xinas-rc-vm`, v3.14.0-rc.1, with the
+    earlier hard-coded `Automatic-Reboot "true"`: unattended-upgrades
+    upgraded `git` at 06:09, logged `WARNING Found
+    /var/run/reboot-required, rebooting` in
+    `/var/log/unattended-upgrades/unattended-upgrades.log`, and the node
+    rebooted at 06:10. Which package had requested the reboot was not
+    recorded. The kernel hold above does not prevent this, because any
+    package can request a reboot, not only a kernel.
+  - **Opting in.** `common_unattended_reboot: true` renders `"true"`.
+    unattended-upgrades then reboots after a run that leaves
+    `/var/run/reboot-required` present, whether or not users are logged
+    in: xiNAS does not set `Unattended-Upgrade::Automatic-Reboot-WithUsers`,
+    and its default is true. The knob is read with Ansible's
+    [`bool` filter](https://docs.ansible.com/ansible/latest/collections/ansible/builtin/bool_filter.html):
+    `true`, `yes`, `on` and `1`, in any case, turn the reboot on. Any
+    other value, a typo included, leaves it off.
+    `common_unattended_reboot_time` (default `""`) picks the time. When it
+    is non-empty and the reboot is on, the file gains
+    `Unattended-Upgrade::Automatic-Reboot-Time "<value>";`. When it is
+    empty, the line is omitted and unattended-upgrades' own default, `now`,
+    applies. When the reboot is off, the time is not rendered and not
+    checked, whatever its value.
+  - **When the reboot happens.** apt's `apt-daily-upgrade.timer` starts
+    the unattended run daily at 06:00, with a random delay of up to 60
+    minutes (`OnCalendar=*-*-* 6:00`, `RandomizedDelaySec=60m`, in
+    [apt 2.7.14 `debian/apt-daily-upgrade.timer`](https://salsa.debian.org/apt-team/apt/-/blob/2.7.14/debian/apt-daily-upgrade.timer)).
+    The 06:09 run above fits that window. Whether Ubuntu's package changes
+    the unit was not checked. When the `HH:MM` given to `shutdown` has
+    already passed for the day, `shutdown` schedules the reboot for that
+    time on the next day: it adds a day until the time is in the future
+    (`parse_shutdown_time_spec` in
+    [systemd v255 `src/systemctl/systemctl-sysv-compat.c`](https://github.com/systemd/systemd/blob/v255/src/systemctl/systemctl-sysv-compat.c)).
+    So with `02:00`, an update installed around 06:00 reboots the node at
+    02:00 the following night. `shutdown -c` cancels a reboot that is
+    already scheduled
+    ([shutdown(8), noble](https://manpages.ubuntu.com/manpages/noble/en/man8/shutdown.8.html)).
+  - **Time format.** "Empty" means `""` or no value (YAML `null`). While the reboot is on, a non-empty
+    `common_unattended_reboot_time` must be a **string** that matches
+    `^([01][0-9]|2[0-3]):[0-5][0-9]$` (24-hour `HH:MM`). Before it renders
+    the file, the role asserts both (`is string`, then the regex) and fails
+    the play when either fails. The emptiness test is `not in ["", None]`, never `length`, which raises on an integer. The message names the variable and says
+    to quote the value. The assert carries the `security` and `common`
+    tags, like the template task. In YAML the value must be quoted
+    (`common_unattended_reboot_time: "22:00"`). Ansible reads
+    `group_vars` with PyYAML, which follows YAML 1.1, and YAML 1.1 reads
+    an unquoted `22:00` as the base-60 integer `1320`. `09:59` and earlier
+    stay strings because of the leading zero. This is inferred from the
+    [YAML 1.1 int type](https://yaml.org/type/int.html), which lists
+    base 60, and was not observed on a node. `shutdown`'s other forms
+    (`+m`, `now`) are not accepted, because an empty value already means
+    `now`.
+  - **Vendor behaviour.** In unattended-upgrades 2.9.1, `Automatic-Reboot`
+    defaults to false, `Automatic-Reboot-WithUsers` to true and
+    `Automatic-Reboot-Time` to `"now"`. The reboot happens when
+    `/var/run/reboot-required` exists, and it runs
+    `["/sbin/shutdown", "-r", <Automatic-Reboot-Time>]`. Source:
+    [unattended-upgrade @ 2.9.1](https://github.com/mvo5/unattended-upgrades/blob/2.9.1/unattended-upgrade).
+    The same tag's
+    [50unattended-upgrades.Ubuntu](https://github.com/mvo5/unattended-upgrades/blob/2.9.1/data/50unattended-upgrades.Ubuntu)
+    carries all three keys commented out. Upstream `master`, read on
+    2026-10-20, has the same defaults. Ubuntu 24.04 ships
+    `2.9.1+nmu4ubuntu1` and 22.04 ships `2.8ubuntu1`
+    ([Launchpad](https://launchpad.net/ubuntu/+source/unattended-upgrades),
+    read 2026-10-20). Neither Ubuntu's changes on top of 2.9.1 nor the
+    2.8 source were checked.
+  - **Where to set it.** No config editor writes these keys. Set them in
+    the local overlay (`playbooks/group_vars/all/20-local.yml`, §1.0) or
+    with `-e`. They take effect on the next `common` run. An updating host
+    re-runs `common` through the `Requires-Rebuild: common` trailer
+    (§3.1 *Role tag*), which rewrites an existing `"true"` file to
+    `"false"`.
+  - **Precedence limit.** apt reads the files in `apt.conf.d` in
+    alphanumeric ascending order, and an option is overridden by assigning
+    it a new value
+    ([apt.conf(5), noble](https://manpages.ubuntu.com/manpages/noble/en/man5/apt.conf.5.html)).
+    It follows, by inference rather than observation, that a value set in
+    a file sorting after `20auto-upgrades` wins over the knob. An
+    uncommented `Automatic-Reboot` line in `50unattended-upgrades` is the
+    usual example. xiNAS does not edit `50unattended-upgrades`.
+    `apt-config dump` shows the effective value (§4.1).
+  - **A pending reboot stays pending.** xiNAS does not yet report
+    `/var/run/reboot-required` in the TUI or the health engine
+    (`docs/TODO.md`). Until it does, check the file by hand
+    (`ls /var/run/reboot-required*`). The `motd` role does not disable
+    Ubuntu's `98-reboot-required` login script, but whether that notice
+    shows on an xiNAS node was not checked.
 - Sysctl set (persisted): `net.core.rmem_max=268435456`,
   `net.core.wmem_max=268435456`, `vm.swappiness=10` — written to the
   xiNAS-owned drop-in **`/etc/sysctl.d/80-xinas-common.conf`**.
@@ -566,23 +705,87 @@ Effective values listed below come from each role's `defaults/main.yml`, overrid
     aborted `common` on any host where the `sunrpc` module was not loaded
     (`sysctl: cannot stat /proc/sys/sunrpc/tcp_max_slot_table_entries`).
     `perf_tuning` tolerated its own key via `ignoreerrors: yes`; `common`
-    did not. Each role now reloads only the file it owns.
+    did not. `perf_tuning` reloads only the files it owns; `common` applies
+    its file through the handler (next bullet).
+  - **`common` does not reload from the task.** Its sysctl task writes
+    the drop-in with `reload: false`, set explicitly because the module's
+    default is `true`. The role's `Reload sysctl` handler
+    (`sysctl -e --system`) applies the values. It is notified when the file
+    changes, and it applies every drop-in in `sysctl --system` order, so
+    `perf_tuning`'s `90-` values still win. The reason: with
+    `reload: true` the module also compares the **live** value with the
+    requested one, reports a change when they differ, and then runs
+    `sysctl -p <sysctl_file>`
+    ([ansible.posix 1.5.4 `plugins/modules/sysctl.py`](https://github.com/ansible-collections/ansible.posix/blob/1.5.4/plugins/modules/sysctl.py),
+    the `reload` option and the "with reload=yes we should check if the
+    current system values are correct" branch). On a host where
+    `perf_tuning` ran, the live values (1 GiB, `swappiness=1`) always
+    differ from the baseline. So every `common` run reloaded
+    `80-xinas-common.conf` alone and dropped the host to 256 MiB /
+    `swappiness=10`. The values came back only when the handler ran at the
+    end of the play, or at a reboot if a later task failed first. Once
+    `Requires-Rebuild: common` re-runs the role on updates (*Role tag*
+    above), that drop would happen on every update. With
+    `reload: false`, a re-run over an unchanged drop-in changes nothing at
+    runtime. One consequence: `common` no longer resets a live value
+    changed by hand; the files apply again at the next boot or
+    `sysctl --system`. The ansible.posix version installed on the nodes
+    (from Ubuntu's `ansible` package) was not checked against 1.5.4.
   - The `80-` prefix orders the baseline **before** `perf_tuning`'s `90-`
     drop-ins in `sysctl --system`, so the perf values (`rmem_max` /
     `wmem_max` = 1 GiB, `swappiness=1`) win at boot over the baseline.
     That is the intended layering, and it matches the in-session outcome of
     a full `site.yml` run, where `perf_tuning` applies last. Running
-    `playbooks/common.yml` on its own still leaves the baseline values.
-  - **Migration.** Hosts provisioned by xiNAS ≤ 3.10.2 carry these keys —
-    and `perf_tuning`'s — in `/etc/sysctl.conf`. The role deletes every
-    xiNAS-managed key from that file before writing its drop-in, so
-    re-provisioning a host that was left in the broken state self-heals.
-    The purge covers `perf_tuning`'s keys too, because those are what break
-    `common`. On a legacy host that means running `playbooks/common.yml`
-    **alone** strips the perf network keys without re-adding them (they come
-    back in `90-perf-net.conf` when `perf_tuning` next runs). Run
-    `playbooks/site.yml`, or `--tags common,perf_tuning`, when migrating a
-    host that already has the perf tunings applied.
+    `playbooks/common.yml` on its own leaves the baseline values on a host
+    where `perf_tuning` never ran, and the perf values where it did.
+  - **Migration.** Hosts provisioned by xiNAS ≤ 3.10.2 carry these keys,
+    and `perf_tuning`'s, in `/etc/sysctl.conf`. The role deletes every
+    xiNAS-managed key from that file, `perf_tuning`'s included, but
+    **only when both `/etc/sysctl.d/90-perf-net.conf` and
+    `90-perf-vm.conf` exist**. It checks them with `stat` first, under
+    the `sysctl` and `common` tags.
+    - **Why the strip is gated.** On a legacy host the network lines in
+      `/etc/sysctl.conf` hold `perf_tuning`'s values, because the module
+      edits one line per key and `perf_tuning` ran last. `vm.swappiness`
+      holds `common`'s `10`, because by then `perf_tuning` kept its VM keys in
+      `90-perf-vm.conf` (§3.12). This is inferred from the role history,
+      not read off a legacy host. Stripping the network lines before `perf_tuning` has
+      written its drop-ins would leave the host on the baseline. Live
+      values drop at the handler's `sysctl --system`, and `tcp_rmem` /
+      `tcp_wmem`, `netdev_max_backlog`, `somaxconn` and the sunrpc slot
+      count go back to kernel defaults at the next boot. An update now
+      re-runs `common` (*Role tag*), and no trailer can re-run
+      `perf_tuning` (§2.4), so an unconditional strip would make that loss
+      routine.
+    - **Which hosts are affected.** Since 3.10.2, no release trailer has
+      run a `common` or `perf_tuning` task (`CHANGELOG.md`). A host
+      provisioned at ≤ 3.10.2 and updated only through the TUI can still
+      be in this layout. This is inferred from the trailers; no such host
+      was examined.
+    - **What a gated host gets.** It keeps its legacy keys. `sysctl
+      --system` reads `/etc/sysctl.conf` last, after every `sysctl.d`
+      directory ([sysctl(8), noble](https://manpages.ubuntu.com/manpages/noble/en/man8/sysctl.8.html),
+      *SYSTEM FILE PRECEDENCE*), so those
+      keys keep winning, and the host runs with the tuning it had. At boot
+      `systemd-sysctl` applies the files instead; whether it also lets the
+      legacy file win was not checked. The
+      next untagged `playbooks/site.yml` run writes the `90-perf-*`
+      drop-ins in `perf_tuning`, and the `common` run after that strips
+      the legacy lines.
+    - **Why gating is now safe.** The strip existed because `common` ran
+      `sysctl -p /etc/sysctl.conf` through `reload: yes` and failed on
+      `perf_tuning`'s sunrpc key. `common` no longer reloads from the task
+      (above), and its handler runs `sysctl -e --system`, which skips
+      unknown keys. So a legacy file left in place no longer breaks the
+      role.
+    - **Migrating a host.** It takes two runs: an untagged
+      `playbooks/site.yml`, then `--tags common` (or the next update that
+      carries `Requires-Rebuild: common`). In the first run `common` comes
+      before `perf_tuning`, so the strip is still skipped. The handler's
+      `sysctl --system` at the end of that run reads the legacy file last,
+      so the legacy lines, `swappiness=10` included, win again until the
+      second run strips them. `--tags common,perf_tuning` does not work
+      until `perf_tuning` carries its tag (§2.4).
 - Hostname: `xiNAS-<HWKEY>` (from the `./hwkey` binary), unless `xinas_hostname`
   is overridden. **The `./hwkey` value is a DMI-derived host identifier and is
   NOT the same as the xiRAID _license_ hwkey** reported by `xicli license show`
@@ -929,12 +1132,14 @@ hostnamectl                                  # → "xiNAS-<HWKEY>"
 timedatectl                                  # timezone = Europe/Amsterdam, NTP synced
 systemctl is-active chrony                   # → active
 apt-mark showhold | grep linux-image         # → the installed image metapackage(s): linux-image-generic, linux-image-virtual, …
+apt-config dump | grep Automatic-Reboot      # → Unattended-Upgrade::Automatic-Reboot "false"; (and no -Time line) unless opted in
 sysctl net.core.rmem_max net.core.wmem_max vm.swappiness
 # → 268435456 / 268435456 / 10   (baseline only — see note)
 cat /etc/sysctl.d/80-xinas-common.conf        # the three keys; /etc/sysctl.conf untouched
 ```
 
-The values above hold after `playbooks/common.yml` alone. After a full
+The values above hold after `playbooks/common.yml` alone on a host where
+`perf_tuning` never ran. After a full
 `site.yml`, `perf_tuning` layers `/etc/sysctl.d/90-perf-net.conf` and
 `90-perf-vm.conf` on top and `sysctl` reports `1073741824 / 1073741824 / 1`
 (see §3.1 and §4.8).
@@ -1063,6 +1268,7 @@ The health engine bundles many of the checks above (RAID state, mounts, exports,
 | `common` fails at once with "This CPU does not report the AVX instruction set" (or, on ≤ 3.13.0, `xiraid_classic` fails installing `xiraid-core` with `ERROR: The CPU flag is not supported: avx.`) | The CPU model exposed to the host has no AVX — typically a VM on the default `qemu64` / `kvm64` model | `grep -c avx /proc/cpuinfo`; give the VM a CPU model with AVX (§3.1) and re-run |
 | `common` fails with "Failed to find package 'linux-image-generic' to perform selection 'hold'" (≤ 3.14.0-rc.1) | the release held a fixed `linux-image-generic`, which a virtual-flavour host (observed: Ubuntu 24.04.5 `noble-server-cloudimg-amd64`) does not have | §3.1 *Kernel held*; [troubleshooting/installer-virtual-kernel-flavour.md](../troubleshooting/installer-virtual-kernel-flavour.md) |
 | `doca_ofed` fails: `openibd` does not start, `dmesg` shows `mlx5_ib: Unknown symbol macsec_netdev_is_offloaded` (≤ 3.14.0-rc.1); later releases stop before DOCA naming the kernel without `macsec` | the kernel's `macsec` module is not installed — on Ubuntu it ships in `linux-modules-extra-<kernel>` | §3.2 *Kernel module prerequisite*; `modinfo -k <kernel> macsec`, `apt-cache policy linux-modules-extra-<kernel>` |
+| `common` fails on `common_unattended_reboot_time` ("must be a quoted 24-hour HH:MM string") | `common_unattended_reboot` is on and the time is not a string matching `HH:MM`: a typo, or an unquoted `10:00`–`23:59`, which YAML 1.1 reads as an integer | In `playbooks/group_vars/all/20-local.yml`, set `common_unattended_reboot: false`, or quote or correct the time. Deleting the time key keeps the reboot on and makes it immediate, right after the 06:00–07:00 daily run (§3.1 *Unattended upgrades*). The same failure stops the Ansible step of a TUI update that carries `Requires-Rebuild: common` |
 
 ---
 
@@ -1087,7 +1293,7 @@ Each install role maps to one uninstall phase:
 | `xinas_menu` | Phase F (wrappers), Phase G (`/opt/xiNAS/venv`, `/etc/sudoers.d/xinas-update`) |
 | `xinas_history` | Phase F (`xinas-history` wrapper), Phase G (`/var/lib/xinas`) |
 | `motd` | Phase G (motd, banner, profile-d, cron), Phase H (`sshd_config`, `pam.d/login`) |
-| `common` | Phase H removes `/etc/sysctl.d/80-xinas-common.conf` (and purges the legacy keys from `/etc/sysctl.conf`); Phase J (`apt update`); the role's hostname change, `chrony.service` and the kernel metapackage hold are intentionally not reverted (unholding is deferred — `docs/TODO.md`) |
+| `common` | Phase H removes `/etc/sysctl.d/80-xinas-common.conf` (and purges the legacy keys from `/etc/sysctl.conf`); Phase J (`apt update`); the role's hostname change, `chrony.service` and the kernel metapackage hold are intentionally not reverted (unholding is deferred — `docs/TODO.md`); `/etc/apt/apt.conf.d/20auto-upgrades` is left in place, so the host keeps the xiNAS unattended-reboot policy (§3.1) |
 | `xiraid_classic` | Optional phase 91 (`uninstall_remove_xiraid`) |
 | `xiraid_exporter` | Optional phase 91 (`uninstall_remove_xiraid`) |
 | `doca_ofed` | Optional phase 92 (`uninstall_remove_ofed`) |

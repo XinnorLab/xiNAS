@@ -17,7 +17,7 @@
   when:
     - xinas_require_avx | bool
     - not (xiraid_skip_install | default(false) | bool)
-  tags: [preflight, xiraid]
+  tags: [preflight, xiraid, common]
 
 - name: Fail fast when the CPU has no AVX (xiRAID cannot be installed on it)
   ansible.builtin.fail:
@@ -35,7 +35,7 @@
     - xinas_require_avx | bool
     - not (xiraid_skip_install | default(false) | bool)
     - "'avx' not in (xinas_cpu_flags.stdout | default('') | regex_replace('^flags\\s*:', '')).split()"
-  tags: [preflight, xiraid]
+  tags: [preflight, xiraid, common]
 
 # Preflight: the mirror image of the AVX one above. `xiraid_skip_install: true`
 # promises xiRAID is already on the host - playbooks/site.yml skips the whole
@@ -52,7 +52,7 @@
   changed_when: false
   failed_when: false
   when: xiraid_skip_install | default(false) | bool
-  tags: [preflight, xiraid]
+  tags: [preflight, xiraid, common]
 
 - name: Fail fast when the run skips installing a xiRAID that is not there
   ansible.builtin.fail:
@@ -68,7 +68,7 @@
   when:
     - xiraid_skip_install | default(false) | bool
     - (xinas_xicli_check.rc | default(1)) != 0
-  tags: [preflight, xiraid]
+  tags: [preflight, xiraid, common]
 
 # apt refuses `apt-get update` (exit 100) for a source whose Suite/Codename/
 # Origin/Label changed since the last fetch, until an operator confirms it with
@@ -80,7 +80,7 @@
 # flag; any other cause fails again with apt's own message. Accepting once is
 # durable (apt stores the new release file). docs/Installer/spec.md §3.1, §8.5.
 - name: Update apt cache (retry once if a repository changed its release info)
-  tags: [packages]
+  tags: [packages, common]
   block:
     - name: Update apt cache
       ansible.builtin.apt:
@@ -97,18 +97,18 @@
   ansible.builtin.apt:
     name: "{{ common_packages }}"
     state: present
-  tags: [packages]
+  tags: [packages, common]
 
 - name: Install chrony package
   ansible.builtin.apt:
     name: "{{ chrony_package_name }}"
     state: present
-  tags: [ntp]
+  tags: [ntp, common]
 
 - name: Set timezone
   community.general.timezone:
     name: "{{ common_timezone }}"
-  tags: [timezone]
+  tags: [timezone, common]
 
 - name: Enable and start chrony (NTP)
   ansible.builtin.service:
@@ -116,7 +116,7 @@
     enabled: yes
     state: started
   when: "'chrony' in common_packages"
-  tags: [ntp]
+  tags: [ntp, common]
 
 # Hold the kernel so apt cannot upgrade it under xiRAID's and DOCA's kernel
 # modules. The packages are read, never named: a cloud image carries
@@ -125,7 +125,7 @@
 - name: Gather installed packages (for the kernel hold)
   ansible.builtin.package_facts:
     manager: apt
-  tags: [kernel]
+  tags: [kernel, common]
 
 - name: Select the installed kernel image metapackages
   ansible.builtin.set_fact:
@@ -135,14 +135,14 @@
          | reject('search', common_kernel_version_pattern)
          | reject('match', '^linux-image-unsigned-')
          | sort }}
-  tags: [kernel]
+  tags: [kernel, common]
 
 - name: Hold the installed kernel image metapackages (prevent accidental upgrades)
   ansible.builtin.dpkg_selections:
     name: "{{ item }}"
     selection: hold
   loop: "{{ common_kernel_hold_packages }}"
-  tags: [kernel]
+  tags: [kernel, common]
 
 - name: Warn that no kernel image metapackage is installed to hold
   ansible.builtin.debug:
@@ -151,9 +151,34 @@
       (a custom kernel?), so the kernel is not held and apt may upgrade it.
       See docs/Installer/spec.md §3.1 "Kernel held".
   when: common_kernel_hold_packages | length == 0
-  tags: [kernel]
+  tags: [kernel, common]
 
-- name: Deploy unattended‑upgrades configuration
+# The reboot policy (docs/Installer/spec.md §3.1 "Unattended upgrades"): a
+# reboot the node starts on its own drops every NFS client, so it is off unless
+# common_unattended_reboot is set. The time goes to `shutdown -r <time>` as is,
+# so check it first: unquoted 10:00-23:59 load from YAML 1.1 as integers
+# (22:00 -> 1320), hence `is string` before the regex, short-circuited because
+# the `match` test raises on a non-string.
+- name: Check the unattended-upgrades reboot time
+  ansible.builtin.assert:
+    that:
+      - >-
+        common_unattended_reboot_time is string
+        and common_unattended_reboot_time is match('^([01][0-9]|2[0-3]):[0-5][0-9]$')
+    fail_msg: >-
+      common_unattended_reboot_time must be a quoted 24-hour HH:MM string
+      (for example "22:00"), got {{ common_unattended_reboot_time | string }}.
+      Unquoted in YAML, 10:00-23:59 load as integers (22:00 becomes 1320).
+      Set common_unattended_reboot to false to keep the node from rebooting
+      itself, quote or correct the time, or set it to "" to reboot right after
+      the daily unattended run. See docs/Installer/spec.md §3.1.
+    quiet: true
+  when:
+    - common_unattended_reboot | bool
+    - common_unattended_reboot_time not in ['', None]
+  tags: [security, common]
+
+- name: Deploy unattended-upgrades configuration
   ansible.builtin.template:
     src: unattended-upgrades.conf.j2
     dest: /etc/apt/apt.conf.d/20auto-upgrades
@@ -161,7 +186,7 @@
     group: root
     mode: '0644'
   notify: Restart unattended-upgrades
-  tags: [security]
+  tags: [security, common]
 
 # xiNAS <= 3.10.2 wrote its sysctl keys into the shared /etc/sysctl.conf (the
 # module's default sysctl_file). `reload: yes` runs `sysctl -p <sysctl_file>`,
@@ -170,6 +195,21 @@
 # role on any host that had not loaded the sunrpc module. xiNAS now owns a
 # drop-in per role; strip the legacy entries first so an upgraded host that is
 # already in the broken state self-heals on the next provision.
+# Only once perf_tuning has its own drop-ins, though: on a <= 3.10.2 host the
+# shared lines carry perf_tuning's network values, and every update now runs
+# this role (Requires-Rebuild: common) while no trailer can run perf_tuning, so
+# an unconditional strip would drop the host to the baseline for good. Leaving
+# the file is safe since this role stopped reloading from the task (below).
+# docs/Installer/spec.md §3.1 "Migration".
+- name: Check whether perf_tuning has its sysctl drop-ins
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - /etc/sysctl.d/90-perf-net.conf
+    - /etc/sysctl.d/90-perf-vm.conf
+  register: common_perf_dropins
+  tags: [sysctl, common]
+
 - name: Remove legacy xiNAS sysctl keys from the shared /etc/sysctl.conf
   ansible.builtin.lineinfile:
     path: /etc/sysctl.conf
@@ -185,20 +225,26 @@
     - '^\s*vm\.swappiness\s*='
     - '^\s*sunrpc\.tcp_max_slot_table_entries\s*='
   failed_when: false
-  tags: [sysctl]
+  when: common_perf_dropins.results | selectattr('stat.exists') | list | length == 2
+  tags: [sysctl, common]
 
 # 80- so the baseline loads before perf_tuning's 90- drop-ins in
 # `sysctl --system` order and the perf values win at boot.
+# reload: false (the module default is true): with reload the module also
+# compares the *live* value and runs `sysctl -p` on this file alone when it
+# differs -- always, on a perf-tuned host -- dropping it to the baseline until
+# the handler ran. The handler (`sysctl -e --system`) applies every drop-in in
+# order instead. docs/Installer/spec.md §3.1.
 - name: Apply sysctl parameters
   ansible.builtin.sysctl:
     name: "{{ item.key }}"
     value: "{{ item.value }}"
     state: present
     sysctl_file: /etc/sysctl.d/80-xinas-common.conf
-    reload: yes
+    reload: false
   loop: "{{ common_sysctl | dict2items }}"
   notify: Reload sysctl
-  tags: [sysctl]
+  tags: [sysctl, common]
 
 
 - name: Ensure keys directory exists
@@ -207,7 +253,7 @@
     state: directory
     mode: "0700"
   when: xinas_hostname | length == 0
-  tags: [hostname]
+  tags: [hostname, common]
 
 - name: Retrieve xiRAID hardware key
   ansible.builtin.command: ./hwkey
@@ -217,7 +263,7 @@
   changed_when: false
   failed_when: false
   when: xinas_hostname | length == 0
-  tags: [hostname]
+  tags: [hostname, common]
 
 - name: Cache hardware key for future use
   ansible.builtin.copy:
@@ -228,7 +274,7 @@
     - xinas_hostname | length == 0
     - hwkey_result.rc | default(1) == 0
     - hwkey_result.stdout | default('') | trim | length > 0
-  tags: [hostname]
+  tags: [hostname, common]
 
 - name: Fall back to cached hardware key
   ansible.builtin.slurp:
@@ -238,7 +284,7 @@
     - xinas_hostname | length == 0
     - hwkey_result.rc | default(1) != 0
   failed_when: hwkey_cached is failed
-  tags: [hostname]
+  tags: [hostname, common]
 
 - name: Set hwkey fact from cache
   ansible.builtin.set_fact:
@@ -249,7 +295,7 @@
     - xinas_hostname | length == 0
     - hwkey_result.rc | default(1) != 0
     - hwkey_cached is not failed
-  tags: [hostname]
+  tags: [hostname, common]
 
 - name: Set default hostname fact
   ansible.builtin.set_fact:
@@ -257,9 +303,9 @@
   when:
     - xinas_hostname | length == 0
     - hwkey_result.stdout | default('') | trim | length > 0
-  tags: [hostname]
+  tags: [hostname, common]
 
 - name: Set system hostname
   ansible.builtin.hostname:
     name: "{{ xinas_hostname }}"
-  tags: [hostname]
+  tags: [hostname, common]
