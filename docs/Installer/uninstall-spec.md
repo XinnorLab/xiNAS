@@ -453,9 +453,9 @@ occurrence of each key). It treats the unit as xiNAS-generated when one
 of the signatures in `xinas_mount_unit_signatures` (role defaults)
 matches:
 
-1. `Description=` starts with `xiRAID Classic ` (trailing space included).
+1. `Description=` starts with `"xiRAID Classic "` (trailing space included).
    `What=` is not checked.
-2. `Description=` starts with `xiNAS ` (trailing space included) **and**
+2. `Description=` starts with `"xiNAS "` (trailing space included) **and**
    `What=` starts with `/dev/xi_`.
 
 Any other unit is left untouched, and so is every unit outside
@@ -463,7 +463,7 @@ Any other unit is left untouched, and so is every unit outside
 
 Why the two rules differ:
 
-- **`xiNAS ` alone is too generic.** A site's own unit can plausibly be
+- **`"xiNAS "` alone is too generic.** A site's own unit can plausibly be
   named "xiNAS backup", for example. The control path formats only
   observed xiRAID array volumes (`backing_array_not_found` in
   `xiNAS-MCP/src/lib/fs/validate.ts`). xiNAS names every array volume
@@ -471,14 +471,14 @@ Why the two rules differ:
   So every unit the control path writes has a `/dev/xi_` `What=`. A
   third-party unit named "xiNAS …" over any other device is never
   stopped or removed.
-- **The `xiRAID Classic ` rule stays as shipped.** The day-1 template
+- **The `"xiRAID Classic "` rule stays as shipped.** The day-1 template
   writes whatever `data_device` the preset configured. Every shipped
   preset and the auto-namespace generator use `/dev/xi_data`, but
   `raid_fs.yml` does not enforce that. Adding a `What=` check to this
   rule could leave a day-1 unit behind that earlier uninstallers
   removed, and the prefix is specific enough without one.
 
-Before this rule, the role matched only `xiRAID Classic `. Units created
+Before this rule, the role matched only `"xiRAID Classic "`. Units created
 by `fs.create` were therefore not stopped before Phase C destroyed their
 arrays, and they stayed on disk after uninstall. The regression test is
 [tests/test_uninstall_mount_unit_discovery.py](../../tests/test_uninstall_mount_unit_discovery.py).
