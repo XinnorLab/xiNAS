@@ -166,23 +166,24 @@
         (_xinas_array_names | default([]) | difference(_xinas_managed_array_names) | length > 0)
         or (_xinas_pool_names | default([]) | difference(_xinas_managed_pool_names) | length > 0)
 
+    - name: "RAID | discover xiNAS mount units"
+      # The same discovery Phase D uses (uninstall-spec §4.4.1), so every
+      # unit Phase D removes is stopped here first — including the
+      # "xiNAS <leaf>" units the control path writes.
+      ansible.builtin.import_tasks: find_mount_units.yml
+
     - name: "RAID | stop systemd mount units before raid delete"
-      # xicli raid delete refuses if the array is mounted. The mount-unit
-      # cleanup in phase D will remove the units; here we just stop them.
-      ansible.builtin.shell: |
-        set +e
-        for unit in $(systemctl list-units --type=mount --no-legend --plain --all | awk '{print $1}'); do
-          desc=$(systemctl show -p Description --value "$unit" 2>/dev/null)
-          case "$desc" in
-            "{{ xinas_mount_unit_signature }}"*)
-              systemctl stop "$unit" 2>/dev/null
-              ;;
-          esac
-        done
-        exit 0
-      args:
-        executable: /bin/bash
-      changed_when: false
+      # No filesystem may stay mounted over an array destroyed below. The
+      # mount-unit cleanup in phase D removes the units; here we just stop
+      # them. Best-effort, as before: a unit that fails to stop does not
+      # abort the teardown.
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: stopped
+      loop: "{{ _xinas_mount_units }}"
+      register: _raid_mount_stop
+      failed_when: false
+      changed_when: _raid_mount_stop.changed | default(false)
 
     - name: "RAID | delete xiNAS-managed arrays"
       # xicli's raid verb is 'destroy' (not 'delete'); 'delete' is an invalid

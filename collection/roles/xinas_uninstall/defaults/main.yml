@@ -49,6 +49,16 @@ xinas_perf_apt_purge:
   - linux-tools-generic
   - tuned
 
-# Systemd mount units we generated are identifiable by this Description prefix
-# (see collection/roles/raid_fs/templates/mount.unit.j2).
-xinas_mount_unit_signature: "xiRAID Classic "
+# Systemd .mount units xiNAS generated, identified per
+# docs/Installer/uninstall-spec.md §4.4.1. A unit in xinas_mount_unit_dir
+# matches a signature when its Description= starts with `description` and,
+# if `what` is set, its What= starts with `what`.
+xinas_mount_unit_dir: /etc/systemd/system
+xinas_mount_unit_signatures:
+  # Day-1 raid_fs/templates/mount.unit.j2 and the TUI
+  # (xinas_menu/utils/xfs_helpers.py generate_mount_unit).
+  - description: "xiRAID Classic "
+  # Control path fs.create (xiNAS-MCP/src/lib/fs/unit.ts renderMountUnit).
+  # "xiNAS " alone is too generic, so What= must be a xiRAID array volume.
+  - description: "xiNAS "
+    what: "/dev/xi_"

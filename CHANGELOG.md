@@ -8,6 +8,18 @@ supported source for installing and updating xiNAS.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Uninstall unmounts filesystems created through the API or MCP.** The
+  uninstaller recognised only the `Description=xiRAID Classic …` mount
+  units that the installer and the TUI write. The `xiNAS …` units that
+  `fs.create` writes were not stopped before the arrays under them were
+  destroyed, and their unit files stayed on disk. Both phases now share
+  one discovery step. It also matches `xiNAS …` units, but only when
+  `What=` is a xiRAID volume (`/dev/xi_*`), so a site's own unit with a
+  similar name is never touched. See `docs/Installer/uninstall-spec.md`
+  §4.4.1.
+
 ## [3.13.3] - 2026-10-09
 
 Adds a `raid6` deployment preset on top of 3.13.2. No role changed, so
