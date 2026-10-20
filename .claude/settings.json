@@ -1,0 +1,56 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pytest *)",
+      "Bash(ruff *)",
+      "Bash(pyright *)",
+      "Bash(yamllint *)",
+      "Bash(ansible-lint *)",
+      "Bash(npx --yes markdownlint-cli2 *)",
+      "Bash(npm run *)",
+      "Bash(npm test *)",
+      "Bash(npm ci)",
+      "Bash(git status *)",
+      "Bash(git status)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(git branch *)",
+      "Bash(git show *)"
+    ],
+    "ask": [
+      "Bash(git commit *)",
+      "Bash(git push *)",
+      "Bash(git merge *)",
+      "Bash(git rebase *)",
+      "Bash(git checkout *)",
+      "Bash(gh pr *)",
+      "Bash(gh release *)",
+      "Bash(ansible-playbook *)",
+      "Bash(sudo *)",
+      "Bash(./uninstall.sh *)",
+      "Edit(/docs/features/**)",
+      "Edit(/.claude/**)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./keys/**)",
+      "Read(./**/*.pem)",
+      "Read(./**/id_rsa*)",
+      "Bash(git push --force *)",
+      "Bash(git push -f *)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/require-approved-spec.sh\""
+          }
+        ]
+      }
+    ]
+  }
+}
