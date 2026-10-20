@@ -21,6 +21,62 @@ deferred and the change that deferred it.
 
 ---
 
+## Installer — roles that do not answer to their own tag
+
+*Deferred 2026-10-20, from FEAT-INST-02 (`fix/unattended-upgrades-reboot-policy`).*
+
+**What is missing.** `playbooks/site.yml` lists every role without `tags:`,
+so `--tags <role>` runs a role only when its own tasks carry that tag. No
+task in `doca_ofed`, `net_controllers`, `xiraid_classic`, `nvme_namespace`,
+`xinas_history` or `perf_tuning` does (`docs/Installer/spec.md` §2.4). A
+`Requires-Rebuild:` trailer naming one of them runs nothing on an
+updating host. `CHANGELOG.md` `[Unreleased]` already carries
+`Requires-Rebuild: doca_ofed` (FEAT-INST-01), and CLAUDE.md uses
+`perf_tuning` and `net_controllers` as trailer examples. Whether every task
+of the other roles carries its tag was not checked.
+
+**What the code does instead.** `common` was fixed in FEAT-INST-02. For
+the six roles, the update flow's Ansible step matches no task and reports
+success.
+
+**Why it was cut.** FEAT-INST-02 is a 3.14.0 safety fix for the
+`common` role. Re-running six more roles on every update needs its own
+check per role, especially `nvme_namespace` against
+`docs/Installer/raid-spec.md` §11.
+
+**Done looks like.** Every task of every `site.yml` role carries the
+role's name as a tag. A pytest pins this, and pins that every
+`Requires-Rebuild:` tag in `CHANGELOG.md` `[Unreleased]` matches at least
+one task. §2.4's "Not yet true for every role" note is removed.
+
+---
+
+## Installer — a pending reboot is not reported
+
+*Deferred 2026-10-20, from FEAT-INST-02 (`fix/unattended-upgrades-reboot-policy`).*
+
+**What is missing.** Since the `common` role stopped letting
+unattended-upgrades reboot the node by default (`docs/Installer/spec.md`
+§3.1 *Unattended upgrades*), an update that requests a reboot leaves
+`/var/run/reboot-required` in place indefinitely. Nothing in xiNAS tells
+the operator: the TUI, the health engine and the xiNAS MOTD block do not
+read the file.
+
+**What the code does instead.** Updates install; the reboot waits. The
+operator has to check `/var/run/reboot-required` (and `.pkgs`) by hand.
+
+**Why it was cut.** The fix that stops unattended reboots is a safety
+change for 3.14.0. Reporting the pending reboot is a separate surface (a
+health check, possibly a MOTD line) with its own spec in
+`docs/HealthCheck/`.
+
+**Done looks like.** A health check reports a pending reboot as a warning
+and names the packages from `/var/run/reboot-required.pkgs`. The MOTD
+status block shows the same, and both are specified in
+`docs/HealthCheck/`.
+
+---
+
 ## Installer — the uninstaller does not release the kernel hold
 
 *Deferred 2026-10-19, from FEAT-INST-01 (`fix/installer-virtual-kernel-flavour`).*
