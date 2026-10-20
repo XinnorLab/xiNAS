@@ -15,6 +15,13 @@ common_packages:
   - unattended-upgrades
   - ca-certificates
   - quota                 # Disk quota tools for user quota management
+# Let unattended-upgrades reboot the node on its own when an update leaves
+# /var/run/reboot-required. Off by default: a reboot the node starts by itself
+# drops every NFS client. See docs/Installer/spec.md §3.1 "Unattended upgrades".
+common_unattended_reboot: false
+# Quoted 24-hour "HH:MM" for that reboot ("" = right after the daily run, a
+# time already past that day = the next day). Checked only while the reboot is on.
+common_unattended_reboot_time: ""
 chrony_service_name: chrony
 chrony_package_name: chrony
 common_sysctl:

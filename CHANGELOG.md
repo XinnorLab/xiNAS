@@ -156,6 +156,32 @@ Requires-Rebuild: doca_ofed
 
 ### Fixed
 
+- **Unattended upgrades no longer reboot the node.** The `common` role
+  told unattended-upgrades to reboot without confirmation whenever an
+  update left `/var/run/reboot-required`, so a NAS rebooted itself after a
+  routine package update and dropped every NFS / NFS-RDMA client (seen on
+  a 3.14.0-rc.1 test node after a `git` update). Security updates still
+  install every day; the reboot now waits for the operator. To keep the
+  old behaviour, set `common_unattended_reboot: true` in
+  `playbooks/group_vars/all/20-local.yml`, optionally with a maintenance
+  time, **quoted**: `common_unattended_reboot_time: "02:00"` (unquoted,
+  `10:00`–`23:59` load as numbers and the run stops with a message).
+  Nothing reports a pending reboot yet; check `/var/run/reboot-required`.
+  See `docs/Installer/spec.md` §3.1 *Unattended upgrades*.
+
+- **`Requires-Rebuild: common` now re-runs the `common` role.** No task
+  in the role carried the `common` tag, so the update's `--tags common`
+  ran nothing. That includes the kernel-hold migration below, which
+  therefore never reached existing hosts. Every task now carries the tag.
+  An update that re-runs the role converges the host to it. A hostname set
+  only with `hostnamectl` goes back to `xiNAS-<HWKEY>`, while one set
+  through Set Hostname is kept. A timezone set only with `timedatectl`
+  goes back to `common_timezone`. The role's sysctl step no longer drops a
+  perf-tuned host to the baseline values on a re-run. It also no longer
+  strips the pre-3.10.3 keys from `/etc/sysctl.conf` until `perf_tuning`
+  has its own drop-ins, so a host still in that layout keeps its tuning.
+  See `docs/Installer/spec.md` §3.1 *Role tag*.
+
 - **The kernel hold no longer stops the install on a cloud image.** The
   `common` role held a fixed `linux-image-generic`; an Ubuntu cloud image
   carries `linux-image-virtual` instead, so the hold failed and the

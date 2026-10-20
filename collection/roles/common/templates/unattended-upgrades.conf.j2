@@ -1,6 +1,10 @@
 # -------------------------------------------------------------
 # templates/unattended-upgrades.conf.j2
+# Reboot policy: docs/Installer/spec.md §3.1 "Unattended upgrades".
 # -------------------------------------------------------------
 APT::Periodic::Update-Package-Lists "1";
 APT::Periodic::Unattended-Upgrade "1";
-Unattended-Upgrade::Automatic-Reboot "true";
+Unattended-Upgrade::Automatic-Reboot "{{ 'true' if common_unattended_reboot | bool else 'false' }}";
+{% if common_unattended_reboot | bool and common_unattended_reboot_time not in ['', None] %}
+Unattended-Upgrade::Automatic-Reboot-Time "{{ common_unattended_reboot_time }}";
+{% endif %}
