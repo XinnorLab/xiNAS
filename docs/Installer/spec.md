@@ -705,7 +705,8 @@ Effective values listed below come from each role's `defaults/main.yml`, overrid
     aborted `common` on any host where the `sunrpc` module was not loaded
     (`sysctl: cannot stat /proc/sys/sunrpc/tcp_max_slot_table_entries`).
     `perf_tuning` tolerated its own key via `ignoreerrors: yes`; `common`
-    did not. Each role now reloads only the file it owns.
+    did not. `perf_tuning` reloads only the files it owns; `common` applies
+    its file through the handler (next bullet).
   - **`common` does not reload from the task.** Its sysctl task writes
     the drop-in with `reload: false`, set explicitly because the module's
     default is `true`. The role's `Reload sysctl` handler
@@ -737,16 +738,46 @@ Effective values listed below come from each role's `defaults/main.yml`, overrid
     a full `site.yml` run, where `perf_tuning` applies last. Running
     `playbooks/common.yml` on its own leaves the baseline values on a host
     where `perf_tuning` never ran, and the perf values where it did.
-  - **Migration.** Hosts provisioned by xiNAS ≤ 3.10.2 carry these keys —
-    and `perf_tuning`'s — in `/etc/sysctl.conf`. The role deletes every
-    xiNAS-managed key from that file before writing its drop-in, so
-    re-provisioning a host that was left in the broken state self-heals.
-    The purge covers `perf_tuning`'s keys too, because those are what break
-    `common`. On a legacy host that means running `playbooks/common.yml`
-    **alone** strips the perf network keys without re-adding them (they come
-    back in `90-perf-net.conf` when `perf_tuning` next runs). Run
-    `playbooks/site.yml`, or `--tags common,perf_tuning`, when migrating a
-    host that already has the perf tunings applied.
+  - **Migration.** Hosts provisioned by xiNAS ≤ 3.10.2 carry these keys,
+    and `perf_tuning`'s, in `/etc/sysctl.conf`. The role deletes every
+    xiNAS-managed key from that file, `perf_tuning`'s included, but
+    **only when both `/etc/sysctl.d/90-perf-net.conf` and
+    `90-perf-vm.conf` exist**. It checks them with `stat` first, under
+    the `sysctl` and `common` tags.
+    - **Why the strip is gated.** On a legacy host the shared lines hold
+      `perf_tuning`'s values: the module edits one line per key, and
+      `perf_tuning` ran last. Stripping them before `perf_tuning` has
+      written its drop-ins would leave the host on the baseline. Live
+      values drop at the handler's `sysctl --system`, and `tcp_rmem` /
+      `tcp_wmem`, `netdev_max_backlog`, `somaxconn` and the sunrpc slot
+      count go back to kernel defaults at the next boot. An update now
+      re-runs `common` (*Role tag*), and no trailer can re-run
+      `perf_tuning` (§2.4), so an unconditional strip would make that loss
+      routine.
+    - **Which hosts are affected.** Since 3.10.2, no release trailer has
+      run a `common` or `perf_tuning` task (`CHANGELOG.md`). A host
+      provisioned at ≤ 3.10.2 and updated only through the TUI can still
+      be in this layout. This is inferred from the trailers; no such host
+      was examined.
+    - **What a gated host gets.** It keeps its legacy keys. `sysctl
+      --system` reads `/etc/sysctl.conf` last, after every `sysctl.d`
+      directory ([sysctl(8), noble](https://manpages.ubuntu.com/manpages/noble/en/man8/sysctl.8.html),
+      *SYSTEM FILE PRECEDENCE*), so those
+      keys keep winning, and the host runs with the tuning it had. At boot
+      `systemd-sysctl` applies the files instead; whether it also lets the
+      legacy file win was not checked. The
+      next untagged `playbooks/site.yml` run writes the `90-perf-*`
+      drop-ins in `perf_tuning`, and the `common` run after that strips
+      the legacy lines.
+    - **Why gating is now safe.** The strip existed because `common` ran
+      `sysctl -p /etc/sysctl.conf` through `reload: yes` and failed on
+      `perf_tuning`'s sunrpc key. `common` no longer reloads from the task
+      (above), and its handler runs `sysctl -e --system`, which skips
+      unknown keys. So a legacy file left in place no longer breaks the
+      role.
+    - **Migrating a host.** Run an untagged `playbooks/site.yml`.
+      `--tags common,perf_tuning` does not work until `perf_tuning`
+      carries its tag (§2.4).
 - Hostname: `xiNAS-<HWKEY>` (from the `./hwkey` binary), unless `xinas_hostname`
   is overridden. **The `./hwkey` value is a DMI-derived host identifier and is
   NOT the same as the xiRAID _license_ hwkey** reported by `xicli license show`
@@ -1099,7 +1130,8 @@ sysctl net.core.rmem_max net.core.wmem_max vm.swappiness
 cat /etc/sysctl.d/80-xinas-common.conf        # the three keys; /etc/sysctl.conf untouched
 ```
 
-The values above hold after `playbooks/common.yml` alone. After a full
+The values above hold after `playbooks/common.yml` alone on a host where
+`perf_tuning` never ran. After a full
 `site.yml`, `perf_tuning` layers `/etc/sysctl.d/90-perf-net.conf` and
 `90-perf-vm.conf` on top and `sysctl` reports `1073741824 / 1073741824 / 1`
 (see §3.1 and §4.8).

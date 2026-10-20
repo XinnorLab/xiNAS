@@ -4,8 +4,8 @@ Area: INST (`docs/Installer/`)
 Profile: small
 Owner: Sergey Platonov
 Approvers: spec and plan Sergey Platonov; acceptance Sergey Platonov
-Current gate: G3 Spec
-Spec status: in-review
+Current gate: G5 Task
+Spec status: approved
 Branch: fix/unattended-upgrades-reboot-policy (off release/3.14 @ `d22e88c1`)
 
 ## Documents
@@ -32,7 +32,8 @@ Files: `collection/roles/common/defaults/main.yml` (two variables),
 `collection/roles/common/templates/unattended-upgrades.conf.j2`,
 `collection/roles/common/tasks/main.yml` (an assert before "Deploy
 unattended-upgrades configuration"; `common` added to every task's
-tags; `reload: false` on "Apply sysctl parameters"),
+tags; `reload: false` on "Apply sysctl parameters"; a `stat` of the two
+`90-perf-*.conf` drop-ins gating "Remove legacy xiNAS sysctl keys"),
 `tests/test_common_unattended_reboot.py`, modelled on
 `tests/test_common_avx_preflight.py`, `CHANGELOG.md` (`### Fixed`)
 Result:
@@ -48,6 +49,8 @@ Result:
 - Every task in the role carries `common`.
 - "Apply sysctl parameters" sets `reload: false` and still notifies
   `Reload sysctl`.
+- "Remove legacy xiNAS sysctl keys" runs only when both
+  `/etc/sysctl.d/90-perf-net.conf` and `90-perf-vm.conf` exist.
 - The CHANGELOG entry says the default flipped from rebooting to not
   rebooting, how to opt back in, that the time must be quoted, and that
   `Requires-Rebuild: common` now actually re-runs the role, which also
@@ -75,6 +78,8 @@ that mirrors Ansible: `trim_blocks=True` and the `bool` shim from
 - The template omits the `-Time` line for `None`.
 - The sysctl task has `reload: false` (the module defaults to `true`)
   and notifies `Reload sysctl`.
+- A task registering the `stat` of both perf drop-ins comes before the
+  legacy strip, and the strip's `when` requires both to exist.
 - Every task in `tasks/main.yml`, including the tasks inside a block,
   carries `common`.
 Command: CLAUDE.md *Verification* (`pytest …`, `ruff check`, `ruff
@@ -110,6 +115,10 @@ Rebuild: `Requires-Rebuild: common`
 | Gate | Object and version | Decision | Person | Date | Limits |
 |------|--------------------|----------|--------|------|--------|
 | G1 | policy: a knob `common_unattended_reboot`, default off, optional `Automatic-Reboot-Time`; target `release/3.14` | approved (in chat) | Sergey Platonov | 2026-10-20 | none |
+| Q-INST-006 | tag every `common` task `common` | approved (in chat) | Sergey Platonov | 2026-10-20 | none |
+| Q-INST-007 | `reload: false` on the common sysctl task | approved (in chat) | Sergey Platonov | 2026-10-20 | none |
+| Q-INST-008 | gate the legacy `/etc/sysctl.conf` strip on both `90-perf-*.conf` drop-ins | approved (in chat) | Sergey Platonov | 2026-10-20 | none |
+| G3 + G4 | spec as of `c432788c` plus the review-3 amendment (Q-INST-008), and this one-task plan | approved (in chat: "do") | Sergey Platonov | 2026-10-20 | given after review 2; review 3 was folded in and review 4 checks the amendment |
 
 ## Open questions
 
@@ -119,6 +128,7 @@ Rebuild: `Requires-Rebuild: common`
 | Q-INST-005 | Which release carries the fix? | 3.14.0 is at rc.1 | owner | **decided 2026-10-20: `release/3.14`, forward-ported to `release/3.15`** |
 | Q-INST-006 | `--tags common` matches no task, so `Requires-Rebuild: common` is a no-op. How do existing hosts get the policy? | without it only fresh installs are fixed; FEAT-INST-01's trailer has the same defect | owner | **decided 2026-10-20: tag every `common` task `common`** |
 | Q-INST-007 | With the role re-run on every update, the sysctl task (`reload: yes`) drops a perf-tuned host to the baseline until the end-of-play handler runs | a routine update would briefly undo `perf_tuning`, or keep it undone after a failed run | owner | **decided 2026-10-20: `reload: false`; the `Reload sysctl` handler applies the drop-ins** |
+| Q-INST-008 | With every update running `common`, its unconditional legacy strip would remove the perf keys from a ≤ 3.10.2-layout host, and no trailer can re-add them | silent loss of NFS/RDMA tuning | owner | **decided 2026-10-20: gate the strip on both `90-perf-*.conf` drop-ins existing** |
 
 ## Assumptions
 
@@ -171,6 +181,17 @@ Rebuild: `Requires-Rebuild: common`
      non-empty".
   5. The §5 way out offered an immediate reboot. It now leads with
      `common_unattended_reboot: false`.
+- Spec review 3 (2026-10-20, same reviewer): **rework**. All five
+  findings from review 2 were closed. There was 1 new major finding and
+  2 minor:
+  1. A 3.14 update would strip perf keys from a host still in the
+     ≤ 3.10.2 layout, and nothing could put them back (major). Q-INST-008
+     was decided as gating the strip on the perf drop-ins, and
+     *Migration* was rewritten, with the remedy now an untagged
+     `site.yml`.
+  2. Two sentences still described the old reload behaviour. Both were
+     fixed.
+  3. The Approvals table did not record the decisions. Rows were added.
 
 ## Task results
 
@@ -178,9 +199,8 @@ Rebuild: `Requires-Rebuild: common`
 
 ## Next step
 
-1. Spec review 3 of the amended spec.
-2. The owner approves G3 (the spec) and G4 (this one-task plan) in one
-   sitting, as the small profile allows.
+1. Spec review 4 of the review-3 amendment, running alongside the task.
+2. G3 and G4 are approved (see Approvals).
 3. TASK-INST-02-01, tests first. Then open the PR into `release/3.14`,
    with the commit carrying `Requires-Rebuild: common`.
 
