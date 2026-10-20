@@ -4,7 +4,7 @@ Area: INST (`docs/Installer/`)
 Profile: small
 Owner: Sergey Platonov
 Approvers: spec and plan Sergey Platonov; acceptance Sergey Platonov
-Current gate: G5 Task
+Current gate: G5 Task (PR open)
 Spec status: approved
 Branch: fix/unattended-upgrades-reboot-policy (off release/3.14 @ `d22e88c1`)
 
@@ -124,7 +124,7 @@ Rebuild: `Requires-Rebuild: common`
 | Q-INST-007 | `reload: false` on the common sysctl task | approved (in chat) | Sergey Platonov | 2026-10-20 | none |
 | Q-INST-008 | gate the legacy `/etc/sysctl.conf` strip on both `90-perf-*.conf` drop-ins | approved (in chat) | Sergey Platonov | 2026-10-20 | none |
 | G3 + G4 | spec as of `c432788c` and this one-task plan | approved (in chat: "do") | Sergey Platonov | 2026-10-20 | given after review 2, before the review-3 amendment (`c5ae2bfa`, Q-INST-008) existed |
-| G3 (amendment) | `c5ae2bfa` plus the review-4 text fixes; spec review 4 "ready" | **pending owner confirmation** | Sergey Platonov | — | the task is implemented against this text; the PR waits for this confirmation |
+| G3 (amendment) | `c5ae2bfa` plus the review-4 text fixes; spec review 4 "ready" | approved (in chat: "confirmed") | Sergey Platonov | 2026-10-20 | none |
 
 ## Open questions
 
@@ -212,14 +212,19 @@ Rebuild: `Requires-Rebuild: common`
 
 ## Task results
 
-- none yet
+- TASK-INST-02-01 (2026-10-20): code commit `940166df`, with
+  `Requires-Rebuild: common`. The tests were written first, but nothing
+  could be run on the workstation (no Python, WSL or Node). pytest,
+  ruff, ansible-lint and yamllint run in CI on the PR. The deploy task was
+  renamed to an ASCII hyphen (it had U+2011) so that `--list-tasks` and
+  the tests match it. The implementation review (G5) is in progress.
 
 ## Next step
 
-1. The owner confirms G3 for the amendment (see Approvals).
-2. CI on the PR runs the Verification lines that this workstation cannot run.
-3. TASK-INST-02-01, tests first. Then open the PR into `release/3.14`,
-   with the commit carrying `Requires-Rebuild: common`.
+1. CI on the PR runs the Verification lines.
+2. The implementation review (G5) finishes; its findings go into the PR.
+3. The hardware steps on `xinas-rc-vm` (G6), then forward-port to
+   `release/3.15`.
 
 ## Retrospective (after G7)
 
