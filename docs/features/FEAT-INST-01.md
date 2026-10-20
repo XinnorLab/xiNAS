@@ -4,8 +4,8 @@ Area: INST (`docs/Installer/`)
 Profile: medium (two areas — INST and CLIENT — after Q-INST-001)
 Owner: Sergey Platonov
 Approvers: spec and plan Sergey Platonov; acceptance Sergey Platonov
-Current gate: G6 Feature (server part); G3 Spec (client part)
-Spec status: approved (server part, docs/Installer/spec.md); client part not yet written
+Current gate: G5 Task (TASK-INST-01-03, client part); server part at G6
+Spec status: approved (server: docs/Installer/spec.md; client: docs/Client/client-setup-spec.md §5)
 Branch: fix/installer-virtual-kernel-flavour (off release/3.14 @ `dd979de9`)
 
 ## Documents
@@ -16,8 +16,10 @@ Branch: fix/installer-virtual-kernel-flavour (off release/3.14 @ `dd979de9`)
 - Role READMEs: `collection/roles/common/README.md` (the hold),
   `collection/roles/doca_ofed/README.md` (the `macsec` observation and
   what NVIDIA documents)
-- Deferred: `docs/TODO.md` — uninstaller does not release the hold;
-  client DOCA role (pending Q-INST-001)
+- Client spec: `docs/Client/client-setup-spec.md` §1 (scope row), §5
+  (new) — the client part, approved
+- Deferred: `docs/TODO.md` — uninstaller does not release the hold; the
+  client DOCA role entry is deleted when TASK-INST-01-03 lands
 - Cause and evidence: `docs/troubleshooting/installer-virtual-kernel-flavour.md`
   (lands with #411)
 - Hardware results: `docs/control-path/hardware-smoke-runbook.md` §2,
@@ -73,6 +75,28 @@ Acceptance: the fresh cloud-image install completes all roles, and
 `modinfo -k <k> macsec` resolves for every installed kernel afterwards
 Rebuild: decided in Q-INST-003 (see Approvals)
 
+### TASK-INST-01-03 The same macsec check in the client DOCA role
+
+Basis: `docs/Client/client-setup-spec.md` §5.2 (approved 2026-10-20), with
+`docs/Installer/spec.md` §3.2 as the normative text
+Files: `client_repo/collection/roles/doca_ofed/tasks/main.yml` (the six
+preflight tasks after "Ensure build dependencies are present", each also
+gated `when: mlx_nic_check.rc == 0`; the NIC-detection task gains the
+`deps` and `install` tags); `tests/test_doca_ofed_macsec_preflight.py`
+parametrized over both roles; `client_repo/collection/roles/doca_ofed/README.md`
+(a pointer to the check); `CHANGELOG.md` (the DOCA entry names the
+client too); `docs/TODO.md` (delete the client entry)
+Result: identical behavior to TASK-INST-01-02, only when a Mellanox NIC
+is detected
+Checks: the server test cases run against the client task file too; every
+client preflight task is NIC-gated; the detection task carries `deps` and
+`install`; ordering before "Install DOCA-OFED packages"
+Command: as TASK-INST-01-02 (pytest, ruff, yamllint, ansible-lint)
+Out of scope: a client run on hardware (no client with a Mellanox NIC on
+a virtual-flavour kernel is available)
+Acceptance: the tests pass for both roles
+Rebuild: none — clients do not use the server update flow (§5.3)
+
 ## Approvals
 
 | Gate | Object and version | Decision | Person | Date | Limits |
@@ -82,6 +106,9 @@ Rebuild: decided in Q-INST-003 (see Approvals)
 | Q-INST-001 | client `doca_ofed` role | in this change | Sergey Platonov | 2026-10-19 | adds TASK-INST-01-03 after its spec is approved |
 | Q-INST-002 | target release | 3.14, as `v3.14.0-rc.2`; forward-port to 3.15 | Sergey Platonov | 2026-10-19 | none |
 | Q-INST-003 | rebuild trailers | `Requires-Rebuild: common` on TASK-01 and `Requires-Rebuild: doca_ofed` on TASK-02 | Sergey Platonov | 2026-10-19 | the owner accepts that every updating host re-runs `doca_ofed` |
+| post-G3 clarification | `docs/Installer/spec.md` §3.2 *Which kernels* and the §4.2 loop: `-dbgsym` packages yield no kernel (from the implementation review; spec reviewer: no new review needed) | accepted | Sergey Platonov | 2026-10-20 | none |
+| G3 (client) | `docs/Client/client-setup-spec.md` §1 scope row and §5 as on this branch, after the client spec review "ready" and its four minor findings fixed | approved | Sergey Platonov | 2026-10-20 | none |
+| G4 (client) | TASK-INST-01-03 in this card | approved | Sergey Platonov | 2026-10-20 | none |
 
 ## Reviews
 

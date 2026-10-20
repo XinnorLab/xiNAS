@@ -23,6 +23,7 @@ Related:
 | Client menu | `client_repo/client_setup.sh` | Active (bash; the client host has no Python TUI) |
 | Client health report | `client_repo/client_healthcheck.sh` | Active |
 | Health profiles | `client_repo/client_health_profiles/*.yml` | Active |
+| DOCA-OFED install | `client_repo/collection/roles/doca_ofed/` | Active (Ansible role, run only when a Mellanox/NVIDIA NIC is present) |
 
 The "Python-only for day-2 management" rule in the repo's `CLAUDE.md`
 applies to the **server** node. The client package is a standalone bash
@@ -201,3 +202,62 @@ reachable, no driver / `1` no reachable cluster, so the checklist derives all
 three states from a single call; boolean callers are unaffected.
 
 The remaining probes are `sysfs` and `mount` reads and are effectively free.
+
+---
+
+## 5. DOCA-OFED install (`doca_ofed` role)
+
+### 5.1 When it runs
+
+The role first looks for a Mellanox/NVIDIA NIC (PCI vendor `15b3`, via
+`lspci -d 15b3:` or `/sys/bus/pci/devices/*/vendor`). With none it reports
+that the install is skipped and does nothing else; every task below
+carries `when: mlx_nic_check.rc == 0`.
+
+### 5.2 Kernel module prerequisite
+
+DOCA-Host's DKMS `mlx5_ib` needs the in-tree `macsec` module.
+**[Installer/spec.md §3.2 *Kernel module prerequisite*](../Installer/spec.md)
+is the normative text** — which kernels are checked, how a kernel version is
+read from a package name, the `Candidate:` test, the re-check, the three
+failure cases and their message, and the known limit all apply to the client
+role unchanged. The client role differs only in this:
+
+- **NIC gate.** Every preflight task also carries `when: mlx_nic_check.rc ==
+  0`, so a client without a Mellanox/NVIDIA NIC runs none of them (§5.1).
+- **Tags.** The preflight tasks carry `ofed`, `deps` and `install`, as on
+  the server. The NIC-detection task carries `ofed`, `detect`, `deps` and
+  `install`, so a run limited to `deps` or `install` still evaluates the
+  gate instead of failing on an undefined `mlx_nic_check`. (Before this
+  change every gated client task would fail that way under such a tag, by
+  reading the role — not observed; the
+  client menu runs the playbook untagged, so it was not hit there.)
+
+**Evidence.** The failure was observed on a server, not on a client:
+Ubuntu 24.04.5 cloud image, kernel `6.8.0-142-generic`, DOCA-Host 3.4.0,
+2026-10-19 — `openibd` failed with `mlx5_ib: Unknown symbol
+macsec_netdev_is_offloaded` until `linux-modules-extra-6.8.0-142-generic`
+was installed
+(`docs/troubleshooting/installer-virtual-kernel-flavour.md`). The client
+role installs the same DOCA-Host release (`doca_version` is pinned to
+`3.4.0` in both roles), so a client on a virtual-flavour kernel with a
+Mellanox NIC is expected to fail the same way. No client was observed
+failing.
+
+### 5.3 Updates and re-runs
+
+Clients do not use the server's release update flow or its
+`Requires-Rebuild:` trailers. The client menu's update checks out the
+new release tag and restarts the menu; it runs no Ansible
+(`client_setup.sh`, *Update Available*). The role runs again only when:
+
+- the operator picks **Install DOCA OFED** in the client menu, which runs
+  `playbooks/doca_ofed_install.yml` untagged — but skips it, showing "DOCA
+  OFED appears to be installed", when `/sys/class/infiniband` already
+  lists devices and `ibstat` exists; or
+- the operator runs `ansible-playbook playbooks/doca_ofed_install.yml`
+  from the client checkout by hand, which is what that message suggests
+  for a reinstall.
+
+So a client that already has a working DOCA install is not touched by
+this change; it matters for new installs.
