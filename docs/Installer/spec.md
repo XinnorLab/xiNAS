@@ -673,12 +673,12 @@ Effective values listed below come from each role's `defaults/main.yml`, overrid
     did not, so the check is a no-op where the generic metapackage is
     installed.
   - **What NVIDIA says.** NVIDIA does not document this for Ubuntu: the
-    DOCA 3.5.0 *DOCA-Host Installation and DKMS Management Guide*
-    ([link](https://networking-docs.nvidia.com/doca/sdk/doca-host-installation-and-dkms-management-guide))
+    DOCA 3.5.0
+    [DOCA-Host Installation and DKMS Management Guide](https://networking-docs.nvidia.com/doca/sdk/doca-host-installation-and-dkms-management-guide)
     names only DKMS and the running kernel's headers as prerequisites.
-    The nearest vendor statement is the DGX guide for RHEL 10
-    ([link](https://docs.nvidia.com/dgx/dgx-el10-user-guide/installing-doca-steps.html),
-    read 2026-10-19), which installs `kernel-modules-extra-$(uname -r)`
+    The nearest vendor statement is NVIDIA's
+    [DGX guide for RHEL 10, *Installing NVIDIA DOCA-OFED*](https://docs.nvidia.com/dgx/dgx-el10-user-guide/installing-doca-steps.html)
+    (read 2026-10-19), which installs `kernel-modules-extra-$(uname -r)`
     as a DOCA-OFED step without giving a reason.
   - **Why a module, not a package name.** Packaging differs between
     kernel series: on the same host the 24.04 HWE metapackage (kernel
