@@ -124,7 +124,8 @@ one that found nothing. Two rules follow, both enforced by
 
 1. **Read-only discovery carries `check_mode: false`** so it actually runs
    under `--check`: `which xicli`, `xicli raid show -f json` and
-   `xicli pool show -f json` (§4.3), the mount-unit scan (§4.4), the
+   `xicli pool show -f json` (§4.3), the mount-unit scan (§4.4.1, run
+   by both Phase C and Phase D), the
    `/etc/issue.net` ownership probe (§4.7), and the OS-disk resolver
    `nvme_namespace/tasks/resolve_system_disks.yml` (§4.3 point 4 — without
    it nothing resolves, and Phase C's fail-closed abort takes the dry run
@@ -373,7 +374,14 @@ mountpoints are gone.
      pools: `^.*_spare_pool$`. Names that don't match are treated as
      foreign and left untouched, then reported as "preserved" in the
      §8 summary.
-2. For every array found in (1): `xicli raid destroy -n <name> --force`.
+2. Stop every mount unit that §4.4.1 identifies as xiNAS-generated
+   (best-effort: a unit that fails to stop does not abort the phase),
+   then for every array found in (1): `xicli raid destroy -n <name>
+   --force`. The stop comes first so no filesystem stays mounted over an
+   array this step destroys. Phase C and Phase D run the same discovery
+   task, so the set of units stopped here and the set removed in §4.4
+   cannot drift apart. The units are stopped here, not removed; §4.4
+   removes them.
 3. For every pool found in (1): `xicli pool delete -n <name>`.
 4. Resolve the physical disk(s) hosting the OS (the same detector the
    installer uses — `nvme_namespace` role, `resolve_system_disks.yml` /
@@ -413,10 +421,8 @@ and reports the names it would destroy. The `raid destroy` / `pool delete`
 
 ### 4.4 Phase D — remove xiNAS mounts
 
-1. For every `*.mount` unit in `/etc/systemd/system/` whose
-   `Description=` starts with `xiRAID Classic` plus a trailing space (the template signature
-   from
-   [raid_fs/templates/mount.unit.j2](../../collection/roles/raid_fs/templates/mount.unit.j2)):
+1. For every `*.mount` unit in `/etc/systemd/system/` that §4.4.1
+   identifies as xiNAS-generated:
    - `systemctl stop <unit>`
    - `systemctl disable <unit>`
    - Remove the unit file.
@@ -424,6 +430,60 @@ and reports the names it would destroy. The `raid destroy` / `pool delete`
 3. `systemctl daemon-reload`.
 
 The role does **not** edit `/etc/fstab` — xiNAS never writes to it.
+
+A unit is removed even when its array was preserved as foreign in §4.3.
+The unit is a xiNAS artifact. The data stays on the preserved array, and
+the operator can mount it again by hand.
+
+#### 4.4.1 Which mount units are xiNAS's
+
+Three writers create `.mount` units in `/etc/systemd/system/`. They use
+two `Description=` prefixes:
+
+| Writer | `Description=` | `What=` |
+|--------|----------------|---------|
+| Day-1 template, [raid_fs/templates/mount.unit.j2](../../collection/roles/raid_fs/templates/mount.unit.j2) | `xiRAID Classic <leaf>` | the configured `data_device` |
+| TUI, `generate_mount_unit` in [xinas_menu/utils/xfs_helpers.py](../../xinas_menu/utils/xfs_helpers.py) | `xiRAID Classic <leaf>` | the array volume, `/dev/xi_<name>` |
+| Control path `fs.create` (API, MCP, `xinasctl`), `renderMountUnit` in [xiNAS-MCP/src/lib/fs/unit.ts](../../xiNAS-MCP/src/lib/fs/unit.ts) | `xiNAS <leaf>` | an observed XiraidArray volume, `/dev/xi_<name>` |
+
+`<leaf>` is the last component of the mountpoint.
+
+The role reads `Description=` and `What=` from each unit file (the first
+occurrence of each key). It treats the unit as xiNAS-generated when one
+of the signatures in `xinas_mount_unit_signatures` (role defaults)
+matches:
+
+1. `Description=` starts with `xiRAID Classic ` (trailing space included).
+   `What=` is not checked.
+2. `Description=` starts with `xiNAS ` (trailing space included) **and**
+   `What=` starts with `/dev/xi_`.
+
+Any other unit is left untouched, and so is every unit outside
+`/etc/systemd/system/`.
+
+Why the two rules differ:
+
+- **`xiNAS ` alone is too generic.** A site's own unit can plausibly be
+  named "xiNAS backup", for example. The control path formats only
+  observed xiRAID array volumes (`backing_array_not_found` in
+  `xiNAS-MCP/src/lib/fs/validate.ts`). xiNAS names every array volume
+  `/dev/xi_<name>` (`volume_path` in `xiNAS-MCP/src/lib/parse/raid.ts`).
+  So every unit the control path writes has a `/dev/xi_` `What=`. A
+  third-party unit named "xiNAS …" over any other device is never
+  stopped or removed.
+- **The `xiRAID Classic ` rule stays as shipped.** The day-1 template
+  writes whatever `data_device` the preset configured. Every shipped
+  preset and the auto-namespace generator use `/dev/xi_data`, but
+  `raid_fs.yml` does not enforce that. Adding a `What=` check to this
+  rule could leave a day-1 unit behind that earlier uninstallers
+  removed, and the prefix is specific enough without one.
+
+Before this rule, the role matched only `xiRAID Classic `. Units created
+by `fs.create` were therefore not stopped before Phase C destroyed their
+arrays, and they stayed on disk after uninstall. The regression test is
+[tests/test_uninstall_mount_unit_discovery.py](../../tests/test_uninstall_mount_unit_discovery.py).
+It runs the role's real discovery shell over unit files produced by each
+of the three writers, and over look-alike units that must not match.
 
 ### 4.5 Phase E — remove xiNAS services and helpers
 
