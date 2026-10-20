@@ -1,35 +1,11 @@
 ---
 # Phase D — stop, disable, and delete every xiNAS-generated systemd .mount
-# unit. Mounts are identified by their Description= line (set in
-# collection/roles/raid_fs/templates/mount.unit.j2). After mounts are gone,
-# the kernel NFS server is stopped + disabled too.
+# unit (identified per uninstall-spec §4.4.1 by find_mount_units.yml, which
+# Phase C also runs). After mounts are gone, the kernel NFS server is
+# stopped + disabled too.
 
-- name: "Mounts | find xiNAS-generated mount units"
-  ansible.builtin.shell: |
-    set -e
-    out=""
-    for unit_path in /etc/systemd/system/*.mount; do
-      [ -e "$unit_path" ] || continue
-      desc=$(awk -F'=' '/^Description=/{print substr($0, index($0,"=")+1); exit}' "$unit_path")
-      case "$desc" in
-        "{{ xinas_mount_unit_signature }}"*)
-          out="$out\n$(basename "$unit_path")"
-          ;;
-      esac
-    done
-    printf '%b' "$out" | sed '/^$/d'
-  args:
-    executable: /bin/bash
-  register: _xinas_mounts
-  changed_when: false
-  # Read-only discovery (awk over the unit files): must run under --check too,
-  # otherwise a dry run parses an empty stdout into an empty unit list and
-  # reports that it would stop nothing.
-  check_mode: false
-
-- name: "Mounts | parse mount unit list"
-  ansible.builtin.set_fact:
-    _xinas_mount_units: "{{ (_xinas_mounts.stdout_lines | default([])) | reject('equalto', '') | list }}"
+- name: "Mounts | discover xiNAS mount units"
+  ansible.builtin.import_tasks: find_mount_units.yml
 
 - name: "Mounts | stop xiNAS mount units"
   ansible.builtin.systemd:
@@ -43,7 +19,7 @@
 
 - name: "Mounts | delete unit files"
   ansible.builtin.file:
-    path: "/etc/systemd/system/{{ item }}"
+    path: "{{ xinas_mount_unit_dir }}/{{ item }}"
     state: absent
   loop: "{{ _xinas_mount_units }}"
 

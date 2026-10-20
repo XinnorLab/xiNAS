@@ -38,8 +38,9 @@ Each phase is its own task file under `tasks/`:
 | `00_preflight.yml`        | Confirmation, summary fact init. |
 | `10_quiesce_services.yml` | Stop MCP + NFS helper; unexport NFS shares. |
 | `20_remove_exports.yml`   | Clear `/etc/exports`, remove `/etc/exports.d/xinas-*`. |
-| `30_teardown_raid.yml`    | Delete xiRAID arrays + spare pools + drive clean. |
+| `30_teardown_raid.yml`    | Stop xiNAS mount units; delete xiRAID arrays + spare pools + drive clean. |
 | `40_remove_mounts.yml`    | Stop and remove xiNAS systemd `.mount` units; stop `nfs-server`. |
+| `find_mount_units.yml`    | Shared discovery of xiNAS `.mount` units (`xinas_mount_unit_signatures`), imported by phases 30 and 40. |
 | `50_remove_services.yml`  | Delete `xinas-mcp` and `xinas-nfs-helper` unit files. |
 | `60_remove_binaries.yml`  | Remove `/usr/local/{bin,sbin}/xinas-*` wrappers. |
 | `70_remove_paths.yml`     | Remove `/opt/xiNAS`, `/etc/xinas-mcp`, `/usr/lib/xinas-mcp`, `/var/lib/xinas`, `/var/log/xinas`, `/etc/netplan/99-xinas.yaml`, sudoers, motd, cron, sshd drop-in. |
