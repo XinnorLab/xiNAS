@@ -51,7 +51,7 @@ from jinja2.nativetypes import NativeEnvironment  # noqa: E402
 REPO = Path(__file__).resolve().parents[1]
 ROLE = REPO / "collection/roles/xinas_uninstall"
 TEARDOWN = ROLE / "tasks/30_teardown_raid.yml"
-MOUNTS = ROLE / "tasks/40_remove_mounts.yml"
+FIND_MOUNTS = ROLE / "tasks/find_mount_units.yml"
 PATHS = ROLE / "tasks/70_remove_paths.yml"
 FINALIZE = ROLE / "tasks/99_finalize.yml"
 RESOLVE_DISKS = REPO / "collection/roles/nvme_namespace/tasks/resolve_system_disks.yml"
@@ -65,7 +65,7 @@ READ_ONLY_DISCOVERY = [
     (TEARDOWN, "RAID | locate xicli"),
     (TEARDOWN, "RAID | list current arrays"),
     (TEARDOWN, "RAID | list current pools"),
-    (MOUNTS, "Mounts | find xiNAS-generated mount units"),
+    (FIND_MOUNTS, "Mounts | find xiNAS-generated mount units"),
     (PATHS, "Paths | check whether /etc/issue.net is xiNAS-managed"),
 ]
 

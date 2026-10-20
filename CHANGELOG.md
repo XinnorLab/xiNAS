@@ -156,6 +156,16 @@ Requires-Rebuild: doca_ofed
 
 ### Fixed
 
+- **Uninstall unmounts filesystems created through the API or MCP.** The
+  uninstaller recognised only the `Description=xiRAID Classic …` mount
+  units that the installer and the TUI write. The `xiNAS …` units that
+  `fs.create` writes were not stopped before the arrays under them were
+  destroyed, and their unit files stayed on disk. Both phases now share
+  one discovery step. It also matches `xiNAS …` units, but only when
+  `What=` is a xiRAID volume (`/dev/xi_*`), so a site's own unit with a
+  similar name is never touched. See `docs/Installer/uninstall-spec.md`
+  §4.4.1.
+
 - **The kernel hold no longer stops the install on a cloud image.** The
   `common` role held a fixed `linux-image-generic`; an Ubuntu cloud image
   carries `linux-image-virtual` instead, so the hold failed and the

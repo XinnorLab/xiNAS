@@ -1,0 +1,43 @@
+---
+# Discovery of xiNAS-generated systemd .mount units (uninstall-spec §4.4.1).
+# Imported by Phase C (stop them before the arrays are destroyed) and by
+# Phase D (stop, disable, delete), so both phases act on the same set.
+# Sets `_xinas_mount_units` to a list of unit file names.
+
+- name: "Mounts | find xiNAS-generated mount units"
+  ansible.builtin.shell: |
+    set -e
+    is_xinas_unit() {
+    {% for sig in xinas_mount_unit_signatures %}
+      case "$1" in
+        "{{ sig.description }}"*)
+    {% if sig.what is defined %}
+          case "$2" in "{{ sig.what }}"*) return 0 ;; esac
+    {% else %}
+          return 0
+    {% endif %}
+          ;;
+      esac
+    {% endfor %}
+      return 1
+    }
+    for unit_path in "{{ xinas_mount_unit_dir }}"/*.mount; do
+      [ -f "$unit_path" ] || continue
+      desc=$(awk '/^Description=/{print substr($0, index($0,"=")+1); exit}' "$unit_path")
+      what=$(awk '/^What=/{print substr($0, index($0,"=")+1); exit}' "$unit_path")
+      if is_xinas_unit "$desc" "$what"; then
+        basename "$unit_path"
+      fi
+    done
+  args:
+    executable: /bin/bash
+  register: _xinas_mounts
+  changed_when: false
+  # Read-only discovery (awk over the unit files): must run under --check too,
+  # otherwise a dry run parses an empty stdout into an empty unit list and
+  # reports that it would stop nothing.
+  check_mode: false
+
+- name: "Mounts | parse mount unit list"
+  ansible.builtin.set_fact:
+    _xinas_mount_units: "{{ (_xinas_mounts.stdout_lines | default([])) | reject('equalto', '') | list }}"
