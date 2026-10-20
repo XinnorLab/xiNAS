@@ -32,6 +32,21 @@ netplan paths).
    `/etc/systemd/system /etc/netplan /run/netplan /run/systemd`.
 3. [ ] `journalctl -u xinas-agent -b` — clean boot, no EPERM/EACCES.
 
+**`v3.13.3` → `v3.14.0-rc.1`, 2026-10-19.** ✅ On `xinas-rc-vm` (a KVM
+guest on xinas-box: Ubuntu 24.04.5 cloud image, kernel 6.8.0-142, 8 vCPU,
+16 GB, six 8 GB virtio data disks, preset `xinnorVM`, xiRAID 4.4.1)
+installed from `v3.13.3`. The update was driven through v3.13.3's own
+`xinas_menu.utils.update_check` / `update_apply` sequence with
+`XINAS_UPDATE_CHANNEL=prerelease`, the menu screens left out: the check
+found `v3.14.0-rc.1` with `required_rebuilds: ('xinas_node_build',)`; the
+confirm text ends with "⚠ This update re-applies Ansible:
+xinas_node_build"; `apply_update` checked out the tag; `ansible-playbook
+playbooks/site.yml --tags xinas_node_build` exited 0; the NFS-helper
+refresh returned `success`. Afterwards the checkout is `c28a5429`, the
+version literal `3.14.0-rc.1`, `dist/` was rebuilt, and `xinas-api`,
+`xinas-agent` and `xinas-nfs-helper` restarted while `nfs-server` and
+xiRAID did not; arrays, filesystem and export are unchanged.
+
 ## 2. Clean install (WS13 install criterion)
 
 On a scratch node (or after `./uninstall.sh`):
@@ -44,6 +59,19 @@ On a scratch node (or after `./uninstall.sh`):
 3. [ ] `GET /api/v1/disks`, `/arrays`, `/filesystems`,
    `/network/interfaces` all return non-empty observed state within 60 s
    of boot.
+
+**`v3.13.3` on an Ubuntu cloud image, 2026-10-19** (the base for the §1
+run; `install.sh` with `XINAS_UNATTENDED=1`, `XINAS_RELEASE_TAG=v3.13.3`,
+preset `xinnorVM`). ❌ twice, then ✅: the first run stopped in `common`
+(`dpkg_selections` hold of `linux-image-generic`, which a virtual-kernel
+host does not have), the second in `doca_ofed` (`openibd` cannot load
+`mlx5_ib`: `Unknown symbol macsec_netdev_is_offloaded`, because `macsec`
+is in `linux-modules-extra`, which a virtual-kernel host does not
+install). After `linux-generic` and `linux-modules-extra-$(uname -r)`
+were added by hand, all 17 roles applied. The installer reported both
+failures correctly (exit 2, failing role named). Cause and fix:
+`docs/troubleshooting/installer-virtual-kernel-flavour.md`. A fresh
+install of `v3.14.0-rc.1` itself was not run.
 
 ## 3. S3/S4 — xiRAID over the agent sandbox
 
@@ -214,6 +242,17 @@ On a scratch node (or after `./uninstall.sh`):
   row above). The second half was not run: an NFS client
   (192.168.65.225) was connected, and stopping `nfs-server` would cut it
   off.
+  *2026-10-19, `xinas-rc-vm` on `v3.14.0-rc.1`, no NFS client attached:*
+  second half ✅ — with `nfs-server` stopped, `nfs_loopback` answers `200`
+  with `ok: false`, `error.stage: mount` ("probe timed out during
+  mount"), `cleanup: clean`; no per-run directory and no `health-probe`
+  mount are left; a fingerprint of the export tree (`find … -printf '%p
+  %s %T@'` hashed) is identical before and after; once `nfs-server` is
+  started again the probe passes. First half: not reproduced in 25 more
+  attempts. On both nodes the probe request never overlapped the deep
+  run's probe phase over REST, so the `409` it expects was never seen
+  this way; the shared probe lock itself does answer `409` to two
+  concurrent probes (the row above).
 - [ ] S19b prompt, from a real MCP client (Claude Desktop / Inspector) on
   both eras: `server/discover` (modern) and `initialize` (legacy)
   advertise `prompts: { listChanged: false }`; `prompts/list` shows
@@ -624,6 +663,14 @@ verification §14.4 requires before the gate counts as proven on hardware.
 - [ ] Audit (`/var/log/xinas/audit.jsonl`): `mcp.confirmation.requested`,
   `…approved` (URL), `…consumed`, `…apply_task_created` rows plus exactly
   one `http.*` row for the apply; `GET /api/v1/metrics` shows the counters.
+- [x] Upgrade from a pre-S15 release: the state database gains migrations
+  `006-mcp-confirmations` and `007-operational-events` (tables
+  `mcp_confirmations`, `operational_events`, `operational_event_meta`)
+  and keeps `001`–`005`; the api creates
+  `/var/lib/xinas/state/mcp-confirmation-keys.json` mode `0600`, owned by
+  `xinas-api`. ✅ *2026-10-19, `xinas-rc-vm`, `v3.13.3` → `v3.14.0-rc.1`
+  (§1):* `schema_version` lists `001`…`007`; the key ring is `0600
+  xinas-api:xinas-admin`.
 
 ## 6. Cross-cutting
 
