@@ -744,9 +744,12 @@ Effective values listed below come from each role's `defaults/main.yml`, overrid
     **only when both `/etc/sysctl.d/90-perf-net.conf` and
     `90-perf-vm.conf` exist**. It checks them with `stat` first, under
     the `sysctl` and `common` tags.
-    - **Why the strip is gated.** On a legacy host the shared lines hold
-      `perf_tuning`'s values: the module edits one line per key, and
-      `perf_tuning` ran last. Stripping them before `perf_tuning` has
+    - **Why the strip is gated.** On a legacy host the network lines in
+      `/etc/sysctl.conf` hold `perf_tuning`'s values, because the module
+      edits one line per key and `perf_tuning` ran last. `vm.swappiness`
+      holds `common`'s `10`, because by then `perf_tuning` kept its VM keys in
+      `90-perf-vm.conf` (§3.12). This is inferred from the role history,
+      not read off a legacy host. Stripping the network lines before `perf_tuning` has
       written its drop-ins would leave the host on the baseline. Live
       values drop at the handler's `sysctl --system`, and `tcp_rmem` /
       `tcp_wmem`, `netdev_max_backlog`, `somaxconn` and the sunrpc slot
@@ -775,9 +778,14 @@ Effective values listed below come from each role's `defaults/main.yml`, overrid
       (above), and its handler runs `sysctl -e --system`, which skips
       unknown keys. So a legacy file left in place no longer breaks the
       role.
-    - **Migrating a host.** Run an untagged `playbooks/site.yml`.
-      `--tags common,perf_tuning` does not work until `perf_tuning`
-      carries its tag (§2.4).
+    - **Migrating a host.** It takes two runs: an untagged
+      `playbooks/site.yml`, then `--tags common` (or the next update that
+      carries `Requires-Rebuild: common`). In the first run `common` comes
+      before `perf_tuning`, so the strip is still skipped. The handler's
+      `sysctl --system` at the end of that run reads the legacy file last,
+      so the legacy lines, `swappiness=10` included, win again until the
+      second run strips them. `--tags common,perf_tuning` does not work
+      until `perf_tuning` carries its tag (§2.4).
 - Hostname: `xiNAS-<HWKEY>` (from the `./hwkey` binary), unless `xinas_hostname`
   is overridden. **The `./hwkey` value is a DMI-derived host identifier and is
   NOT the same as the xiRAID _license_ hwkey** reported by `xicli license show`

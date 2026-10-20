@@ -98,6 +98,11 @@ PR. On hardware, on `xinas-rc-vm`, which still has `"true"`:
 5. Optional: run with `-e common_unattended_reboot=true -e
    common_unattended_reboot_time=02:00`, check that both lines appear,
    then re-run without the flags.
+6. Optional, for the strip gate: append the marker line
+   `net.core.somaxconn = 4096` to `/etc/sysctl.conf`. Rename
+   `90-perf-net.conf` away and run `--tags sysctl`; the marker must stay.
+   Restore the file and run again; the marker must be gone. Record both as
+   [observed].
 Out of scope:
 - reporting a pending reboot (TODO)
 - editing `50unattended-upgrades`
@@ -118,7 +123,8 @@ Rebuild: `Requires-Rebuild: common`
 | Q-INST-006 | tag every `common` task `common` | approved (in chat) | Sergey Platonov | 2026-10-20 | none |
 | Q-INST-007 | `reload: false` on the common sysctl task | approved (in chat) | Sergey Platonov | 2026-10-20 | none |
 | Q-INST-008 | gate the legacy `/etc/sysctl.conf` strip on both `90-perf-*.conf` drop-ins | approved (in chat) | Sergey Platonov | 2026-10-20 | none |
-| G3 + G4 | spec as of `c432788c` plus the review-3 amendment (Q-INST-008), and this one-task plan | approved (in chat: "do") | Sergey Platonov | 2026-10-20 | given after review 2; review 3 was folded in and review 4 checks the amendment |
+| G3 + G4 | spec as of `c432788c` and this one-task plan | approved (in chat: "do") | Sergey Platonov | 2026-10-20 | given after review 2, before the review-3 amendment (`c5ae2bfa`, Q-INST-008) existed |
+| G3 (amendment) | `c5ae2bfa` plus the review-4 text fixes; spec review 4 "ready" | **pending owner confirmation** | Sergey Platonov | — | the task is implemented against this text; the PR waits for this confirmation |
 
 ## Open questions
 
@@ -192,6 +198,17 @@ Rebuild: `Requires-Rebuild: common`
   2. Two sentences still described the old reload behaviour. Both were
      fixed.
   3. The Approvals table did not record the decisions. Rows were added.
+- Spec review 4 (2026-10-20, same reviewer): **ready**. All three
+  findings from review 3 were closed. There were 4 minor findings:
+  1. The legacy layout was described inconsistently with §3.12
+     (`vm.swappiness` held `common`'s 10). It is now stated per key and
+     marked inferred.
+  2. One untagged `site.yml` does not finish the migration. *Migrating a
+     host* now says it takes two runs.
+  3. The gate had no behavioural check. Hardware step 6 was added
+     (optional).
+  4. The approval came before the amended text. The G3 (amendment) row
+     now waits for the owner's confirmation.
 
 ## Task results
 
@@ -199,8 +216,8 @@ Rebuild: `Requires-Rebuild: common`
 
 ## Next step
 
-1. Spec review 4 of the review-3 amendment, running alongside the task.
-2. G3 and G4 are approved (see Approvals).
+1. The owner confirms G3 for the amendment (see Approvals).
+2. CI on the PR runs the Verification lines that this workstation cannot run.
 3. TASK-INST-02-01, tests first. Then open the PR into `release/3.14`,
    with the commit carrying `Requires-Rebuild: common`.
 
