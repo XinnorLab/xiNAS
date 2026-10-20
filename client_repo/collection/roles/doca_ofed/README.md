@@ -22,7 +22,19 @@ the result. When nothing matches, the role emits a single
 task (build deps, signing key, APT repo, cache update, package install,
 reboot) is skipped. The detection task itself is `failed_when: false`, so a
 host without `lspci` and without a readable sysfs is treated as "no NIC"
-rather than a failure.
+rather than a failure. The detection task also carries the `deps` and
+`install` tags, so a run limited to those tags still evaluates the gate.
+
+### macsec prerequisite
+
+Before installing DOCA, and only when a NIC was detected, the role checks
+that the `macsec` module exists for the running kernel and every installed
+kernel — DOCA-Host's `mlx5_ib` needs it — and installs
+`linux-modules-extra-<kernel>` where it is missing and apt has it. Hosts on
+Ubuntu's virtual kernel flavour (cloud images) do not get that package from
+their kernel metapackage. Without a way to provide the module the role stops
+before any DOCA package, naming the kernels. Contract:
+[docs/Client/client-setup-spec.md](../../../../docs/Client/client-setup-spec.md) §5.2.
 
 Without the gate, a client with no ConnectX/BlueField card still added the
 DOCA repo, installed `doca-all`, built DKMS modules against the running

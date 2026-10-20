@@ -173,8 +173,9 @@ Requires-Rebuild: doca_ofed
   macsec_netdev_is_offloaded`. Before installing DOCA, `doca_ofed` now
   checks `macsec` for the running kernel and every installed kernel, adds
   `linux-modules-extra-<kernel>` where apt has it, and stops with a clear
-  message, naming the kernel, where it cannot. On generic-flavour hosts
-  the check changes nothing.
+  message, naming the kernel, where it cannot. The client-side
+  `doca_ofed` role does the same when it detects a Mellanox NIC. On
+  generic-flavour hosts the check changes nothing.
 
 - **The NFS loopback health probe mounts again.** `nfs_loopback` and the
   `nfs.loopback` check of `GET /health?profile=deep` ran `systemd-mount`

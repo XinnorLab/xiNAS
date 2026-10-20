@@ -4,7 +4,7 @@ Area: INST (`docs/Installer/`)
 Profile: medium (two areas — INST and CLIENT — after Q-INST-001)
 Owner: Sergey Platonov
 Approvers: spec and plan Sergey Platonov; acceptance Sergey Platonov
-Current gate: G5 Task (TASK-INST-01-03, client part); server part at G6
+Current gate: G6 Feature
 Spec status: approved (server: docs/Installer/spec.md; client: docs/Client/client-setup-spec.md §5)
 Branch: fix/installer-virtual-kernel-flavour (off release/3.14 @ `dd979de9`)
 
@@ -160,6 +160,29 @@ Rebuild: none — clients do not use the server update flow (§5.3)
     there); the "no apt candidate" failure path on a host (covered by
     the structural test only); a fresh install on an unmodified cloud
     image (needs a new VM and a licence for its hardware key).
+  - Unplanned real-world check, 2026-10-20: `xinas-rc-vm` rebooted on its
+    own at 06:10 (unattended-upgrades with `Automatic-Reboot "true"`) into
+    `6.8.0-147-generic`, a kernel it had never run. `mlx5_ib`, `macsec`
+    and `xiraid` loaded, `openibd` and xiRAID came up, both arrays and
+    `/mnt/data` were online — because TASK-02 had installed
+    `linux-modules-extra` for that kernel the day before.
+- TASK-INST-01-03, 2026-10-20:
+  - Tests first: with the test parametrized over both roles, the client
+    cases failed 26/45 before the client change. After: 86 passed
+    (`test_doca_ofed_macsec_preflight.py` both roles,
+    `test_common_kernel_hold.py`, `test_common_avx_preflight.py`,
+    `test_doca_ofed_handler_order.py`, `test_doca_repo_pin.py`).
+  - Found while writing it: Ansible evaluates `loop` before `when`, so on
+    a client without a Mellanox NIC the preflight loops would have failed
+    on skipped registers; they default to `[]`, pinned by a test.
+  - ruff format/check clean; yamllint clean; `ansible-lint` on the client
+    role and on `collection/roles/`: 0 findings each.
+  - On the VM (no Mellanox NIC): `--tags deps,install` ran the detection
+    and skipped all 8 gated tasks, `failed=0`; an untagged run printed
+    the skip message, `failed=0`.
+  - Not run: a client with a Mellanox NIC on a virtual-flavour kernel
+    (none available); covered by the shared tests and the server-side
+    hardware run.
 
 ## Open questions
 
