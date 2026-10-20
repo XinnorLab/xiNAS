@@ -29,6 +29,15 @@ later in the run would install one, and the failure names the operator overlay
 (`playbooks/group_vars/all/20-local.yml`) the sticky flag usually comes from.
 See [docs/Installer/spec.md](../../../docs/Installer/spec.md) §3.1.
 
+The role also **holds the kernel**, again with no variable of its own: it
+reads the installed packages and sets `hold` on every installed kernel
+image metapackage — `linux-image-generic`, `linux-image-virtual`, an HWE
+variant, whichever the host carries — never on a fixed name, so a cloud
+image with the virtual flavour does not fail the play. A host with none of
+them (a custom kernel) gets a warning and no hold. The exact package
+pattern is in [docs/Installer/spec.md](../../../docs/Installer/spec.md)
+§3.1 *Kernel held*; the uninstaller does not release the hold.
+
 ## Example
 ```yaml
 - hosts: storage_nodes

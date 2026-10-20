@@ -514,7 +514,43 @@ Effective values listed below come from each role's `defaults/main.yml`, overrid
 - Packages installed (apt): `curl`, `vim`, `htop`, `chrony`, `unattended-upgrades`, `ca-certificates`, `quota`.
 - Timezone: `Europe/Amsterdam`.
 - Chrony service enabled and started.
-- Kernel held: `dpkg-selections` marks `linux-image-generic` as `hold` to prevent auto-upgrades.
+- Kernel held: the role holds every installed kernel image
+  **metapackage**, so `apt upgrade` cannot pull in a newer kernel than
+  the one xiRAID's and DOCA's kernel modules were built for.
+  - **The set.** Installed packages, read with
+    `ansible.builtin.package_facts`, whose name matches
+    `^linux-image-[a-z][a-z0-9.+-]*$`, minus every name that begins with
+    `linux-image-unsigned-` or contains a kernel version
+    (`[0-9]+\.[0-9]+\.[0-9]+-[0-9]+`). That keeps the flavour
+    metapackages — `linux-image-generic`, `linux-image-virtual`,
+    `linux-image-generic-hwe-24.04`, their `-edge` variants and any other
+    flavour name — and leaves out the per-version image packages such as
+    `linux-image-6.8.0-142-generic`. The role never names a package
+    itself.
+  - **The hold.** Each member is set to `hold` with
+    `ansible.builtin.dpkg_selections`; a member already held is
+    unchanged, so a re-run is idempotent. When the set is empty (a
+    custom kernel), the role holds nothing, prints a warning saying so,
+    and the install continues. The fact gathering and the hold both
+    carry the `kernel` tag.
+  - **Why the set is read, not named.** `dpkg_selections` fails on a
+    package that is not installed. **[observed]** 2026-10-19, Ubuntu
+    24.04.5 cloud image (`noble-server-cloudimg-amd64`), ansible-core
+    2.16.3 from the Ubuntu archive: the previous fixed hold of
+    `linux-image-generic` failed with `Failed to find package
+    'linux-image-generic' to perform selection 'hold'` and stopped the
+    install in `common`. The module documentation
+    ([ansible.builtin.dpkg_selections](https://docs.ansible.com/ansible/latest/collections/ansible/builtin/dpkg_selections_module.html))
+    does not state this behaviour; the observation is the source.
+- Kernel flavour: on that host the kernel metapackages were
+  `linux-virtual` and `linux-image-virtual`, and `linux-image-virtual`
+  depended on `linux-image-6.8.0-147-generic` — the same image package
+  `linux-image-generic` depends on (`apt-cache depends`, 2026-10-19). The
+  running kernel's name (`6.8.0-142-generic`) therefore did not reveal
+  the flavour; only the metapackages did. Which metapackages other
+  images or install media carry was not checked, and neither the hold
+  nor the `doca_ofed` module check (§3.2) depends on it. See
+  `docs/troubleshooting/installer-virtual-kernel-flavour.md`.
 - Unattended-upgrades config deployed to `/etc/apt/apt.conf.d/20auto-upgrades`.
 - Sysctl set (persisted): `net.core.rmem_max=268435456`,
   `net.core.wmem_max=268435456`, `vm.swappiness=10` — written to the
@@ -604,6 +640,56 @@ Effective values listed below come from each role's `defaults/main.yml`, overrid
   `apt update` failed the whole install. `get_url … force: true` re-fetches so a
   future key rotation self-heals. (This trusted.gpg.d path is the one verified
   end-to-end on DOCA hardware; the uninstaller removes it on OFED teardown.)
+- Kernel module prerequisite: DOCA-Host's DKMS `mlx5_ib` needs symbols
+  from the in-tree `macsec` module. Before "Install DOCA-OFED packages"
+  the role checks every kernel it may run on.
+  - **Which kernels.** The running kernel (`ansible_kernel`), and every
+    kernel version K read from the installed package names that the
+    §3.1 hold leaves out: K is the part after `linux-image-` or
+    `linux-image-unsigned-` in each installed name that contains a
+    kernel version (`[0-9]+\.[0-9]+\.[0-9]+-[0-9]+`), for example
+    `6.8.0-147-generic` from `linux-image-6.8.0-147-generic`.
+    Metapackage names (`linux-image-virtual`) and debug-symbol packages
+    (names ending in `-dbgsym`) never yield a K. A newer
+    kernel already installed and waiting for the reboot this role
+    requires is therefore included.
+  - **Per kernel K.** If `modinfo -k K macsec` fails, the role asks apt
+    for `linux-modules-extra-K`. When `apt-cache policy
+    linux-modules-extra-K` reports a candidate (its `Candidate:` line is
+    not `(none)`), the role installs that package and runs `modinfo -k
+    K macsec` again.
+  - **Failure.** The role fails before any DOCA package is installed,
+    naming K and the module, when the module is still missing, when there
+    was no candidate, or when the apt install fails.
+  - **Tags.** These tasks carry `ofed`, `deps` and `install`, so `--tags
+    install` (the DOCA package task's tag) cannot skip them.
+  - **Evidence.** **[observed]** 2026-10-19, Ubuntu 24.04.5 cloud image,
+    kernel `6.8.0-142-generic`, DOCA-Host 3.4.0: without the package
+    `openibd` failed to start and `dmesg` showed `mlx5_ib: Unknown symbol
+    macsec_netdev_is_offloaded (err -2)`; `dpkg -S` placed `macsec.ko` in
+    `linux-modules-extra-6.8.0-142-generic`; after installing it `mlx5_ib`
+    loaded and `openibd` started. On that host `linux-image-generic`
+    depended on `linux-modules-extra-<version>` and `linux-image-virtual`
+    did not, so the check is a no-op where the generic metapackage is
+    installed.
+  - **What NVIDIA says.** NVIDIA does not document this for Ubuntu: the
+    DOCA 3.5.0
+    [DOCA-Host Installation and DKMS Management Guide](https://networking-docs.nvidia.com/doca/sdk/doca-host-installation-and-dkms-management-guide)
+    names only DKMS and the running kernel's headers as prerequisites.
+    The nearest vendor statement is NVIDIA's
+    [DGX guide for RHEL 10, *Installing NVIDIA DOCA-OFED*](https://docs.nvidia.com/dgx/dgx-el10-user-guide/installing-doca-steps.html)
+    (read 2026-10-19), which installs `kernel-modules-extra-$(uname -r)`
+    as a DOCA-OFED step without giving a reason.
+  - **Why a module, not a package name.** Packaging differs between
+    kernel series: on the same host the 24.04 HWE metapackage (kernel
+    `7.0.0-38`) depended on `linux-modules-7.0.0-38-generic` and on no
+    `linux-modules-extra-*` package. Where `macsec` lives in that series
+    was not checked, and no claim is made here that xiRAID or DOCA-Host
+    3.4.0 run on it.
+  - **Known limit.** A kernel installed after this role runs is not
+    covered; the kernel hold (§3.1) is what keeps one from arriving.
+    Kernel headers for a non-running kernel are not this check's
+    concern.
 - Packages: `doca-all`, `mlnx-fw-updater`, `mlnx-nfsrdma-dkms` (kernel module for NFS-RDMA).
 - Auto-reboot after install: **off** (`doca_ofed_auto_reboot=false`). xiNAS requires a reboot for the new mlx5/IB stack to come up, and it is the operator's responsibility. **[observed]** NVIDIA's own guide prescribes a *driver restart* (`/etc/init.d/openibd restart`, `mst restart`) and a full reboot only for Secure Boot MOK enrollment — the stricter reboot is a xiNAS choice, given the DKMS modules this role adds. See [collection/roles/doca_ofed/README.md](../../collection/roles/doca_ofed/README.md) §*What NVIDIA documents, and what we determined ourselves* for the full split of vendor-documented vs. field-determined claims in this role (repo URL, keyring path and key ID are all in the latter group).
 - IB udev rules written to `/etc/udev/rules.d/70-ib-names.rules`.
@@ -842,7 +928,7 @@ Run these commands after the playbook finishes (or after a reboot, which DOCA OF
 hostnamectl                                  # → "xiNAS-<HWKEY>"
 timedatectl                                  # timezone = Europe/Amsterdam, NTP synced
 systemctl is-active chrony                   # → active
-apt-mark showhold | grep linux-image         # → linux-image-generic
+apt-mark showhold | grep linux-image         # → the installed image metapackage(s): linux-image-generic, linux-image-virtual, …
 sysctl net.core.rmem_max net.core.wmem_max vm.swappiness
 # → 268435456 / 268435456 / 10   (baseline only — see note)
 cat /etc/sysctl.d/80-xinas-common.conf        # the three keys; /etc/sysctl.conf untouched
@@ -860,6 +946,12 @@ ofed_info -s                                 # prints DOCA-OFED version string
 ibstat                                       # at least one IB port → "Active"
 lsmod | grep -E '^(mlx5_core|mlx5_ib|rpcrdma|svcrdma|xprtrdma)'
 dpkg -l | grep -E 'doca-all|mlnx-fw-updater|mlnx-nfsrdma-dkms'
+# macsec resolves for every installed kernel — the same set as §3.2 (mlx5_ib needs it)
+for k in $(dpkg-query -W -f='${db:Status-Abbrev} ${Package}\n' 'linux-image-*' \
+    | awk '$1 ~ /^[ih]i/ && $2 !~ /-dbgsym$/ {print $2}' \
+    | sed -nE 's/^linux-image-(unsigned-)?([0-9]+\.[0-9]+\.[0-9]+-[0-9]+.*)$/\2/p' | sort -u); do
+  modinfo -k "$k" -n macsec
+done
 ```
 
 If `ibstat` shows no ports or `mlx5_*` modules are missing, a reboot is almost certainly still pending — DOCA does not auto-reboot.
@@ -969,6 +1061,8 @@ The health engine bundles many of the checks above (RAID state, mounts, exports,
 | `cpupower` fails on VM | VM has no exposed scaling driver | Use the `xinnorVM` preset (`perf_disable_cpupower=true`) |
 | `common` fails at once with "xiRAID is not installed on this host, but this run was told to skip installing it" | `xiraid_skip_install` is set — usually left in `playbooks/group_vars/all/20-local.yml` by an earlier existing-arrays run — on a host that has no `xicli` | Clear the flag (`yq -i 'del(.xiraid_skip_install)' playbooks/group_vars/all/20-local.yml`) and re-run so `xiraid_classic` installs xiRAID (§3.1) |
 | `common` fails at once with "This CPU does not report the AVX instruction set" (or, on ≤ 3.13.0, `xiraid_classic` fails installing `xiraid-core` with `ERROR: The CPU flag is not supported: avx.`) | The CPU model exposed to the host has no AVX — typically a VM on the default `qemu64` / `kvm64` model | `grep -c avx /proc/cpuinfo`; give the VM a CPU model with AVX (§3.1) and re-run |
+| `common` fails with "Failed to find package 'linux-image-generic' to perform selection 'hold'" (≤ 3.14.0-rc.1) | the release held a fixed `linux-image-generic`, which a virtual-flavour host (observed: Ubuntu 24.04.5 `noble-server-cloudimg-amd64`) does not have | §3.1 *Kernel held*; [troubleshooting/installer-virtual-kernel-flavour.md](../troubleshooting/installer-virtual-kernel-flavour.md) |
+| `doca_ofed` fails: `openibd` does not start, `dmesg` shows `mlx5_ib: Unknown symbol macsec_netdev_is_offloaded` (≤ 3.14.0-rc.1); later releases stop before DOCA naming the kernel without `macsec` | the kernel's `macsec` module is not installed — on Ubuntu it ships in `linux-modules-extra-<kernel>` | §3.2 *Kernel module prerequisite*; `modinfo -k <kernel> macsec`, `apt-cache policy linux-modules-extra-<kernel>` |
 
 ---
 
@@ -993,7 +1087,7 @@ Each install role maps to one uninstall phase:
 | `xinas_menu` | Phase F (wrappers), Phase G (`/opt/xiNAS/venv`, `/etc/sudoers.d/xinas-update`) |
 | `xinas_history` | Phase F (`xinas-history` wrapper), Phase G (`/var/lib/xinas`) |
 | `motd` | Phase G (motd, banner, profile-d, cron), Phase H (`sshd_config`, `pam.d/login`) |
-| `common` | Phase H removes `/etc/sysctl.d/80-xinas-common.conf` (and purges the legacy keys from `/etc/sysctl.conf`); Phase J (`apt update`); the role's hostname change and `chrony.service` are intentionally not reverted |
+| `common` | Phase H removes `/etc/sysctl.d/80-xinas-common.conf` (and purges the legacy keys from `/etc/sysctl.conf`); Phase J (`apt update`); the role's hostname change, `chrony.service` and the kernel metapackage hold are intentionally not reverted (unholding is deferred — `docs/TODO.md`) |
 | `xiraid_classic` | Optional phase 91 (`uninstall_remove_xiraid`) |
 | `xiraid_exporter` | Optional phase 91 (`uninstall_remove_xiraid`) |
 | `doca_ofed` | Optional phase 92 (`uninstall_remove_ofed`) |

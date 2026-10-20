@@ -118,10 +118,39 @@
   when: "'chrony' in common_packages"
   tags: [ntp]
 
-- name: Hold current Ubuntu kernel (prevent accidental upgrades)
+# Hold the kernel so apt cannot upgrade it under xiRAID's and DOCA's kernel
+# modules. The packages are read, never named: a cloud image carries
+# linux-image-virtual, not linux-image-generic, and dpkg_selections fails on a
+# package that is not installed (docs/Installer/spec.md §3.1 "Kernel held").
+- name: Gather installed packages (for the kernel hold)
+  ansible.builtin.package_facts:
+    manager: apt
+  tags: [kernel]
+
+- name: Select the installed kernel image metapackages
+  ansible.builtin.set_fact:
+    common_kernel_hold_packages: >-
+      {{ ansible_facts.packages.keys() | list
+         | select('match', common_kernel_hold_pattern)
+         | reject('search', common_kernel_version_pattern)
+         | reject('match', '^linux-image-unsigned-')
+         | sort }}
+  tags: [kernel]
+
+- name: Hold the installed kernel image metapackages (prevent accidental upgrades)
   ansible.builtin.dpkg_selections:
-    name: linux-image-generic
+    name: "{{ item }}"
     selection: hold
+  loop: "{{ common_kernel_hold_packages }}"
+  tags: [kernel]
+
+- name: Warn that no kernel image metapackage is installed to hold
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: no installed package matches {{ common_kernel_hold_pattern }}
+      (a custom kernel?), so the kernel is not held and apt may upgrade it.
+      See docs/Installer/spec.md §3.1 "Kernel held".
+  when: common_kernel_hold_packages | length == 0
   tags: [kernel]
 
 - name: Deploy unattended‑upgrades configuration

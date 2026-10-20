@@ -8,6 +8,83 @@
     state: present
   tags: [ofed, deps]
 
+# DOCA-Host's DKMS mlx5_ib needs the in-tree macsec module. On Ubuntu it ships
+# in linux-modules-extra-<kernel>, which the virtual kernel metapackage (cloud
+# images) does not pull in, and without it openibd fails with "mlx5_ib:
+# Unknown symbol macsec_netdev_is_offloaded". Check the running kernel and every
+# installed kernel version, add the extra modules where apt has them, and stop
+# before any DOCA package otherwise (docs/Installer/spec.md §3.2 "Kernel module
+# prerequisite").
+- name: List the kernels that need the macsec module (running + installed)
+  ansible.builtin.shell: |
+    set -o pipefail
+    {
+      echo "{{ ansible_kernel }}"
+      # dpkg-query exits 1 when nothing matches (a custom kernel); that host
+      # still gets its running kernel checked, so the status is not fatal.
+      { dpkg-query -W -f='${db:Status-Abbrev} ${Package}\n' 'linux-image-*' 2>/dev/null || true; } \
+        | awk '$1 ~ /^[ih]i/ && $2 !~ /-dbgsym$/ {print $2}' \
+        | sed -nE 's/^linux-image-(unsigned-)?([0-9]+\.[0-9]+\.[0-9]+-[0-9]+.*)$/\2/p'
+    } | sort -u
+  args:
+    executable: /bin/bash
+  register: doca_ofed_kernels
+  changed_when: false
+  tags: [ofed, deps, install]
+
+- name: Check the macsec module for each kernel
+  ansible.builtin.command: "modinfo -k {{ item }} -n macsec"
+  loop: "{{ doca_ofed_kernels.stdout_lines }}"
+  register: doca_ofed_macsec_before
+  changed_when: false
+  failed_when: false
+  tags: [ofed, deps, install]
+
+- name: Look up linux-modules-extra for kernels without macsec
+  ansible.builtin.shell: >-
+    set -o pipefail;
+    apt-cache policy linux-modules-extra-{{ item.item }}
+    | awk '/Candidate:/ {print $2}'
+  args:
+    executable: /bin/bash
+  loop: "{{ doca_ofed_macsec_before.results | selectattr('rc', 'ne', 0) | list }}"
+  loop_control:
+    label: "{{ item.item }}"
+  register: doca_ofed_extra_candidates
+  changed_when: false
+  tags: [ofed, deps, install]
+
+- name: Install linux-modules-extra for kernels without macsec
+  ansible.builtin.apt:
+    name: "linux-modules-extra-{{ item.item.item }}"
+    state: present
+  loop: "{{ doca_ofed_extra_candidates.results | rejectattr('stdout', 'in', ['', '(none)']) | list }}"
+  loop_control:
+    label: "{{ item.item.item }}"
+  tags: [ofed, deps, install]
+
+- name: Re-check the macsec module for each kernel
+  ansible.builtin.command: "modinfo -k {{ item }} -n macsec"
+  loop: "{{ doca_ofed_kernels.stdout_lines }}"
+  register: doca_ofed_macsec_after
+  changed_when: false
+  failed_when: false
+  tags: [ofed, deps, install]
+
+- name: Stop before DOCA when a kernel has no macsec module
+  ansible.builtin.fail:
+    msg: >-
+      Kernel(s) {{ doca_ofed_macsec_after.results | selectattr('rc', 'ne', 0)
+      | map(attribute='item') | join(', ') }} still have no macsec module,
+      which DOCA-Host's mlx5_ib needs: either apt has no
+      linux-modules-extra-<kernel> candidate for them, or that package did not
+      provide the module. Install the kernel's extra modules (or a kernel that
+      provides macsec), then re-run. This check runs before the DOCA packages
+      are installed or upgraded. See docs/Installer/spec.md §3.2 "Kernel module
+      prerequisite".
+  when: doca_ofed_macsec_after.results | selectattr('rc', 'ne', 0) | list | length > 0
+  tags: [ofed, deps, install]
+
 # NVIDIA rotated the DOCA-Host signing key (2026-01 -> 70454E6B…DC726C5E41B9CC50),
 # published per component as doca_keyring.gpg (already a binary keyring). The
 # legacy base-path GPG-KEY-Mellanox.pub no longer carries it, so the old

@@ -9,6 +9,8 @@ supported source for installing and updating xiNAS.
 ## [Unreleased]
 
 Requires-Rebuild: xinas_node_build
+Requires-Rebuild: common
+Requires-Rebuild: doca_ofed
 
 ### Added
 
@@ -153,6 +155,27 @@ Requires-Rebuild: xinas_node_build
   spec now cites a fixture or a test per row.
 
 ### Fixed
+
+- **The kernel hold no longer stops the install on a cloud image.** The
+  `common` role held a fixed `linux-image-generic`; an Ubuntu cloud image
+  carries `linux-image-virtual` instead, so the hold failed and the
+  install stopped in the first role. The role now holds every installed
+  kernel image metapackage it finds (generic, virtual, HWE, `-edge`, …)
+  and only warns when there is none. Existing hosts re-run `common` on
+  update, which also completes the hold where an HWE metapackage sits
+  beside `linux-image-generic`. See
+  `docs/troubleshooting/installer-virtual-kernel-flavour.md`.
+
+- **DOCA-OFED installs on a cloud image.** DOCA-Host's `mlx5_ib` needs
+  the kernel's `macsec` module, which Ubuntu ships in
+  `linux-modules-extra-<kernel>` — a package the virtual kernel
+  metapackage does not pull in — so `openibd` failed with `Unknown symbol
+  macsec_netdev_is_offloaded`. Before installing DOCA, `doca_ofed` now
+  checks `macsec` for the running kernel and every installed kernel, adds
+  `linux-modules-extra-<kernel>` where apt has it, and stops with a clear
+  message, naming the kernel, where it cannot. The client-side
+  `doca_ofed` role does the same when it detects a Mellanox NIC. On
+  generic-flavour hosts the check changes nothing.
 
 - **The NFS loopback health probe mounts again.** `nfs_loopback` and the
   `nfs.loopback` check of `GET /health?profile=deep` ran `systemd-mount`

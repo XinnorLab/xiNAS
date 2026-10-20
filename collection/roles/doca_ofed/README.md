@@ -72,6 +72,17 @@ Reconciled 2026-08-14 against the
   that reliably brings the whole mlx5/IB stack up on these nodes. That is a
   **xiNAS operational choice**, stricter than NVIDIA's instruction — not an
   NVIDIA requirement, and not something to cite the vendor for.
+* **`mlx5_ib` needs the `macsec` module.** On an Ubuntu 24.04.5 cloud image
+  (kernel `6.8.0-142-generic`, DOCA-Host 3.4.0, 2026-10-19) `openibd` failed
+  with `mlx5_ib: Unknown symbol macsec_netdev_is_offloaded`, because
+  `macsec.ko` ships in `linux-modules-extra-<kernel>`, which the virtual
+  kernel metapackage does not pull in. The role therefore checks `modinfo -k
+  <kernel> macsec` for every installed kernel before installing DOCA and adds
+  `linux-modules-extra-<kernel>` where it is missing
+  ([docs/Installer/spec.md](../../../docs/Installer/spec.md) §3.2). NVIDIA's
+  DOCA 3.5.0 DKMS guide was checked and lists only DKMS and kernel headers;
+  its DGX guide for RHEL 10 installs `kernel-modules-extra-$(uname -r)` as a
+  DOCA-OFED step without saying why.
 
 ### References
 * [NVIDIA DOCA-Host Installation and Upgrade](https://networking-docs.nvidia.com/doca/sdk/doca-host-installation-and-upgrade)

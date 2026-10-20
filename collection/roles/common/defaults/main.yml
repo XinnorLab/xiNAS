@@ -31,3 +31,10 @@ xinas_require_avx: true
 # File the AVX preflight reads the `flags` line from. Override only to
 # exercise the check against a fixture.
 xinas_cpuinfo_path: /proc/cpuinfo
+# Kernel hold (docs/Installer/spec.md §3.1 "Kernel held"): every installed
+# package matching the first pattern is held, except per-version image
+# packages (the second pattern) and linux-image-unsigned-*. That holds the
+# flavour metapackages — linux-image-generic, linux-image-virtual, HWE and
+# -edge variants — whichever the host carries.
+common_kernel_hold_pattern: '^linux-image-[a-z][a-z0-9.+-]*$'
+common_kernel_version_pattern: '[0-9]+\.[0-9]+\.[0-9]+-[0-9]+'
